@@ -1,6 +1,6 @@
 # MagesticAI
 
-**Web-based AI task management and agent orchestration platform powered by Claude AI**
+**SDD (Spec-Driven Development) — a cloud and web-based AI task management and agent orchestration platform powered by LLMs**
 
 [![CI](https://github.com/dataseeek/MagesticAI/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dataseeek/MagesticAI/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
@@ -31,10 +31,15 @@ MagesticAI is a browser-based platform for managing AI-powered coding tasks thro
 
 ---
 
-## Screenshots
+## Demo Video
 
-<!-- TODO: drop the captured PNGs into assets/screenshots/ and replace these
-     placeholders. See assets/screenshots/README.md for what to capture. -->
+[![Watch the MagesticAI demo](https://img.youtube.com/vi/L0DEeaLuxYA/maxresdefault.jpg)](https://youtu.be/L0DEeaLuxYA)
+
+_A quick walkthrough of the Kanban board, task creation flow, and agent execution._
+
+---
+
+## Screenshots
 
 | View | Preview |
 |------|---------|
@@ -405,7 +410,7 @@ See [LICENSE](LICENSE) for details.
 
 ## Credits
 
-MagesticAI is a fork of [Claude-Code-Manager-Web](https://github.com/dataseeek/Claude-Code-Manager-Web) by DataSeek. We thank the original authors for their foundational work.
+MagesticAI is a fork of [Aperant](https://github.com/AndyMik90/Aperant) (formerly *Auto Claude Desktop*) by [@AndyMik90](https://github.com/AndyMik90). We thank the original authors for the foundational work.
 
 ---
 
