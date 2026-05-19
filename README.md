@@ -425,3 +425,13 @@ MagesticAI is a fork of [Aperant](https://github.com/AndyMik90/Aperant) (formerl
 ---
 
 **Made with AI by DataSeek Team**
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=dataseeek%2FMagesticAI&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=dataseeek/MagesticAI&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=dataseeek/MagesticAI&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=dataseeek/MagesticAI&type=date&legend=top-left" />
+ </picture>
+</a>
