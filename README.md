@@ -23,8 +23,7 @@ MagesticAI is a browser-based platform for managing AI-powered coding tasks thro
 - **Monaco Code Editor** - VS Code-like editing experience
 - **Git Worktree Isolation** - Safe, isolated builds per task
 - **AI-Powered QA** - Automated code review and validation
-- **Local LLM Agentic Mode** - Any OpenAI-compatible server (Ollama, LM Studio, vLLM, LocalAI…) with native tool calling (Read, Write, Edit, Bash, Glob, Grep) — no API fallback needed
-- **Multi-Provider Support** - Claude, Codex, Gemini, and any OpenAI-compatible endpoint (including Ollama at `:11434/v1`) with automatic agentic/text-only routing per phase
+- **Multi-Provider Support** - Claude, Codex, Gemini, and any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, OpenRouter, Together, Groq, LocalAI…) with native agentic tool calling (Read, Write, Edit, Bash, Glob, Grep) — no API fallback needed
 - **Graphiti Memory** - Cross-session learning and knowledge retention
 - **Multi-Project Support** - Manage multiple repositories
 - **Internationalization** - English, French, Portuguese (Brazil)
