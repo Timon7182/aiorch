@@ -39,15 +39,27 @@ fi
 # Configure git credentials from forwarded env vars so HTTPS clone/push works
 # without prompting. Runs as the magesticai user; writes ~/.git-credentials
 # (mode 600) and points git at the `store` helper.
-gosu magesticai bash <<'GIT_SETUP'
+#
+# Bitbucket supports both Cloud (bitbucket.org + username + app password) and
+# self-hosted Server (custom host + HTTP access token). BITBUCKET_HOST defaults
+# to bitbucket.org. For Server tokens, leaving BITBUCKET_USERNAME unset uses
+# "x-token-auth" as the placeholder username, which Bitbucket Server accepts.
+gosu magesticai \
+    env \
+        GH_TOKEN="${GH_TOKEN:-}" \
+        GITLAB_TOKEN="${GITLAB_TOKEN:-}" \
+        BITBUCKET_HOST="${BITBUCKET_HOST:-bitbucket.org}" \
+        BITBUCKET_USERNAME="${BITBUCKET_USERNAME:-x-token-auth}" \
+        BITBUCKET_TOKEN="${BITBUCKET_TOKEN:-${BITBUCKET_APP_PASSWORD:-}}" \
+    bash <<'GIT_SETUP'
 set -eu
 CREDS=/home/magesticai/.git-credentials
 : > "$CREDS"
 chmod 600 "$CREDS"
 [ -n "${GH_TOKEN:-}" ] && echo "https://oauth2:${GH_TOKEN}@github.com" >> "$CREDS"
 [ -n "${GITLAB_TOKEN:-}" ] && echo "https://oauth2:${GITLAB_TOKEN}@gitlab.com" >> "$CREDS"
-if [ -n "${BITBUCKET_USERNAME:-}" ] && [ -n "${BITBUCKET_APP_PASSWORD:-}" ]; then
-    echo "https://${BITBUCKET_USERNAME}:${BITBUCKET_APP_PASSWORD}@bitbucket.org" >> "$CREDS"
+if [ -n "${BITBUCKET_TOKEN:-}" ]; then
+    echo "https://${BITBUCKET_USERNAME}:${BITBUCKET_TOKEN}@${BITBUCKET_HOST}" >> "$CREDS"
 fi
 git config --global credential.helper "store --file=$CREDS"
 GIT_SETUP

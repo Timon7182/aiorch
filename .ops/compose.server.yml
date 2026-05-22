@@ -32,9 +32,13 @@ services:
       # Git provider credentials. Add the ones you use to /home/saya/.aiorch-secrets.
       # gh CLI auto-detects GH_TOKEN; git uses them via the credential helper
       # configured at container entrypoint.
+      # Bitbucket supports both Cloud (bitbucket.org + USERNAME + APP_PASSWORD)
+      # and Server (custom HOST + HTTP access TOKEN). Leave HOST unset for Cloud.
       - GH_TOKEN=${GH_TOKEN:-}
       - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+      - BITBUCKET_HOST=${BITBUCKET_HOST:-}
       - BITBUCKET_USERNAME=${BITBUCKET_USERNAME:-}
+      - BITBUCKET_TOKEN=${BITBUCKET_TOKEN:-}
       - BITBUCKET_APP_PASSWORD=${BITBUCKET_APP_PASSWORD:-}
     deploy:
       resources:
