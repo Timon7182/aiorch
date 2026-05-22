@@ -103,6 +103,10 @@ USER magesticai
 RUN mkdir -p /home/magesticai/.npm-global && \
     npm config set prefix /home/magesticai/.npm-global
 
+# Pre-install Claude Code CLI so the app finds `claude` on PATH out of the box.
+# The runtime `/api/claude-code/install` endpoint still works as a recovery path.
+RUN npm install -g @anthropic-ai/claude-code
+
 # Create single Python venv (both web-server and backend share it,
 # because agent_service.py spawns backend scripts via sys.executable)
 RUN python3 -m venv /home/projects/MagesticAI/.venv
