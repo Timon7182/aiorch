@@ -1,0 +1,40 @@
+version: "3.9"
+
+# Bridge-mode compose used INSTEAD of the upstream macvlan one.
+# Targets a Linux server that's on wireless (where macvlan won't work)
+# and that also runs k3s. We publish port 3101 on the host instead of
+# claiming a LAN IP.
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: magesticai
+    restart: unless-stopped
+    ports:
+      - "3101:3101"
+    volumes:
+      - /home/saya/magestic-data:/home/magesticai/.magestic-ai
+      - /home/saya/projects:/home/magesticai/projects:rw
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - APP_DEBUG=false
+      - CONTAINER_LAN_FIREWALL=false
+      - CONTAINER_GATEWAY=192.168.88.1
+      - APP_CORS_ORIGINS=["http://192.168.88.55:3101","http://192.168.88.220:3101","http://localhost:3101"]
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    tmpfs:
+      - /tmp:size=500M
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

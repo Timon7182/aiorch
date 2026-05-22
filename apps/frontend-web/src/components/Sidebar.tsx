@@ -17,6 +17,9 @@ import {
   GitBranch,
   Wrench,
   Lightbulb,
+  MessageCircle,
+  Users,
+  FileAudio,
   LogOut
 } from 'lucide-react';
 import { Button } from './ui/button';
@@ -49,7 +52,7 @@ import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from '../shared/types';
 
-export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills';
+export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -67,6 +70,7 @@ interface NavItem {
 
 // Base nav items always shown
 const baseNavItems: NavItem[] = [
+  { id: 'hermes', labelKey: 'Hermes', icon: MessageCircle },
   { id: 'kanban', labelKey: 'navigation:items.kanban', icon: Columns3 },
   { id: 'editor', labelKey: 'navigation:items.editor', icon: FolderOpen },
   { id: 'insights', labelKey: 'navigation:items.chat', icon: Sparkles },
@@ -75,7 +79,9 @@ const baseNavItems: NavItem[] = [
   { id: 'skills', labelKey: 'navigation:items.skills', icon: Lightbulb },
   { id: 'changelog', labelKey: 'navigation:items.changelog', icon: FileText },
   { id: 'worktrees', labelKey: 'navigation:items.worktrees', icon: GitBranch },
-  { id: 'context', labelKey: 'navigation:items.context', icon: BookOpen }
+  { id: 'context', labelKey: 'navigation:items.context', icon: BookOpen },
+  { id: 'transcripts', labelKey: 'Transcripts', icon: FileAudio },
+  { id: 'members', labelKey: 'Members', icon: Users }
 ];
 
 // GitHub nav items shown when GitHub is enabled
@@ -283,12 +289,13 @@ export function Sidebar({
   const renderNavItem = (item: NavItem) => {
     const isActive = activeView === item.id;
     const Icon = item.icon;
+    const alwaysEnabled = item.id === 'hermes' || item.id === 'members';
 
     return (
       <button
         key={item.id}
         onClick={() => handleNavClick(item.id)}
-        disabled={!selectedProjectId}
+        disabled={!alwaysEnabled && !selectedProjectId}
         className={cn(
           'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all duration-200',
           'hover:bg-primary/10 hover:text-primary',

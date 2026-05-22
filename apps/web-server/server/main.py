@@ -163,6 +163,18 @@ def create_app() -> FastAPI:
     # Skills knowledge base routes
     app.include_router(skills.router, prefix="/api/skills", tags=["Skills"])
 
+    # Project-extension routes (SSH targets, DB profiles, transcripts)
+    from .routes import extensions as extensions_routes
+    app.include_router(extensions_routes.router, prefix="/api/ext", tags=["Extensions"])
+
+    # Hermes chat router (LLM dispatch + grounded chat)
+    from .routes import hermes as hermes_routes
+    app.include_router(hermes_routes.router, prefix="/api/ext", tags=["Hermes"])
+
+    # Project-docs ingest (multi-file upload → docs_index_service)
+    from .routes import project_ingest as project_ingest_routes
+    app.include_router(project_ingest_routes.router, prefix="/api/ext", tags=["Ingest"])
+
     # Include WebSocket routers
     app.include_router(logs_ws.router, tags=["WebSocket"])
     app.include_router(progress_ws.router, tags=["WebSocket"])

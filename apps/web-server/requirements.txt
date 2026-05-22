@@ -30,6 +30,13 @@ gitpython>=3.1.0
 # Database
 sqlalchemy[asyncio]>=2.0.0
 aiosqlite>=0.20.0
+# Drivers for the extension-feature DB-connection profiles (Postgres + MySQL).
+# Oracle / MSSQL drivers are intentionally omitted; add per deployment if needed.
+psycopg[binary]>=3.2.0
+PyMySQL>=1.1.0
+
+# SSH for the extension-feature server profiles (allowlisted tail-log / deploy).
+paramiko>=3.4.0
 
 # Authentication (JWT + password hashing)
 python-jose[cryptography]>=3.3.0

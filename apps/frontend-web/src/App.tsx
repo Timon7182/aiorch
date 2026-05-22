@@ -25,6 +25,9 @@ import { LoadingScreen } from './components/LoadingScreen';
 import { ProjectSwitchLoadingModal } from './components/ProjectSwitchLoadingModal';
 import { LoginPage } from './pages/LoginPage';
 import { EditorPage } from './pages/EditorPage';
+import { HermesPage } from './pages/HermesPage';
+import { MembersPage } from './pages/MembersPage';
+import { TranscriptsPage } from './pages/TranscriptsPage';
 import { ViewStateProvider } from './contexts/ViewStateContext';
 import { useProjectStore, loadProjects } from './stores/project-store';
 import { useTaskStore, loadTasks } from './stores/task-store';
@@ -290,7 +293,13 @@ function AuthenticatedApp() {
             )}
 
             <main className="flex-1 overflow-hidden">
-              {selectedProject ? (
+              {activeView === 'hermes' ? (
+                <HermesPage />
+              ) : activeView === 'members' ? (
+                <MembersPage />
+              ) : activeView === 'transcripts' ? (
+                <TranscriptsPage />
+              ) : selectedProject ? (
                 <>
                   {activeView === 'kanban' && (
                     <KanbanBoard
@@ -427,6 +436,10 @@ export default function App() {
       <Route
         path="/login"
         element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />}
+      />
+      <Route
+        path="/hermes"
+        element={isAuthenticated ? <HermesPage /> : <Navigate to="/login" replace />}
       />
       <Route
         path="/*"

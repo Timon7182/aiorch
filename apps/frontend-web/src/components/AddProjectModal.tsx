@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FolderOpen, Search, Loader2, GitBranch, Package, FileCode, CheckCircle, FileText, FolderPlus } from 'lucide-react';
+import { FolderOpen, Search, Loader2, GitBranch, Package, FileCode, CheckCircle, FileText, FolderPlus, Upload, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -15,7 +15,38 @@ import {
 } from './ui/dialog';
 import { cn } from '../lib/utils';
 import { addProject } from '../stores/project-store';
+import { getAuthHeaders } from '../lib/auth';
 import type { Project } from '../shared/types';
+
+const DOC_SUFFIXES = ['.md', '.markdown', '.txt', '.rst', '.org'];
+
+type IngestResult = {
+  saved: number;
+  rejected: string[];
+  indexed_sections: number;
+  files_indexed: number;
+};
+
+async function uploadDocs(projectSlug: string, files: File[]): Promise<IngestResult> {
+  const form = new FormData();
+  for (const f of files) form.append('files', f);
+  const res = await fetch(`/api/ext/projects/${encodeURIComponent(projectSlug)}/ingest-docs`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: form,
+  });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      const j = (await res.json()) as { detail?: unknown };
+      if (j?.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as IngestResult;
+}
 
 interface DiscoveredProject {
   name: string;
@@ -48,6 +79,15 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
   const [useCustomPath, setUseCustomPath] = useState(false);
   const [showClaudeReadyOnly, setShowClaudeReadyOnly] = useState(false);
   const [createdDirPath, setCreatedDirPath] = useState<string | null>(null);
+
+  // step 2: optional doc upload
+  const [addedProject, setAddedProject] = useState<Project | null>(null);
+  const [docFiles, setDocFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<IngestResult | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const projectSlug = addedProject ? (addedProject.name || '').toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || addedProject.id : '';
 
   // Filter and sort projects - Claude-ready projects first
   const sortedProjects = [...discoveredProjects].sort((a, b) => {
@@ -99,6 +139,9 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
       setShowClaudeReadyOnly(false);
       setError(null);
       setCreatedDirPath(null);
+      setAddedProject(null);
+      setDocFiles([]);
+      setUploadResult(null);
       scanProjects();
     }
   }, [open, scanProjects]);
@@ -129,15 +172,10 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
         }
         onProjectAdded?.(project, !project.autoBuildPath);
         if (project.createdDirectory) {
-          // Show info message briefly before closing
           setCreatedDirPath(project.path);
-          setTimeout(() => {
-            setCreatedDirPath(null);
-            onOpenChange(false);
-          }, 3000);
-        } else {
-          onOpenChange(false);
         }
+        // Switch to step 2: optional docs upload (modal stays open)
+        setAddedProject(project);
       } else {
         setError('Failed to add project. Please check the path is valid.');
       }
@@ -157,6 +195,136 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
       }
     }
   };
+
+  const onPickFiles = (files: FileList | File[] | null) => {
+    if (!files) return;
+    const list = Array.from(files).filter((f) =>
+      DOC_SUFFIXES.some((s) => f.name.toLowerCase().endsWith(s)),
+    );
+    setDocFiles((prev) => {
+      const seen = new Set(prev.map((f) => f.name));
+      return [...prev, ...list.filter((f) => !seen.has(f.name))];
+    });
+  };
+
+  const handleUploadDocs = async () => {
+    if (!addedProject || docFiles.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const result = await uploadDocs(projectSlug, docFiles);
+      setUploadResult(result);
+    } catch (e) {
+      setError(`Upload failed: ${(e as Error).message}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  if (addedProject) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              <div className="flex items-center gap-2">
+                <CheckCircle className="h-5 w-5 text-green-500" />
+                Project added — index documentation?
+              </div>
+            </DialogTitle>
+            <DialogDescription>
+              Drop markdown notes, meeting transcripts, or any plain-text docs.
+              They&apos;ll be indexed so Hermes can cite them when you chat.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4 space-y-4">
+            <div className="rounded-lg bg-muted p-3 text-xs">
+              <div><strong>{addedProject.name}</strong></div>
+              <div className="text-muted-foreground">{addedProject.path}</div>
+            </div>
+
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                onPickFiles(e.dataTransfer.files);
+              }}
+              onClick={() => fileInputRef.current?.click()}
+              className="border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:bg-accent/30 transition-colors"
+            >
+              <Upload className="h-7 w-7 mx-auto mb-2 text-muted-foreground" />
+              <p className="text-sm font-medium">Drop files here, or click to browse</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Accepts: {DOC_SUFFIXES.join(', ')} — max 5 MB each
+              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={DOC_SUFFIXES.join(',')}
+                onChange={(e) => onPickFiles(e.target.files)}
+                className="hidden"
+              />
+            </div>
+
+            {docFiles.length > 0 && (
+              <ScrollArea className="max-h-[160px] rounded-md border">
+                <div className="p-2 space-y-1">
+                  {docFiles.map((f) => (
+                    <div key={f.name} className="flex items-center justify-between text-xs px-2 py-1 rounded hover:bg-accent/30">
+                      <span className="truncate">{f.name}</span>
+                      <span className="text-muted-foreground tabular-nums ml-2">
+                        {(f.size / 1024).toFixed(1)} KB
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDocFiles((prev) => prev.filter((x) => x !== f))}
+                        className="ml-2 p-1 rounded hover:bg-destructive/10 text-destructive"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+
+            {uploadResult && (
+              <div className="text-sm text-green-700 dark:text-green-400 bg-green-500/10 rounded-lg p-3">
+                Indexed <strong>{uploadResult.files_indexed}</strong> file(s) into{' '}
+                <strong>{uploadResult.indexed_sections}</strong> searchable section(s).
+                {uploadResult.rejected.length > 0 && (
+                  <div className="mt-1 text-xs text-yellow-700 dark:text-yellow-400">
+                    Rejected: {uploadResult.rejected.join(', ')}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {error && (
+              <div className="text-sm text-destructive bg-destructive/10 rounded-lg p-3">
+                {error}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              {uploadResult ? 'Done' : 'Skip'}
+            </Button>
+            <Button onClick={handleUploadDocs} disabled={uploading || docFiles.length === 0}>
+              {uploading ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Indexing…</>
+              ) : (
+                <><Upload className="mr-2 h-4 w-4" />Index {docFiles.length || ''} file{docFiles.length === 1 ? '' : 's'}</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

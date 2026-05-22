@@ -1,0 +1,32 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Trigger server-side pull + rebuild
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            cd /home/saya/aiorch
+            git fetch --all --prune
+            git reset --hard "origin/${GITHUB_REF_NAME:-main}"
+            bash .ops/deploy_local.sh
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
