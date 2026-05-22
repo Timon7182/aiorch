@@ -6,19 +6,27 @@
 <title>MagesticAI — Task Architecture</title>
 <style>
   :root {
-    --bg: #0f172a;
-    --ink: #e5e7eb;
-    --muted: #94a3b8;
-    --line: #1f2937;
-    --phase: #60a5fa;
-    --phase-fill: #1e3a8a;
-    --decision: #fbbf24;
-    --decision-fill: #78350f;
-    --human: #a78bfa;
-    --human-fill: #4c1d95;
+    /* Ocean theme — matches apps/frontend-web/src/index.css [data-theme="ocean"].dark */
+    --bg: #051e33;
+    --bg2: #082b48;
+    --card: #0a2236;
+    --card2: #0c2841;
+    --node: #0c3554;
+    --chip: #0e4870;
+    --chip2: #115a8a;
+    --border: #205075;
+    --ink: #e0f2fe;
+    --muted: #93b8d4;
+    --line: #163a5a;
+    --accent: #0ea5e9;
+    --accent2: #38bdf8;
+    --decision-fill: #1f2937;
+    --decision-stroke: #f59e0b;
+    --human-fill: #312e81;
+    --human-stroke: #a78bfa;
     --loop: #f87171;
-    --done: #34d399;
     --done-fill: #064e3b;
+    --done-stroke: #34d399;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -30,18 +38,19 @@
     font-size: 14px;
   }
   header {
-    padding: 16px 28px 14px;
+    padding: 18px 28px 14px;
     border-bottom: 1px solid var(--line);
-    background: linear-gradient(180deg, #0b1220 0%, #0f172a 100%);
+    background: linear-gradient(180deg, #03152a 0%, var(--bg) 100%);
   }
   header h1 {
     margin: 0;
-    font-size: 17px;
+    font-size: 18px;
     letter-spacing: -0.01em;
-    color: #f1f5f9;
+    color: #f0f9ff;
   }
+  header h1 .accent { color: var(--accent2); font-weight: 700; }
   header .legend {
-    margin-top: 10px;
+    margin-top: 12px;
     display: flex;
     flex-wrap: wrap;
     gap: 10px 22px;
@@ -50,28 +59,49 @@
   }
   .chip { display: inline-flex; align-items: center; gap: 7px; }
   .chip .sw { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; }
-  .chip .sw.phase    { background: var(--phase-fill);    border-color: var(--phase); }
-  .chip .sw.cond     { background: transparent;          border-color: var(--phase); border-style: dashed; }
-  .chip .sw.decision { background: var(--decision-fill); border-color: var(--decision); transform: rotate(45deg); }
-  .chip .sw.human    { background: var(--human-fill);    border-color: var(--human); }
+  .chip .sw.phase    { background: var(--node);          border-color: var(--accent); }
+  .chip .sw.cond     { background: transparent;          border-color: var(--accent); border-style: dashed; }
+  .chip .sw.decision { background: var(--decision-fill); border-color: var(--decision-stroke); transform: rotate(45deg); }
+  .chip .sw.human    { background: var(--human-fill);    border-color: var(--human-stroke); }
   .chip .sw.loop     { background: transparent;          border-color: var(--loop); border-radius: 50%; }
-  .chip .sw.done     { background: var(--done-fill);     border-color: var(--done); border-radius: 50%; }
+  .chip .sw.done     { background: var(--done-fill);     border-color: var(--done-stroke); border-radius: 50%; }
 
   main {
-    padding: 18px 16px 32px;
+    padding: 18px 16px 28px;
     display: flex;
     justify-content: center;
   }
   svg.flow {
     width: 100%;
-    max-width: 1280px;
+    max-width: 1320px;
     height: auto;
     display: block;
   }
 
-  /* Annex below the diagram — details for contributors, hidden in screenshots */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+  }
+  .node { animation: fadeIn 0.55s ease-out both; transform-box: fill-box; }
+  .n1{animation-delay:.00s}.n2{animation-delay:.07s}.n3{animation-delay:.14s}
+  .n4{animation-delay:.21s}.n5{animation-delay:.28s}.n6{animation-delay:.35s}
+  .n7{animation-delay:.42s}.n8{animation-delay:.49s}.n9{animation-delay:.56s}
+  .n10{animation-delay:.63s}
+  .pulse { animation: pulse 2.4s ease-in-out infinite; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .node, .pulse { animation: none; }
+    .flowdash { stroke-dasharray: none !important; }
+    .flowdash animate { display: none; }
+  }
+
+  /* Annex below the diagram */
   .annex {
-    max-width: 1280px;
+    max-width: 1320px;
     margin: 0 auto;
     padding: 0 16px 56px;
     display: grid;
@@ -87,87 +117,55 @@
     font-weight: 600;
   }
   .annex .card {
-    background: #111827;
+    background: var(--card);
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 14px 16px;
   }
-  .annex table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-  }
+  .annex table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .annex td {
     padding: 5px 6px;
-    border-bottom: 1px solid #1a2438;
+    border-bottom: 1px solid var(--line);
     vertical-align: top;
-    color: #cbd5e1;
+    color: #cbe4f6;
   }
-  .annex td:first-child { white-space: nowrap; color: #93c5fd; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  .annex td .ask { color: #94a3b8; font-style: italic; }
+  .annex td:first-child {
+    white-space: nowrap;
+    color: var(--accent2);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  .annex td .ask { color: var(--muted); font-style: italic; }
   .annex pre {
     margin: 0;
-    background: #0a1020;
-    border: 1px solid #1a2438;
+    background: #03152a;
+    border: 1px solid var(--line);
     border-radius: 6px;
     padding: 10px 12px;
     font-size: 11.5px;
-    color: #cbd5e1;
+    color: #cbe4f6;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     overflow-x: auto;
     line-height: 1.5;
   }
-  .annex pre .k { color: #93c5fd; }
-  .annex pre .s { color: #a7f3d0; }
+  .annex pre .k { color: var(--accent2); }
+  .annex pre .s { color: #6ee7b7; }
   .annex pre .c { color: #64748b; font-style: italic; }
-  .annex ul.logs {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-size: 12px;
-  }
+  .annex ul.logs { margin: 0; padding: 0; list-style: none; font-size: 12px; }
   .annex ul.logs li {
     padding: 6px 0;
-    border-bottom: 1px solid #1a2438;
-    color: #cbd5e1;
+    border-bottom: 1px solid var(--line);
+    color: #cbe4f6;
   }
   .annex ul.logs li:last-child { border-bottom: none; }
   .annex ul.logs code {
-    color: #93c5fd;
+    color: var(--accent2);
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     background: transparent;
     padding: 0;
   }
-  .annex .desc { color: #94a3b8; display: block; margin-top: 2px; font-size: 11.5px; }
+  .annex .desc { color: var(--muted); display: block; margin-top: 2px; font-size: 11.5px; }
   @media (max-width: 1000px) {
     .annex { grid-template-columns: 1fr; }
-  }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.55; }
-  }
-  .node { animation: fadeIn 0.55s ease-out both; transform-box: fill-box; }
-  .n1  { animation-delay: 0.00s; }
-  .n2  { animation-delay: 0.08s; }
-  .n3  { animation-delay: 0.16s; }
-  .n4  { animation-delay: 0.24s; }
-  .n5  { animation-delay: 0.32s; }
-  .n6  { animation-delay: 0.40s; }
-  .n7  { animation-delay: 0.48s; }
-  .n8  { animation-delay: 0.56s; }
-  .n9  { animation-delay: 0.64s; }
-  .n10 { animation-delay: 0.72s; }
-  .pulse { animation: pulse 2.4s ease-in-out infinite; }
-
-  @media (prefers-reduced-motion: reduce) {
-    .node, .pulse { animation: none; }
-    .flowdash { stroke-dasharray: none !important; }
-    .flowdash animate { display: none; }
   }
 </style>
 </head>
@@ -175,7 +173,7 @@
 <body>
 
 <header>
-  <h1>MagesticAI — End-to-End Task Architecture</h1>
+  <h1><span class="accent">MagesticAI</span> — End-to-End Task Architecture</h1>
   <div class="legend">
     <span class="chip"><span class="sw phase"></span> Phase</span>
     <span class="chip"><span class="sw cond"></span> Conditional</span>
@@ -187,234 +185,303 @@
 </header>
 
 <main>
-  <!-- Snake layout: top row L→R, bottom row R→L, fits 16:9-ish viewport -->
-  <svg class="flow" viewBox="0 0 1280 620" xmlns="http://www.w3.org/2000/svg"
+  <!-- Ocean snake-layout, expanded for subtask-sequence + spec-pipeline examples -->
+  <svg class="flow" viewBox="0 0 1320 760" xmlns="http://www.w3.org/2000/svg"
        font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">
     <defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
               markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+        <path d="M0,0 L10,5 L0,10 z" fill="#7fb6d8"/>
       </marker>
       <marker id="arrowLoop" viewBox="0 0 10 10" refX="9" refY="5"
               markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0,0 L10,5 L0,10 z" fill="#f87171"/>
       </marker>
-      <marker id="arrowHuman" viewBox="0 0 10 10" refX="9" refY="5"
-              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/>
+      <marker id="arrowMini" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#7fb6d8"/>
       </marker>
     </defs>
 
     <!-- =============== TOP ROW FLOW LINES (L→R) =============== -->
-    <g fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="6 4" class="flowdash">
-      <line x1="180" y1="105" x2="226" y2="105"/>
-      <line x1="378" y1="105" x2="426" y2="105"/>
-      <line x1="800" y1="105" x2="846" y2="105"/>
-      <line x1="998" y1="105" x2="1046" y2="105"/>
+    <g fill="none" stroke="#7fb6d8" stroke-width="1.6" stroke-dasharray="6 4" class="flowdash">
+      <line x1="190" y1="130" x2="240"  y2="130"/>
+      <line x1="394" y1="130" x2="440"  y2="130"/>
+      <line x1="900" y1="130" x2="946"  y2="130"/>
+      <line x1="1100" y1="130" x2="1146" y2="130"/>
       <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1.4s" repeatCount="indefinite"/>
     </g>
-    <!-- arrow heads (static) -->
-    <g fill="#94a3b8">
-      <polygon points="220,101 220,109 228,105"/>
-      <polygon points="420,101 420,109 428,105"/>
-      <polygon points="840,101 840,109 848,105"/>
-      <polygon points="1040,101 1040,109 1048,105"/>
+    <g fill="#7fb6d8">
+      <polygon points="234,126 234,134 242,130"/>
+      <polygon points="434,126 434,134 442,130"/>
+      <polygon points="940,126 940,134 948,130"/>
+      <polygon points="1140,126 1140,134 1148,130"/>
     </g>
 
-    <!-- =============== VERTICAL JUMP (Top → Bottom row) =============== -->
-    <path d="M 1160 156 L 1160 380" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="6 4" class="flowdash">
+    <!-- =============== VERTICAL DROP (Top → Bottom row) =============== -->
+    <path d="M 1220 180 L 1220 410" fill="none" stroke="#7fb6d8" stroke-width="1.6" stroke-dasharray="6 4" class="flowdash">
       <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1.4s" repeatCount="indefinite"/>
     </path>
-    <polygon points="1156,376 1164,376 1160,384" fill="#94a3b8"/>
+    <polygon points="1216,406 1224,406 1220,414" fill="#7fb6d8"/>
 
     <!-- =============== BOTTOM ROW FLOW LINES (R→L) =============== -->
-    <g fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="6 4" class="flowdash">
-      <line x1="1046" y1="450" x2="998"  y2="450"/>
-      <line x1="846"  y1="450" x2="798"  y2="450"/>
-      <line x1="640"  y1="450" x2="594"  y2="450"/>
-      <line x1="416"  y1="450" x2="370"  y2="450"/>
-      <line x1="220"  y1="450" x2="172"  y2="450"/>
+    <g fill="none" stroke="#7fb6d8" stroke-width="1.6" stroke-dasharray="6 4" class="flowdash">
+      <line x1="720" y1="470" x2="676"  y2="470"/>
+      <line x1="572" y1="470" x2="528"  y2="470"/>
+      <line x1="290" y1="470" x2="246"  y2="470"/>
+      <line x1="120" y1="470" x2="86"   y2="470"/>
       <animate attributeName="stroke-dashoffset" from="0" to="20" dur="1.4s" repeatCount="indefinite"/>
     </g>
-    <g fill="#94a3b8">
-      <polygon points="1004,446 1004,454 996,450"/>
-      <polygon points="804,446 804,454 796,450"/>
-      <polygon points="600,446 600,454 592,450"/>
-      <polygon points="376,446 376,454 368,450"/>
-      <polygon points="178,446 178,454 170,450"/>
+    <g fill="#7fb6d8">
+      <polygon points="682,466 682,474 674,470"/>
+      <polygon points="534,466 534,474 526,470"/>
+      <polygon points="252,466 252,474 244,470"/>
+      <polygon points="92,466 92,474 84,470"/>
     </g>
 
     <!-- =============== 1. TASK INPUT =============== -->
     <g class="node n1">
-      <rect x="40" y="76" width="140" height="58" rx="14"
-            fill="#1e3a8a" stroke="#60a5fa" stroke-width="1.6"/>
-      <text x="110" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#e5e7eb">1. Task input</text>
-      <text x="110" y="118" text-anchor="middle" font-size="10.5" fill="#bfdbfe">CLI · Web UI</text>
+      <rect x="50" y="100" width="140" height="58" rx="14"
+            fill="#0c3554" stroke="#0ea5e9" stroke-width="1.6"/>
+      <text x="120" y="124" text-anchor="middle" font-size="13" font-weight="700" fill="#e0f2fe">1. Task input</text>
+      <text x="120" y="142" text-anchor="middle" font-size="10.5" fill="#7dd3fc">CLI · Web UI</text>
     </g>
 
     <!-- =============== 2. COMPLEXITY (decision) =============== -->
     <g class="node n2">
-      <polygon points="302,70 378,107 302,144 226,107"
-               fill="#78350f" stroke="#fbbf24" stroke-width="1.8"/>
-      <text x="302" y="103" text-anchor="middle" font-size="12" font-weight="700" fill="#fef3c7">2. Complexity</text>
-      <text x="302" y="120" text-anchor="middle" font-size="10" fill="#fde68a">Lv 0–4</text>
+      <polygon points="317,92 394,131 317,170 240,131"
+               fill="#1f2937" stroke="#f59e0b" stroke-width="1.8"/>
+      <text x="317" y="128" text-anchor="middle" font-size="12" font-weight="700" fill="#fef3c7">2. Complexity</text>
+      <text x="317" y="146" text-anchor="middle" font-size="10" fill="#fde68a">Lv 0–4 · BMad/AI</text>
     </g>
 
-    <!-- =============== 3. SPEC PIPELINE (wide grouped) =============== -->
+    <!-- =============== 3. SPEC PIPELINE (wide, with examples) =============== -->
     <g class="node n3">
-      <rect x="426" y="48" width="374" height="116" rx="10"
-            fill="#1e3a8a" stroke="#60a5fa" stroke-width="1.6"/>
-      <text x="613" y="68" text-anchor="middle" font-size="13" font-weight="700" fill="#e5e7eb">3. Spec pipeline  <tspan font-size="10" fill="#bfdbfe">— 3–9 phases</tspan></text>
+      <rect x="440" y="50" width="460" height="160" rx="10"
+            fill="#0a2236" stroke="#0ea5e9" stroke-width="1.6"/>
+      <text x="670" y="72" text-anchor="middle" font-size="13" font-weight="700" fill="#e0f2fe">3. Spec pipeline  <tspan font-size="10" fill="#7dd3fc">— 3 to 9 phases</tspan></text>
 
-      <g font-size="10" fill="#e0e7ff">
-        <rect x="440" y="78" width="74" height="20" rx="10" fill="#3b4b8a"/>
-        <text x="477" y="92" text-anchor="middle">discovery</text>
+      <!-- Phase chips row 1 -->
+      <g font-size="10" fill="#e0f2fe">
+        <rect x="454" y="84" width="68" height="20" rx="10" fill="#0e4870"/>
+        <text x="488" y="98" text-anchor="middle">discovery</text>
+        <line x1="522" y1="94" x2="535" y2="94" stroke="#7fb6d8" stroke-width="1" marker-end="url(#arrowMini)"/>
 
-        <rect x="518" y="78" width="86" height="20" rx="10" fill="#3b4b8a"/>
-        <text x="561" y="92" text-anchor="middle">requirements</text>
+        <rect x="538" y="84" width="86" height="20" rx="10" fill="#0e4870"/>
+        <text x="581" y="98" text-anchor="middle">requirements</text>
+        <line x1="624" y1="94" x2="637" y2="94" stroke="#7fb6d8" stroke-width="1" marker-end="url(#arrowMini)"/>
 
-        <rect x="608" y="78" width="62" height="20" rx="10" fill="none" stroke="#60a5fa" stroke-dasharray="3,2"/>
-        <text x="639" y="92" text-anchor="middle">research</text>
+        <rect x="640" y="84" width="64" height="20" rx="10" fill="none" stroke="#0ea5e9" stroke-dasharray="3,2"/>
+        <text x="672" y="98" text-anchor="middle">research</text>
+        <line x1="704" y1="94" x2="717" y2="94" stroke="#7fb6d8" stroke-width="1" marker-end="url(#arrowMini)"/>
 
-        <rect x="674" y="78" width="112" height="20" rx="10" fill="none" stroke="#60a5fa" stroke-dasharray="3,2"/>
-        <text x="730" y="92" text-anchor="middle">architecture · Lv 3+</text>
+        <rect x="720" y="84" width="92" height="20" rx="10" fill="none" stroke="#0ea5e9" stroke-dasharray="3,2"/>
+        <text x="766" y="98" text-anchor="middle">arch · Lv 3+</text>
+        <line x1="812" y1="94" x2="825" y2="94" stroke="#7fb6d8" stroke-width="1" marker-end="url(#arrowMini)"/>
 
-        <rect x="440" y="103" width="62" height="20" rx="10" fill="#3b4b8a"/>
-        <text x="471" y="117" text-anchor="middle">context</text>
+        <rect x="828" y="84" width="62" height="20" rx="10" fill="#0e4870"/>
+        <text x="859" y="98" text-anchor="middle">context</text>
 
-        <rect x="506" y="103" width="62" height="20" rx="10" fill="#3b4b8a"/>
-        <text x="537" y="117" text-anchor="middle">spec.md</text>
+        <!-- Phase chips row 2 -->
+        <rect x="454" y="110" width="62" height="20" rx="10" fill="#0e4870"/>
+        <text x="485" y="124" text-anchor="middle">spec.md</text>
+        <line x1="516" y1="120" x2="529" y2="120" stroke="#7fb6d8" stroke-width="1" marker-end="url(#arrowMini)"/>
 
-        <rect x="572" y="103" width="90" height="20" rx="10" fill="none" stroke="#60a5fa" stroke-dasharray="3,2"/>
-        <text x="617" y="117" text-anchor="middle">self-critique</text>
+        <rect x="532" y="110" width="86" height="20" rx="10" fill="none" stroke="#0ea5e9" stroke-dasharray="3,2"/>
+        <text x="575" y="124" text-anchor="middle">self-critique</text>
+        <line x1="618" y1="120" x2="631" y2="120" stroke="#7fb6d8" stroke-width="1" marker-end="url(#arrowMini)"/>
 
-        <rect x="666" y="103" width="66" height="20" rx="10" fill="#3b4b8a"/>
-        <text x="699" y="117" text-anchor="middle">planning</text>
+        <rect x="634" y="110" width="66" height="20" rx="10" fill="#0e4870"/>
+        <text x="667" y="124" text-anchor="middle">planning</text>
+        <line x1="700" y1="120" x2="713" y2="120" stroke="#7fb6d8" stroke-width="1" marker-end="url(#arrowMini)"/>
 
-        <rect x="736" y="103" width="50" height="20" rx="10" fill="#3b4b8a"/>
-        <text x="761" y="117" text-anchor="middle">validate</text>
+        <rect x="716" y="110" width="56" height="20" rx="10" fill="#0e4870"/>
+        <text x="744" y="124" text-anchor="middle">validate</text>
 
-        <!-- validation auto-fix mini-arc -->
-        <path d="M 786 113 C 802 105, 802 121, 786 121" fill="none" stroke="#f87171" stroke-width="1.3"
+        <path d="M 772 120 C 790 110, 790 130, 772 130" fill="none" stroke="#f87171" stroke-width="1.3"
               stroke-dasharray="4 2">
           <animate attributeName="stroke-dashoffset" from="0" to="-12" dur="1s" repeatCount="indefinite"/>
         </path>
       </g>
 
-      <text x="613" y="148" text-anchor="middle" font-size="10.5" fill="#cbd5e1">→ implementation_plan.json</text>
+      <!-- Examples row -->
+      <text x="454" y="152" font-size="10" font-weight="700" fill="#38bdf8">Example A:</text>
+      <text x="510" y="152" font-size="10" fill="#cbe4f6">"Add OAuth login"</text>
+      <text x="454" y="166" font-size="9.5" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">discovery.json</text>
+      <text x="528" y="166" font-size="9.5" fill="#94a3b8">{ files: 47, stack: "Next.js" }</text>
+      <text x="454" y="180" font-size="9.5" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">spec.md</text>
+      <text x="494" y="180" font-size="9.5" fill="#94a3b8">→ "NextAuth + Google provider, sessions in cookies"</text>
+      <text x="454" y="194" font-size="9.5" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">plan.json</text>
+      <text x="500" y="194" font-size="9.5" fill="#94a3b8">→ 3 stories · 9 subtasks</text>
+
+      <text x="688" y="152" font-size="10" font-weight="700" fill="#38bdf8">Example B:</text>
+      <text x="744" y="152" font-size="10" fill="#cbe4f6">"Fix login button colour"</text>
+      <text x="688" y="166" font-size="9.5" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">spec.md</text>
+      <text x="728" y="166" font-size="9.5" fill="#94a3b8">→ Quick Flow (Lv 0) · 3 phases only</text>
+      <text x="688" y="180" font-size="9.5" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">plan.json</text>
+      <text x="734" y="180" font-size="9.5" fill="#94a3b8">→ 1 subtask: "update css/Button.module.css"</text>
     </g>
 
     <!-- =============== 4. PLAN REVIEW (human gate, optional) =============== -->
     <g class="node n4 pulse">
-      <polygon points="924,52 998,105 924,158 846,105"
-               fill="#4c1d95" stroke="#a78bfa" stroke-width="1.8"/>
-      <text x="924" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#ede9fe">4. Plan review?</text>
-      <text x="924" y="115" text-anchor="middle" font-size="10" fill="#ddd6fe">optional</text>
+      <polygon points="1023,77 1100,131 1023,185 946,131"
+               fill="#312e81" stroke="#a78bfa" stroke-width="1.8"/>
+      <text x="1023" y="125" text-anchor="middle" font-size="12" font-weight="700" fill="#ede9fe">4. Plan review?</text>
+      <text x="1023" y="142" text-anchor="middle" font-size="10" fill="#ddd6fe">optional human gate</text>
     </g>
 
     <!-- =============== 5. WORKTREE =============== -->
     <g class="node n5">
-      <rect x="1046" y="76" width="140" height="58" rx="14"
-            fill="#1e3a8a" stroke="#60a5fa" stroke-width="1.6"/>
-      <text x="1116" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#e5e7eb">5. Worktree</text>
-      <text x="1116" y="118" text-anchor="middle" font-size="10" fill="#bfdbfe">isolated branch</text>
+      <rect x="1146" y="100" width="150" height="58" rx="14"
+            fill="#0c3554" stroke="#0ea5e9" stroke-width="1.6"/>
+      <text x="1221" y="124" text-anchor="middle" font-size="13" font-weight="700" fill="#e0f2fe">5. Worktree</text>
+      <text x="1221" y="142" text-anchor="middle" font-size="10" fill="#7dd3fc">isolated branch · dir</text>
     </g>
 
-    <!-- =============== 6. CODER LOOP (bottom row, right) =============== -->
+    <!-- =============== 6. CODER LOOP (BIG — with subtask sequence) =============== -->
     <g class="node n6">
-      <rect x="1046" y="385" width="200" height="130" rx="12"
-            fill="#1e3a8a" stroke="#60a5fa" stroke-width="1.6"/>
-      <text x="1146" y="406" text-anchor="middle" font-size="13" font-weight="700" fill="#e5e7eb">6. Coder loop</text>
-      <text x="1146" y="421" text-anchor="middle" font-size="10" fill="#bfdbfe">Alex · per subtask</text>
+      <rect x="720" y="380" width="500" height="220" rx="12"
+            fill="#0a2236" stroke="#0ea5e9" stroke-width="1.6"/>
+      <text x="970" y="406" text-anchor="middle" font-size="14" font-weight="700" fill="#e0f2fe">6. Coder loop  <tspan font-size="11" font-weight="400" fill="#7dd3fc">— Alex · iterates implementation_plan.json</tspan></text>
 
-      <g font-size="9.5">
-        <rect x="1058" y="432" width="80" height="22" rx="11" fill="#3b4b8a"/>
-        <text x="1098" y="446" text-anchor="middle" fill="#e0e7ff">load</text>
+      <!-- Subtask sequence: subtask1 → subtask2 → subtask3 → subtask4 -->
+      <g font-size="10">
+        <!-- subtask 1 -->
+        <rect x="738" y="424" width="106" height="56" rx="6" fill="#0e4870" stroke="#38bdf8" stroke-width="1.3"/>
+        <text x="791" y="441" text-anchor="middle" font-size="10.5" font-weight="700" fill="#e0f2fe">subtask 1</text>
+        <text x="791" y="455" text-anchor="middle" font-size="9.5" fill="#cbe4f6">Read CLAUDE.md</text>
+        <text x="791" y="467" text-anchor="middle" font-size="9" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">+ project_index.json</text>
+        <text x="791" y="478" text-anchor="middle" font-size="9" fill="#94a3b8" font-style="italic">discover patterns</text>
 
-        <line x1="1140" y1="443" x2="1156" y2="443" stroke="#94a3b8" stroke-width="1.1" marker-end="url(#arrow)"/>
+        <line x1="846" y1="452" x2="864" y2="452" stroke="#7fb6d8" stroke-width="1.2" marker-end="url(#arrow)"/>
 
-        <rect x="1158" y="432" width="76" height="22" rx="11" fill="#3b4b8a"/>
-        <text x="1196" y="446" text-anchor="middle" fill="#e0e7ff">run</text>
+        <!-- subtask 2 -->
+        <rect x="866" y="424" width="106" height="56" rx="6" fill="#0e4870" stroke="#38bdf8" stroke-width="1.3"/>
+        <text x="919" y="441" text-anchor="middle" font-size="10.5" font-weight="700" fill="#e0f2fe">subtask 2</text>
+        <text x="919" y="455" text-anchor="middle" font-size="9.5" fill="#cbe4f6">Add /api/auth</text>
+        <text x="919" y="467" text-anchor="middle" font-size="9" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">write app/api/auth/</text>
+        <text x="919" y="478" text-anchor="middle" font-size="9" fill="#94a3b8" font-style="italic">verify: curl ok</text>
+
+        <line x1="974" y1="452" x2="992" y2="452" stroke="#7fb6d8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- subtask 3 -->
+        <rect x="994" y="424" width="106" height="56" rx="6" fill="#0e4870" stroke="#38bdf8" stroke-width="1.3"/>
+        <text x="1047" y="441" text-anchor="middle" font-size="10.5" font-weight="700" fill="#e0f2fe">subtask 3</text>
+        <text x="1047" y="455" text-anchor="middle" font-size="9.5" fill="#cbe4f6">Wire UI button</text>
+        <text x="1047" y="467" text-anchor="middle" font-size="9" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">edit LoginPage.tsx</text>
+        <text x="1047" y="478" text-anchor="middle" font-size="9" fill="#94a3b8" font-style="italic">verify: e2e</text>
+
+        <line x1="1102" y1="452" x2="1120" y2="452" stroke="#7fb6d8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- subtask 4 -->
+        <rect x="1122" y="424" width="80" height="56" rx="6" fill="#0e4870" stroke="#38bdf8" stroke-width="1.3"/>
+        <text x="1162" y="441" text-anchor="middle" font-size="10.5" font-weight="700" fill="#e0f2fe">subtask 4</text>
+        <text x="1162" y="455" text-anchor="middle" font-size="9.5" fill="#cbe4f6">Tests</text>
+        <text x="1162" y="467" text-anchor="middle" font-size="9" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">npm test</text>
+        <text x="1162" y="478" text-anchor="middle" font-size="9" fill="#94a3b8" font-style="italic">all green</text>
       </g>
 
-      <!-- retry arc inside coder -->
-      <path d="M 1234 458 C 1255 478, 1040 478, 1058 458" fill="none" stroke="#f87171" stroke-width="1.4"
+      <!-- Per-subtask inner loop annotation -->
+      <text x="738" y="510" font-size="10" font-weight="700" fill="#cbe4f6">For each subtask:</text>
+      <g font-size="10" fill="#94a3b8">
+        <text x="738" y="524"><tspan fill="#7dd3fc">load_subtask</tspan> → <tspan fill="#7dd3fc">generate_prompt</tspan> (coder.md + recovery hints) → <tspan fill="#7dd3fc">run_session</tspan> (Claude Agent SDK)</text>
+        <text x="738" y="538">→ <tspan fill="#7dd3fc">parse status</tspan> ·  <tspan fill="#a7f3d0">completed</tspan> → next subtask  ·  <tspan fill="#fcd34d">continue</tspan> → sleep 3 s  ·  <tspan fill="#fca5a5">failed</tspan> → retry (attempt+1)</text>
+        <text x="738" y="552">→ write <tspan fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">build-progress.txt</tspan>  ·  update <tspan fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">implementation_plan.json[status]</tspan>  ·  emit <tspan fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">task:status</tspan> WebSocket</text>
+      </g>
+
+      <!-- retry arc spanning the whole subtask sequence -->
+      <path d="M 1202 480 C 1240 540, 700 540, 738 484" fill="none" stroke="#f87171" stroke-width="1.4"
             stroke-dasharray="5 3" marker-end="url(#arrowLoop)">
-        <animate attributeName="stroke-dashoffset" from="0" to="-16" dur="1.4s" repeatCount="indefinite"/>
+        <animate attributeName="stroke-dashoffset" from="0" to="-18" dur="1.5s" repeatCount="indefinite"/>
       </path>
-      <text x="1146" y="500" text-anchor="middle" font-size="10" fill="#fca5a5">retry ≤ 3 · auto-continue 3 s</text>
+      <text x="970" y="580" text-anchor="middle" font-size="11" fill="#fca5a5" font-weight="600">retry per subtask ≤ 3  ·  STUCK on 4th attempt  ·  auto-continue 3 s</text>
     </g>
 
     <!-- =============== 7. ALL SUBTASKS DONE? =============== -->
     <g class="node n7">
-      <polygon points="918,402 998,450 918,498 838,450"
-               fill="#78350f" stroke="#fbbf24" stroke-width="1.8"/>
-      <text x="918" y="448" text-anchor="middle" font-size="12" font-weight="700" fill="#fef3c7">7. All done?</text>
+      <polygon points="624,418 700,470 624,522 548,470"
+               fill="#1f2937" stroke="#f59e0b" stroke-width="1.8"/>
+      <text x="624" y="468" text-anchor="middle" font-size="12" font-weight="700" fill="#fef3c7">7. All done?</text>
     </g>
-    <!-- "no" arrow loops back to coder loop -->
-    <path d="M 918 402 C 980 360, 1146 360, 1146 385" fill="none" stroke="#f87171" stroke-width="1.5"
+    <!-- "no" loops back to coder loop -->
+    <path d="M 624 418 C 680 360, 970 360, 970 380" fill="none" stroke="#f87171" stroke-width="1.5"
           stroke-dasharray="6 3" marker-end="url(#arrowLoop)">
       <animate attributeName="stroke-dashoffset" from="0" to="-18" dur="1.6s" repeatCount="indefinite"/>
     </path>
-    <text x="1030" y="358" font-size="10.5" fill="#fca5a5" font-weight="600">no</text>
+    <text x="780" y="358" font-size="11" fill="#fca5a5" font-weight="600">no</text>
 
     <!-- =============== 8. QA LOOP =============== -->
     <g class="node n8">
-      <rect x="594" y="385" width="246" height="130" rx="12"
-            fill="#1e3a8a" stroke="#60a5fa" stroke-width="1.6"/>
-      <text x="717" y="406" text-anchor="middle" font-size="13" font-weight="700" fill="#e5e7eb">8. AI QA loop</text>
-      <text x="717" y="421" text-anchor="middle" font-size="10" fill="#bfdbfe">Morgan ↔ Riley · ≤ 10 iter</text>
+      <rect x="290" y="380" width="238" height="180" rx="12"
+            fill="#0a2236" stroke="#0ea5e9" stroke-width="1.6"/>
+      <text x="409" y="402" text-anchor="middle" font-size="14" font-weight="700" fill="#e0f2fe">8. AI QA loop</text>
+      <text x="409" y="418" text-anchor="middle" font-size="10" fill="#7dd3fc">Morgan ↔ Riley · max 10 iter</text>
 
       <g font-size="10">
-        <rect x="608" y="430" width="86" height="34" rx="6" fill="#3b4b8a"/>
-        <text x="651" y="445" text-anchor="middle" fill="#e0e7ff" font-weight="700">Reviewer</text>
-        <text x="651" y="458" text-anchor="middle" fill="#bfdbfe" font-size="9">qa_reviewer.md</text>
+        <rect x="306" y="430" width="86" height="40" rx="6" fill="#0e4870"/>
+        <text x="349" y="448" text-anchor="middle" fill="#e0f2fe" font-weight="700">Reviewer</text>
+        <text x="349" y="461" text-anchor="middle" fill="#7dd3fc" font-size="9">qa_reviewer.md</text>
 
-        <line x1="694" y1="447" x2="714" y2="447" stroke="#94a3b8" stroke-width="1.1" marker-end="url(#arrow)"/>
+        <line x1="394" y1="450" x2="412" y2="450" stroke="#7fb6d8" stroke-width="1.1" marker-end="url(#arrow)"/>
 
-        <polygon points="718,447 740,432 762,447 740,462" fill="#78350f" stroke="#fbbf24" stroke-width="1.3"/>
-        <text x="740" y="450" text-anchor="middle" fill="#fef3c7" font-size="9">ok?</text>
+        <polygon points="416,450 438,434 460,450 438,466" fill="#1f2937" stroke="#f59e0b" stroke-width="1.3"/>
+        <text x="438" y="453" text-anchor="middle" fill="#fef3c7" font-size="9">ok?</text>
 
-        <line x1="766" y1="447" x2="786" y2="447" stroke="#94a3b8" stroke-width="1.1" marker-end="url(#arrow)"/>
-        <text x="800" y="450" font-size="9" fill="#a7f3d0">yes →</text>
+        <line x1="464" y1="450" x2="486" y2="450" stroke="#7fb6d8" stroke-width="1.1" marker-end="url(#arrow)"/>
+        <text x="500" y="453" font-size="9" fill="#a7f3d0">yes</text>
 
-        <rect x="608" y="478" width="86" height="30" rx="6" fill="#3b4b8a"/>
-        <text x="651" y="494" text-anchor="middle" fill="#e0e7ff" font-weight="700">Fixer</text>
-        <text x="651" y="504" text-anchor="middle" fill="#bfdbfe" font-size="9">qa_fixer.md</text>
+        <rect x="306" y="486" width="86" height="36" rx="6" fill="#0e4870"/>
+        <text x="349" y="502" text-anchor="middle" fill="#e0f2fe" font-weight="700">Fixer</text>
+        <text x="349" y="514" text-anchor="middle" fill="#7dd3fc" font-size="9">qa_fixer.md</text>
 
         <!-- rejected → fixer -->
-        <path d="M 740 462 L 740 490 L 696 490" fill="none" stroke="#f87171" stroke-width="1.3"
+        <path d="M 438 466 L 438 504 L 394 504" fill="none" stroke="#f87171" stroke-width="1.3"
               stroke-dasharray="5 3" marker-end="url(#arrowLoop)">
           <animate attributeName="stroke-dashoffset" from="0" to="-16" dur="1.5s" repeatCount="indefinite"/>
         </path>
-        <text x="745" y="478" font-size="9" fill="#fca5a5">no</text>
+        <text x="442" y="492" font-size="9" fill="#fca5a5">no</text>
 
         <!-- fixer back to reviewer -->
-        <path d="M 608 493 L 588 493 L 588 447 L 606 447" fill="none" stroke="#f87171" stroke-width="1.3"
+        <path d="M 306 504 L 286 504 L 286 450 L 304 450" fill="none" stroke="#f87171" stroke-width="1.3"
               stroke-dasharray="5 3" marker-end="url(#arrowLoop)">
           <animate attributeName="stroke-dashoffset" from="0" to="-16" dur="1.5s" repeatCount="indefinite"/>
         </path>
+
+        <text x="306" y="540" font-size="9.5" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">qa_report.md</text>
+        <text x="372" y="540" font-size="9.5" fill="#94a3b8">(reviewer)</text>
+        <text x="306" y="553" font-size="9.5" fill="#7dd3fc" font-family="ui-monospace,SF Mono,monospace">QA_FIX_REQUEST.md</text>
+        <text x="412" y="553" font-size="9.5" fill="#94a3b8">(reviewer→fixer)</text>
       </g>
     </g>
 
     <!-- =============== 9. HUMAN REVIEW & MERGE =============== -->
     <g class="node n9 pulse">
-      <polygon points="294,398 370,450 294,502 220,450"
-               fill="#4c1d95" stroke="#a78bfa" stroke-width="1.8"/>
-      <text x="294" y="445" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ede9fe">9. Review &amp; merge</text>
-      <text x="294" y="461" text-anchor="middle" font-size="10" fill="#ddd6fe">human gate</text>
-      <text x="294" y="476" text-anchor="middle" font-size="9.5" fill="#c4b5fd">review · merge · discard</text>
+      <polygon points="186,402 246,470 186,538 120,470"
+               fill="#312e81" stroke="#a78bfa" stroke-width="1.8"/>
+      <text x="183" y="463" text-anchor="middle" font-size="11" font-weight="700" fill="#ede9fe">9. Review</text>
+      <text x="183" y="478" text-anchor="middle" font-size="11" font-weight="700" fill="#ede9fe">&amp; merge</text>
+      <text x="183" y="494" text-anchor="middle" font-size="9.5" fill="#c4b5fd">human gate</text>
     </g>
 
     <!-- =============== 10. DONE =============== -->
     <g class="node n10">
-      <circle cx="110" cy="450" r="34" fill="#064e3b" stroke="#34d399" stroke-width="2"/>
-      <text x="110" y="455" text-anchor="middle" font-size="14" font-weight="700" fill="#a7f3d0">DONE</text>
-      <!-- pulse ring -->
-      <circle cx="110" cy="450" r="34" fill="none" stroke="#34d399" stroke-width="2">
+      <circle cx="50" cy="470" r="34" fill="#064e3b" stroke="#34d399" stroke-width="2"/>
+      <text x="50" y="475" text-anchor="middle" font-size="13" font-weight="700" fill="#a7f3d0">DONE</text>
+      <circle cx="50" cy="470" r="34" fill="none" stroke="#34d399" stroke-width="2">
         <animate attributeName="r" from="34" to="48" dur="2.2s" repeatCount="indefinite"/>
         <animate attributeName="opacity" from="0.55" to="0" dur="2.2s" repeatCount="indefinite"/>
       </circle>
+    </g>
+
+    <!-- =============== INPUT EXAMPLE TAG (top-left of Coder loop) =============== -->
+    <g class="node n6">
+      <rect x="720" y="630" width="500" height="110" rx="8"
+            fill="#0c2841" stroke="#205075" stroke-width="1" stroke-dasharray="3 2"/>
+      <text x="734" y="650" font-size="11" font-weight="700" fill="#38bdf8">Each subtask reads + writes (real example, story 1.1):</text>
+      <text x="734" y="668" font-size="10" fill="#cbe4f6"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">reads</tspan>:  <tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">CLAUDE.md</tspan> · <tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">spec.md</tspan> · <tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">requirements.json</tspan> · <tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">memory/attempt_history.json</tspan></text>
+      <text x="734" y="684" font-size="10" fill="#cbe4f6"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">writes</tspan>:  app/api/auth/route.ts · components/LoginButton.tsx · tests/auth.test.ts</text>
+      <text x="734" y="704" font-size="10" fill="#cbe4f6"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">verify</tspan>:  <tspan fill="#94a3b8">{ type: "command", run: </tspan><tspan fill="#a7f3d0">"npm test auth"</tspan><tspan fill="#94a3b8"> }</tspan>  →  exit 0 → status flips to <tspan fill="#a7f3d0" font-weight="700">completed</tspan></text>
+      <text x="734" y="724" font-size="10" fill="#94a3b8"><tspan fill="#fca5a5">on failure</tspan>: append to <tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">attempt_history.json</tspan>, inject <tspan font-family="ui-monospace,SF Mono,monospace" fill="#7dd3fc">coder_recovery.md</tspan> in next prompt, retry with different approach</text>
     </g>
 
   </svg>
@@ -506,12 +573,12 @@
   }]
 }</pre>
     <p style="margin:10px 0 0; font-size:11.5px; color:var(--muted);">
-      <strong style="color:#cbd5e1;">Status transitions:</strong>
-      <code style="color:#93c5fd;">pending</code> →
+      <strong style="color:#cbe4f6;">Status transitions:</strong>
+      <code style="color:var(--accent2);">pending</code> →
       <code style="color:#fbbf24;">in_progress</code> →
       <code style="color:#34d399;">completed</code> ·
       or → <code style="color:#f87171;">stuck</code> after 3 failed attempts.
-      Coder picks the next <code style="color:#93c5fd;">pending</code> on every iteration via <code style="color:#93c5fd;">get_next_subtask()</code>.
+      Coder picks the next <code style="color:var(--accent2);">pending</code> on every iteration via <code style="color:var(--accent2);">get_next_subtask()</code>.
     </p>
   </div>
 
@@ -531,7 +598,7 @@
       <li><code>QA_ESCALATION.md</code><span class="desc">Written when same issue recurs 3× → human escalation.</span></li>
       <li><code>critique_report.json</code><span class="desc">Issues found + fixes applied by spec_critic (ultrathink).</span></li>
       <li><code>complexity_assessment.json</code><span class="desc">bmad_level · track · phases_to_run.</span></li>
-      <li style="border-top:1px solid #1a2438; padding-top:8px; margin-top:4px;"><strong style="color:#cbd5e1;">WebSocket events</strong><span class="desc"><code>phase:*</code>, <code>task:status</code>, <code>build:progress</code> — emitted by <code>agent_service.py</code> for live UI updates.</span></li>
+      <li style="border-top:1px solid var(--line); padding-top:8px; margin-top:4px;"><strong style="color:#cbe4f6;">WebSocket events</strong><span class="desc"><code>phase:*</code>, <code>task:status</code>, <code>build:progress</code> — emitted by <code>agent_service.py</code> for live UI updates.</span></li>
     </ul>
   </div>
 
