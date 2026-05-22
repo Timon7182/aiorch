@@ -212,6 +212,23 @@ class ClaudeTokenService:
             logger.error("[ClaudeToken] `claude` CLI not found on PATH")
             return None
 
+        # The CLI prefers CLAUDE_CODE_OAUTH_TOKEN env var over the credentials
+        # file. If that env var holds an expired access token, the CLI hits
+        # 401 and never falls through to the refresh path. Strip both OAuth
+        # env vars so the CLI uses ~/.claude/.credentials.json (which we keep
+        # current) and triggers its native refresh logic on expiry.
+        sub_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+                "ANTHROPIC_API_KEY",
+            }
+        }
+        sub_env["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+        sub_env["CI"] = "true"
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 claude_bin,
@@ -222,7 +239,7 @@ class ClaudeTokenService:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, "CLAUDE_CODE_ENTRYPOINT": "cli", "CI": "true"},
+                env=sub_env,
             )
             try:
                 stdout, stderr = await asyncio.wait_for(
