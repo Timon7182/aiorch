@@ -1,8 +1,10 @@
 """Documentation generator service.
 
-Spawns a Claude Code subprocess that runs the doc-generator prompt against a
-project, producing a `docs/` tree + `mkdocs.yml` in the repo. After the agent
-exits, runs `mkdocs build` to produce the static HTML site under
+Spawns `apps/backend/runners/docs_runner.py` as a subprocess (same pattern as
+agent_service for spec_runner / run.py). The runner uses the Claude Agent
+SDK to drive the doc-generator prompt against the project, producing a
+`docs/` tree + `mkdocs.yml` in the repo. After the runner exits, this
+service runs `mkdocs build` to produce the static HTML site under
 `<project>/.magestic-ai/docs-site/` for serving via the web UI.
 
 Two key design choices:
@@ -13,6 +15,12 @@ Two key design choices:
    regular files (no MCP needed).
 2. Built HTML lives in `.magestic-ai/docs-site/` (gitignored). Cheap to
    rebuild; never the source of truth.
+
+Auth note: we deliberately do NOT shell out to the `claude` CLI directly.
+The CLI's OAuth handling differs from the Python SDK and conflicts with how
+MagesticAI passes credentials (env var only, no `~/.claude/.credentials.json`
+inside the container). Spawning the same SDK-based runner that the rest of
+the platform uses keeps auth and tooling consistent.
 """
 
 from __future__ import annotations
@@ -47,9 +55,9 @@ class DocsGeneratorService:
     """Runs the doc-generator agent and builds the MkDocs site."""
 
     def __init__(self, backend_path: Path):
-        # backend_path points at apps/backend; we need the prompt + claude CLI.
+        # backend_path points at apps/backend; the runner + prompt live there.
         self.backend_path = backend_path
-        self.prompt_path = backend_path / "prompts" / "doc_generator.md"
+        self.runner_path = backend_path / "runners" / "docs_runner.py"
         # Track currently-running generations keyed by project_id so we don't
         # spawn two at once for the same project.
         self._running: dict[str, asyncio.subprocess.Process] = {}
@@ -87,7 +95,7 @@ class DocsGeneratorService:
                 error="A documentation generation is already in progress for this project.",
             )
 
-        if not self.prompt_path.exists():
+        if not self.runner_path.exists():
             return GenerationResult(
                 success=False,
                 project_id=project_id,
@@ -95,37 +103,39 @@ class DocsGeneratorService:
                 site_dir=project_path / ".magestic-ai" / "docs-site",
                 files_generated=[],
                 build_log="",
-                error=f"Doc generator prompt missing at {self.prompt_path}",
+                error=f"Doc runner missing at {self.runner_path}",
             )
 
-        prompt_text = self.prompt_path.read_text(encoding="utf-8")
         env = self._build_env(oauth_token, user_identity)
 
-        # Invoke Claude Code CLI in non-interactive mode with the prompt as
-        # input. The CLI reads from stdin, writes files in cwd, and exits.
+        # Spawn the SDK-based runner. Same auth path as the rest of the
+        # platform (env-var OAuth token; permissions handled in code, no
+        # interactive prompts).
         cmd = [
-            "claude",
-            "--no-update-check",
-            "--print",
+            sys.executable,
+            "-u",  # unbuffered, so we can stream progress to logs
+            str(self.runner_path),
+            "--project-dir",
+            str(project_path),
         ]
 
         logger.info(
-            f"[DocsGenerator] Starting agent for project {project_id} in {project_path}"
+            f"[DocsGenerator] Starting runner for project {project_id} "
+            f"({' '.join(cmd[1:])})"
         )
 
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
-                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(project_path),
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(self.backend_path),
                 env=env,
             )
             self._running[project_id] = proc
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(input=prompt_text.encode("utf-8")),
+                stdout, _ = await asyncio.wait_for(
+                    proc.communicate(),
                     timeout=900,  # 15 min cap on the generation phase
                 )
             except asyncio.TimeoutError:
@@ -142,6 +152,10 @@ class DocsGeneratorService:
         finally:
             self._running.pop(project_id, None)
 
+        runner_output = stdout.decode("utf-8", "replace") if stdout else ""
+        # Cap stored output so we don't bloat the response.
+        capped_log = runner_output[-4000:]
+
         if proc.returncode != 0:
             return GenerationResult(
                 success=False,
@@ -149,11 +163,14 @@ class DocsGeneratorService:
                 docs_dir=project_path / "docs",
                 site_dir=project_path / ".magestic-ai" / "docs-site",
                 files_generated=[],
-                build_log=stderr.decode("utf-8", "replace")[:4000],
-                error=f"Doc generator agent exited with code {proc.returncode}",
+                build_log=capped_log,
+                error=f"Doc generator runner exited with code {proc.returncode}",
             )
 
         files_generated = self._enumerate_generated_files(project_path)
+        # Make sure the marker file reflects this run even if the agent
+        # didn't get to step 8 of the prompt.
+        self._write_run_marker(project_path)
         build_log, build_ok = await self._build_site(project_path)
 
         if not build_ok:
@@ -206,6 +223,44 @@ class DocsGeneratorService:
             env["GIT_COMMITTER_NAME"] = name
             env["GIT_COMMITTER_EMAIL"] = email
         return env
+
+    def _write_run_marker(self, project_path: Path) -> None:
+        """Write/update .magestic-ai/.docgen.json with the current run metadata.
+
+        The agent prompt also instructs the agent to update this file, but
+        we write it from the service too so `last_run` is always reliable
+        even when the agent skips step 8.
+        """
+        marker = project_path / ".magestic-ai" / ".docgen.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        existing: dict = {}
+        if marker.exists():
+            try:
+                existing = json.loads(marker.read_text())
+            except json.JSONDecodeError:
+                pass
+        existing["last_run"] = datetime.now().isoformat()
+        head_sha = self._git_head(project_path)
+        if head_sha:
+            existing["head_sha"] = head_sha
+        try:
+            marker.write_text(json.dumps(existing, indent=2))
+        except OSError:
+            pass
+
+    def _git_head(self, project_path: Path) -> str | None:
+        """Best-effort `git rev-parse --short HEAD`, returns None on failure."""
+        import subprocess
+        try:
+            out = subprocess.check_output(
+                ["git", "-c", f"safe.directory={project_path}",
+                 "-C", str(project_path), "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            return out.decode("utf-8", "replace").strip() or None
+        except Exception:
+            return None
 
     def _enumerate_generated_files(self, project_path: Path) -> list[str]:
         out: list[str] = []
