@@ -706,8 +706,11 @@ def create_client(
     }
 
     # Write settings to a file in the project directory
-    # Use headless settings to avoid hook errors in subprocess
+    # Use headless settings to avoid hook errors in subprocess.
+    # Ensure ~/.claude exists; in fresh containers (no volume mount, no
+    # prior CLI call) the directory may not be present yet.
     settings_file = Path.home() / ".claude" / "settings-headless.json"
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
     with open(settings_file, "w") as f:
         json.dump(security_settings, f, indent=2)
 

@@ -64,6 +64,13 @@ async def _run(project_dir: Path, model: str) -> int:
     spec_dir = project_dir / ".magestic-ai" / "docs-runner"
     spec_dir.mkdir(parents=True, exist_ok=True)
 
+    # core.client writes ~/.claude/settings-headless.json on every call but
+    # doesn't create the parent. In containers rebuilt without ~/.claude/
+    # (no volume mount, fresh image), the directory is missing and the open
+    # fails. Pre-create it here.
+    claude_home = Path.home() / ".claude"
+    claude_home.mkdir(parents=True, exist_ok=True)
+
     print(f"[docs] starting agent (model={model}) in {project_dir}", flush=True)
 
     client = create_client(
@@ -149,7 +156,9 @@ def main() -> int:
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
+        import traceback
         print(f"[docs] runner crashed: {exc!r}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 1
 
 
