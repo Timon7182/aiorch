@@ -35,6 +35,10 @@ services:
       # exported via /home/saya/.aiorch-secrets). Authorizes against the user's
       # Anthropic subscription (Max), not API credits.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Refresh token is needed for claude_token_service to keep the access
+      # token alive across the ~1-hour Max OAuth expiry. Extract it from
+      # /home/saya/.claude/.credentials.json (see .ops/scripts/refresh_secrets.py).
+      - CLAUDE_CODE_OAUTH_REFRESH_TOKEN=${CLAUDE_CODE_OAUTH_REFRESH_TOKEN:-}
       # Graphiti memory: cross-session knowledge graph the agent writes to as
       # it learns about the codebase. Off by default — flip to `true` in
       # /home/saya/.aiorch-secrets to enable. Reuses the same Anthropic /
