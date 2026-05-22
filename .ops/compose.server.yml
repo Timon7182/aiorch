@@ -25,6 +25,17 @@ services:
       - CONTAINER_GATEWAY=192.168.88.1
       - APP_CORS_ORIGINS=["http://192.168.88.55:3101","http://192.168.88.220:3101","http://localhost:3101"]
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Claude Code OAuth token (from host's /home/saya/.claude/.credentials.json,
+      # exported via /home/saya/.aiorch-secrets). Authorizes against the user's
+      # Anthropic subscription (Max), not API credits.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Git provider credentials. Add the ones you use to /home/saya/.aiorch-secrets.
+      # gh CLI auto-detects GH_TOKEN; git uses them via the credential helper
+      # configured at container entrypoint.
+      - GH_TOKEN=${GH_TOKEN:-}
+      - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+      - BITBUCKET_USERNAME=${BITBUCKET_USERNAME:-}
+      - BITBUCKET_APP_PASSWORD=${BITBUCKET_APP_PASSWORD:-}
     deploy:
       resources:
         limits:
