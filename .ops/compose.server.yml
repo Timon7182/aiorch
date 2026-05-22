@@ -29,6 +29,13 @@ services:
       # exported via /home/saya/.aiorch-secrets). Authorizes against the user's
       # Anthropic subscription (Max), not API credits.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Graphiti memory: cross-session knowledge graph the agent writes to as
+      # it learns about the codebase. Off by default — flip to `true` in
+      # /home/saya/.aiorch-secrets to enable. Reuses the same Anthropic /
+      # Gemini keys for entity extraction, so no extra config needed.
+      - GRAPHITI_ENABLED=${GRAPHITI_ENABLED:-false}
+      - GRAPHITI_LLM_PROVIDER=${GRAPHITI_LLM_PROVIDER:-anthropic}
+      - GRAPHITI_EMBEDDER_PROVIDER=${GRAPHITI_EMBEDDER_PROVIDER:-google}
       # Git provider credentials. Add the ones you use to /home/saya/.aiorch-secrets.
       # gh CLI auto-detects GH_TOKEN; git uses them via the credential helper
       # configured at container entrypoint.

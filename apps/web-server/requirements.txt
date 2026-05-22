@@ -45,3 +45,9 @@ passlib>=1.7.4
 # feeds a >72-byte secret which newer bcrypt rejects). Pin to last compatible.
 bcrypt<4.1
 email-validator>=2.0.0
+
+# MkDocs-based per-project documentation generator
+# (server runs `mkdocs build` after the agent writes docs/*.md)
+mkdocs>=1.6.0
+mkdocs-material>=9.5.0
+pymdown-extensions>=10.0

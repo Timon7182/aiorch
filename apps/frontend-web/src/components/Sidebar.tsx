@@ -20,11 +20,19 @@ import {
   MessageCircle,
   Users,
   FileAudio,
-  LogOut
+  LogOut,
+  ChevronDown,
+  Check,
+  Library
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
 import { Separator } from './ui/separator';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from './ui/popover';
 import {
   Tooltip,
   TooltipContent,
@@ -52,7 +60,7 @@ import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from '../shared/types';
 
-export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts';
+export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts' | 'docs';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -77,6 +85,7 @@ const baseNavItems: NavItem[] = [
   { id: 'terminals', labelKey: 'navigation:items.terminals', icon: Terminal },
   { id: 'agent-tools', labelKey: 'navigation:items.agentTools', icon: Wrench },
   { id: 'skills', labelKey: 'navigation:items.skills', icon: Lightbulb },
+  { id: 'docs', labelKey: 'Docs', icon: Library },
   { id: 'changelog', labelKey: 'navigation:items.changelog', icon: FileText },
   { id: 'worktrees', labelKey: 'navigation:items.worktrees', icon: GitBranch },
   { id: 'context', labelKey: 'navigation:items.context', icon: BookOpen },
@@ -326,13 +335,81 @@ export function Sidebar({
             {/* Project Section */}
             <div>
               <h3 className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                {t('sections.project')}{selectedProject ? ` — ${selectedProject.name}` : ''}
+                {t('sections.project')}
               </h3>
-              {selectedProject && (
-                <p className="mb-2 px-3 text-[10px] text-muted-foreground/60 truncate" title={selectedProject.path}>
-                  {selectedProject.path}
-                </p>
-              )}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="mb-2 flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left hover:bg-accent/50 transition-colors"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">
+                        {selectedProject ? selectedProject.name : 'No project selected'}
+                      </div>
+                      {selectedProject && (
+                        <div
+                          className="truncate text-[10px] text-muted-foreground/60"
+                          title={selectedProject.path}
+                        >
+                          {selectedProject.path}
+                        </div>
+                      )}
+                    </div>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 p-1" align="start" side="right">
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                    Projects ({projects.length})
+                  </div>
+                  <Separator className="my-1" />
+                  <div className="max-h-80 overflow-auto">
+                    {projects.length === 0 && (
+                      <div className="px-2 py-3 text-xs text-muted-foreground">
+                        No projects yet. Click <span className="font-medium">Add Project</span> below to start.
+                      </div>
+                    )}
+                    {projects.map((proj) => {
+                      const isActive = proj.id === selectedProjectId;
+                      return (
+                        <button
+                          key={proj.id}
+                          type="button"
+                          onClick={() => {
+                            const store = useProjectStore.getState();
+                            store.selectProject(proj.id);
+                            store.openProjectTab(proj.id);
+                          }}
+                          className={cn(
+                            'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent/50',
+                            isActive && 'bg-accent'
+                          )}
+                        >
+                          <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+                            {isActive && <Check className="h-3.5 w-3.5" />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">{proj.name}</div>
+                            <div className="truncate text-[10px] text-muted-foreground/60" title={proj.path}>
+                              {proj.path}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <Separator className="my-1" />
+                  <button
+                    type="button"
+                    onClick={() => setShowAddProjectModal(true)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm font-medium text-primary hover:bg-accent/50"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add or clone a project
+                  </button>
+                </PopoverContent>
+              </Popover>
               <nav className="space-y-1">
                 {visibleNavItems.map(renderNavItem)}
               </nav>

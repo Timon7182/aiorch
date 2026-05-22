@@ -175,6 +175,11 @@ def create_app() -> FastAPI:
     from .routes import project_ingest as project_ingest_routes
     app.include_router(project_ingest_routes.router, prefix="/api/ext", tags=["Ingest"])
 
+    # MkDocs-based per-project documentation: agent generates markdown,
+    # service runs `mkdocs build`, viewer serves the static site.
+    from .routes import docs as docs_routes
+    app.include_router(docs_routes.router, prefix="/api/projects", tags=["Docs"])
+
     # Include WebSocket routers
     app.include_router(logs_ws.router, tags=["WebSocket"])
     app.include_router(progress_ws.router, tags=["WebSocket"])

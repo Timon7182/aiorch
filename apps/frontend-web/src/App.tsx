@@ -17,6 +17,7 @@ import { AgentTools } from './components/AgentTools';
 import { SkillsPage } from './components/SkillsPage';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { AddProjectModal } from './components/AddProjectModal';
+import { DocumentationView } from './components/DocumentationView';
 import { AppSettingsDialog } from './components/settings';
 import { TaskCreationWizard } from './components/TaskCreationWizard';
 import { TaskDetailModal } from './components/task-detail';
@@ -347,6 +348,9 @@ function AuthenticatedApp() {
                   )}
                   {activeView === 'agent-tools' && <AgentTools />}
                   {activeView === 'skills' && <SkillsPage />}
+                  {activeView === 'docs' && selectedProject && (
+                    <DocumentationView projectId={selectedProject.id} />
+                  )}
                 </>
               ) : (
                 <WelcomeScreen
