@@ -4,7 +4,11 @@ Project management routes.
 Handles CRUD operations for projects (git repositories that Magestic AI manages).
 """
 
+import asyncio
 import json
+import os
+import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -400,6 +404,136 @@ async def add_project(project: ProjectCreate):
     response = project_to_response(project_id, project_data)
     if created_directory:
         response["createdDirectory"] = True
+    return response
+
+
+# --------------------------------------------------------------------------
+# Clone from Git URL
+# --------------------------------------------------------------------------
+
+# Letters, digits, dot, underscore, hyphen — no slashes, no shell metachars,
+# no leading dots. Used to guard against path traversal in the folder name.
+_SAFE_FOLDER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
+
+# Default parent directory inside the container where cloned projects land.
+# Bind-mounted to /home/saya/projects on the host (see .ops/compose.server.yml).
+_DEFAULT_CLONE_PARENT = Path(os.environ.get("PROJECTS_CLONE_DIR", "/home/magesticai/projects"))
+
+
+class ProjectClone(BaseModel):
+    """Model for cloning a remote git repository as a project."""
+
+    url: str = Field(..., description="HTTPS git URL to clone")
+    name: str | None = Field(None, description="Folder name (defaults to repo name from URL)")
+    target_dir: str | None = Field(
+        None,
+        description="Absolute parent directory for the clone (defaults to PROJECTS_CLONE_DIR)",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("URL is required")
+        if not v.startswith(("https://", "http://")):
+            raise ValueError("Only https:// or http:// URLs are supported")
+        return v
+
+
+def _derive_repo_name(url: str) -> str:
+    """Extract a default folder name from a git URL.
+
+    'https://gitlab.com/group/sub/repo.git' -> 'repo'
+    """
+    name = url.rstrip("/")
+    if name.endswith(".git"):
+        name = name[:-4]
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    name = "".join(c if c.isalnum() or c in "-_." else "-" for c in name).strip("-.")
+    return name or "project"
+
+
+@router.post("/clone", status_code=status.HTTP_201_CREATED)
+async def clone_project(payload: ProjectClone):
+    """Clone a remote git repository into the projects directory and register it.
+
+    Uses the container's pre-configured git credentials (~/.git-credentials +
+    extraheader for self-hosted Bitbucket Server). Public repos work without
+    any token configured.
+
+    Returns the same shape as POST /projects so the frontend can reuse the
+    post-add flow (init prompt, doc upload step).
+    """
+    folder_name = (payload.name or _derive_repo_name(payload.url)).strip()
+    if not _SAFE_FOLDER_RE.match(folder_name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Folder name may only contain letters, digits, '.', '_' and '-' "
+                   "(and may not start with a dot).",
+        )
+
+    parent = Path(payload.target_dir).expanduser() if payload.target_dir else _DEFAULT_CLONE_PARENT
+    if not parent.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target_dir must be an absolute path",
+        )
+    parent.mkdir(parents=True, exist_ok=True)
+    target = parent / folder_name
+
+    if target.exists() and any(target.iterdir()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Target path exists and is not empty: {target}",
+        )
+
+    # GIT_TERMINAL_PROMPT=0 makes git fail fast on auth instead of hanging.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    proc = await asyncio.create_subprocess_exec(
+        "git", "clone", "--", payload.url, str(target),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="git clone timed out after 10 minutes",
+        )
+
+    if proc.returncode != 0:
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"git clone failed: {stderr.decode('utf-8', 'replace').strip()[:500]}",
+        )
+
+    resolved = str(target.resolve())
+    projects = load_projects()
+    # Idempotent: if this path is already registered, just return it.
+    for pid, pdata in projects.items():
+        if pdata["path"] == resolved:
+            return project_to_response(pid, pdata)
+
+    project_id = str(uuid4())
+    now = datetime.now().isoformat()
+    project_data = {
+        "path": resolved,
+        "name": payload.name or folder_name,
+        "created_at": now,
+        "updated_at": now,
+    }
+    projects[project_id] = project_data
+    save_projects(projects)
+
+    response = project_to_response(project_id, project_data)
+    response["createdDirectory"] = True
     return response
 
 

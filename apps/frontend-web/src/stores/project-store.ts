@@ -369,6 +369,36 @@ export async function addProject(projectPath: string): Promise<Project | null> {
 }
 
 /**
+ * Clone a remote git repo and register it as a project.
+ *
+ * Uses the server's pre-configured git credentials (GitHub / GitLab /
+ * Bitbucket tokens forwarded via container env) — no auth prompt required.
+ * Throws on failure so the caller can surface a meaningful error.
+ */
+export async function cloneProject(
+  url: string,
+  name?: string,
+  targetDir?: string,
+): Promise<Project | null> {
+  const store = useProjectStore.getState();
+
+  try {
+    const result = await window.API.cloneProject(url, name, targetDir);
+    if (result.success && result.data) {
+      store.addProject(result.data);
+      store.selectProject(result.data.id);
+      store.openProjectTab(result.data.id);
+      return result.data;
+    }
+    throw new Error(result.error || 'Failed to clone project');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    store.setError(message);
+    throw error instanceof Error ? error : new Error(message);
+  }
+}
+
+/**
  * Remove a project
  */
 export async function removeProject(projectId: string): Promise<boolean> {

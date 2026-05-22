@@ -130,6 +130,7 @@ export interface DiscoveredProject {
 export interface API {
   // Project operations
   addProject: (projectPath: string) => Promise<IPCResult<Project>>;
+  cloneProject: (url: string, name?: string, targetDir?: string) => Promise<IPCResult<Project>>;
   removeProject: (projectId: string) => Promise<IPCResult>;
   getProjects: () => Promise<IPCResult<Project[]>>;
   updateProjectSettings: (projectId: string, settings: Partial<ProjectSettings>) => Promise<IPCResult>;

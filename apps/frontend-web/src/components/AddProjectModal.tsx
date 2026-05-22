@@ -14,9 +14,19 @@ import {
   DialogTitle
 } from './ui/dialog';
 import { cn } from '../lib/utils';
-import { addProject } from '../stores/project-store';
+import { addProject, cloneProject } from '../stores/project-store';
 import { getAuthHeaders } from '../lib/auth';
 import type { Project } from '../shared/types';
+
+type AddMode = 'discover' | 'custom' | 'clone';
+
+function deriveCloneName(url: string): string {
+  let name = url.trim().replace(/\/+$/, '');
+  if (name.endsWith('.git')) name = name.slice(0, -4);
+  const slash = name.lastIndexOf('/');
+  if (slash >= 0) name = name.slice(slash + 1);
+  return name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+}
 
 const DOC_SUFFIXES = ['.md', '.markdown', '.txt', '.rst', '.org'];
 
@@ -76,7 +86,10 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
   const [isScanning, setIsScanning] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [useCustomPath, setUseCustomPath] = useState(false);
+  const [mode, setMode] = useState<AddMode>('discover');
+  const [cloneUrl, setCloneUrl] = useState('');
+  const [cloneName, setCloneName] = useState('');
+  const cloneNameTouched = useRef(false);
   const [showClaudeReadyOnly, setShowClaudeReadyOnly] = useState(false);
   const [createdDirPath, setCreatedDirPath] = useState<string | null>(null);
 
@@ -135,7 +148,10 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
     if (open) {
       setCustomPath('');
       setSelectedProject(null);
-      setUseCustomPath(false);
+      setMode('discover');
+      setCloneUrl('');
+      setCloneName('');
+      cloneNameTouched.current = false;
       setShowClaudeReadyOnly(false);
       setError(null);
       setCreatedDirPath(null);
@@ -146,8 +162,43 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
     }
   }, [open, scanProjects]);
 
+  // Auto-derive folder name from URL while the user hasn't customized it.
+  useEffect(() => {
+    if (!cloneNameTouched.current) {
+      setCloneName(deriveCloneName(cloneUrl));
+    }
+  }, [cloneUrl]);
+
+  const completeAdd = (project: Project) => {
+    onProjectAdded?.(project, !project.autoBuildPath);
+    if (project.createdDirectory) {
+      setCreatedDirPath(project.path);
+    }
+    setAddedProject(project);
+  };
+
   const handleAddProject = async () => {
-    const path = useCustomPath ? customPath.trim() : selectedProject?.path;
+    if (mode === 'clone') {
+      const url = cloneUrl.trim();
+      if (!url) {
+        setError('Please enter a git URL');
+        return;
+      }
+      const name = cloneName.trim() || deriveCloneName(url);
+      setIsAdding(true);
+      setError(null);
+      try {
+        const project = await cloneProject(url, name);
+        if (project) completeAdd(project);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to clone project');
+      } finally {
+        setIsAdding(false);
+      }
+      return;
+    }
+
+    const path = mode === 'custom' ? customPath.trim() : selectedProject?.path;
     if (!path) {
       setError('Please select a project or enter a custom path');
       return;
@@ -170,12 +221,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
         } catch {
           // Non-fatal - main branch can be set later
         }
-        onProjectAdded?.(project, !project.autoBuildPath);
-        if (project.createdDirectory) {
-          setCreatedDirPath(project.path);
-        }
-        // Switch to step 2: optional docs upload (modal stays open)
-        setAddedProject(project);
+        completeAdd(project);
       } else {
         setError('Failed to add project. Please check the path is valid.');
       }
@@ -342,29 +388,59 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
         </DialogHeader>
 
         <div className="py-4 space-y-4">
-          {/* Projects folder input */}
-          <div className="space-y-2">
-            <Label htmlFor="projects-folder">Projects Folder</Label>
-            <div className="flex gap-2">
-              <Input
-                id="projects-folder"
-                placeholder="/home/user/projects"
-                value={projectsFolder}
-                onChange={(e) => setProjectsFolder(e.target.value)}
-                onKeyDown={handleKeyDown}
-              />
-              <Button
-                variant="outline"
-                onClick={scanProjects}
-                disabled={isScanning || !projectsFolder.trim()}
+          {/* Mode picker */}
+          <div className="flex gap-1 rounded-lg bg-muted p-1 text-xs">
+            {([
+              { id: 'discover', label: 'Discover', icon: Search },
+              { id: 'custom', label: 'Custom path', icon: FolderOpen },
+              { id: 'clone', label: 'Clone from Git URL', icon: GitBranch },
+            ] as const).map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setMode(id);
+                  setSelectedProject(null);
+                  setError(null);
+                }}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 font-medium transition-colors',
+                  mode === id
+                    ? 'bg-background shadow-sm text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
               >
-                {isScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-              </Button>
-            </div>
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </button>
+            ))}
           </div>
 
+          {/* Projects folder input (Discover mode only) */}
+          {mode === 'discover' && (
+            <div className="space-y-2">
+              <Label htmlFor="projects-folder">Projects Folder</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="projects-folder"
+                  placeholder="/home/user/projects"
+                  value={projectsFolder}
+                  onChange={(e) => setProjectsFolder(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                />
+                <Button
+                  variant="outline"
+                  onClick={scanProjects}
+                  disabled={isScanning || !projectsFolder.trim()}
+                >
+                  {isScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Discovered projects list */}
-          {!useCustomPath && discoveredProjects.length > 0 && (
+          {mode === 'discover' && discoveredProjects.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>
@@ -422,32 +498,15 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
           )}
 
           {/* Loading state */}
-          {isScanning && (
+          {mode === 'discover' && isScanning && (
             <div className="flex items-center justify-center py-8 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin mr-2" />
               Scanning for projects...
             </div>
           )}
 
-          {/* Toggle for custom path */}
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="use-custom"
-              checked={useCustomPath}
-              onChange={(e) => {
-                setUseCustomPath(e.target.checked);
-                if (e.target.checked) setSelectedProject(null);
-              }}
-              className="h-4 w-4 rounded"
-            />
-            <Label htmlFor="use-custom" className="text-sm font-normal cursor-pointer">
-              Enter custom path instead
-            </Label>
-          </div>
-
           {/* Custom path input */}
-          {useCustomPath && (
+          {mode === 'custom' && (
             <div className="space-y-2">
               <Label htmlFor="custom-path">Custom Project Path</Label>
               <Input
@@ -458,6 +517,40 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
                 onKeyDown={handleKeyDown}
                 autoFocus
               />
+            </div>
+          )}
+
+          {/* Clone from Git URL */}
+          {mode === 'clone' && (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="clone-url">Git URL</Label>
+                <Input
+                  id="clone-url"
+                  placeholder="https://gitlab.com/group/repo.git"
+                  value={cloneUrl}
+                  onChange={(e) => setCloneUrl(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="clone-name">Folder name</Label>
+                <Input
+                  id="clone-name"
+                  placeholder="my-repo"
+                  value={cloneName}
+                  onChange={(e) => {
+                    cloneNameTouched.current = true;
+                    setCloneName(e.target.value);
+                  }}
+                  onKeyDown={handleKeyDown}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Will be cloned into the server's projects directory.
+                  Uses the configured GitHub / GitLab / Bitbucket tokens — no prompt.
+                </p>
+              </div>
             </div>
           )}
 
@@ -483,9 +576,17 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
           </Button>
           <Button
             onClick={handleAddProject}
-            disabled={isAdding || isScanning || (!selectedProject && !useCustomPath) || (useCustomPath && !customPath.trim())}
+            disabled={
+              isAdding ||
+              isScanning ||
+              (mode === 'discover' && !selectedProject) ||
+              (mode === 'custom' && !customPath.trim()) ||
+              (mode === 'clone' && !cloneUrl.trim())
+            }
           >
-            {isAdding ? 'Adding...' : 'Add Project'}
+            {isAdding
+              ? mode === 'clone' ? 'Cloning...' : 'Adding...'
+              : mode === 'clone' ? 'Clone & Add' : 'Add Project'}
           </Button>
         </DialogFooter>
       </DialogContent>

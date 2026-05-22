@@ -271,6 +271,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
 
   // ========== Project Operations ==========
   addProject: (projectPath: string) => post<Project>('/projects', { path: projectPath }),
+  cloneProject: (url: string, name?: string, targetDir?: string) =>
+    post<Project>('/projects/clone', { url, name, target_dir: targetDir }),
   removeProject: (projectId: string) => del(`/projects/${projectId}`),
   getProjects: () => get<Project[]>('/projects'),
   updateProjectSettings: (projectId: string, settings: Partial<ProjectSettings>) =>
