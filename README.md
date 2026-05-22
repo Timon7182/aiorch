@@ -42,6 +42,7 @@ _A quick walkthrough of the Kanban board, task creation flow, and agent executio
 
 | View | Preview |
 |------|---------|
+| End-to-end architecture | ![architecture](assets/screenshots/architecture.png) |
 | Kanban task board       | ![kanban](assets/screenshots/kanban.png) |
 | Task creation wizard    | ![task-wizard](assets/screenshots/task-wizard.png) |
 | Built-in PTY terminal   | ![terminal](assets/screenshots/terminal.png) |
