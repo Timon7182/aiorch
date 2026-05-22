@@ -17,11 +17,17 @@ services:
     volumes:
       - /home/saya/magestic-data:/home/magesticai/.magestic-ai
       - /home/saya/projects:/home/magesticai/projects:rw
-      # Seed the in-container Claude credentials from the host. The CLI on
-      # the host keeps this refreshed; the container's claude_token_service
-      # copies it to ~/.claude/.credentials.json on startup, then maintains
-      # its own refresh loop. Read-only here — the container's copy of the
-      # file under ~/.claude/.credentials.json is the writable one.
+      # Persist the Claude config (credentials.json + session state) across
+      # container restarts. Without this, every restart wipes the refreshed
+      # OAuth tokens — and Anthropic rotates refresh tokens on each use,
+      # so re-seeding from a stale CLAUDE_CODE_OAUTH_REFRESH_TOKEN env var
+      # will fail with 401. Named volume avoids host UID/permission issues
+      # (Docker creates the volume with the right ownership for the
+      # container user on first start).
+      - magesticai-claude-config:/home/magesticai/.claude
+      # Seed file (read-only) for the very first start when the named
+      # volume above is empty. UID 1000 on host → only readable by root in
+      # the container, but the env-var bootstrap covers the common case.
       - /home/saya/.claude/.credentials.json:/home/magesticai/.claude-seed.json:ro
     cap_add:
       - NET_ADMIN
@@ -70,3 +76,7 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+volumes:
+  magesticai-claude-config:
+    name: magesticai-claude-config
