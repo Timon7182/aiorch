@@ -48,8 +48,8 @@ gosu magesticai \
     env \
         GH_TOKEN="${GH_TOKEN:-}" \
         GITLAB_TOKEN="${GITLAB_TOKEN:-}" \
-        BITBUCKET_HOST="${BITBUCKET_HOST:-bitbucket.org}" \
-        BITBUCKET_USERNAME="${BITBUCKET_USERNAME:-x-token-auth}" \
+        BITBUCKET_HOST="${BITBUCKET_HOST:-}" \
+        BITBUCKET_USERNAME="${BITBUCKET_USERNAME:-}" \
         BITBUCKET_TOKEN="${BITBUCKET_TOKEN:-${BITBUCKET_APP_PASSWORD:-}}" \
     bash <<'GIT_SETUP'
 set -eu
@@ -58,10 +58,20 @@ CREDS=/home/magesticai/.git-credentials
 chmod 600 "$CREDS"
 [ -n "${GH_TOKEN:-}" ] && echo "https://oauth2:${GH_TOKEN}@github.com" >> "$CREDS"
 [ -n "${GITLAB_TOKEN:-}" ] && echo "https://oauth2:${GITLAB_TOKEN}@gitlab.com" >> "$CREDS"
-if [ -n "${BITBUCKET_TOKEN:-}" ]; then
-    echo "https://${BITBUCKET_USERNAME}:${BITBUCKET_TOKEN}@${BITBUCKET_HOST}" >> "$CREDS"
-fi
 git config --global credential.helper "store --file=$CREDS"
+
+# Bitbucket: Cloud uses USERNAME + APP_PASSWORD (basic auth, credential store).
+# Self-hosted Server / older versions use HTTP Access Tokens with Bearer auth,
+# which the credential store can't express — use http.<url>.extraheader instead.
+if [ -n "${BITBUCKET_TOKEN:-}" ]; then
+    if [ -n "${BITBUCKET_USERNAME:-}" ]; then
+        HOST="${BITBUCKET_HOST:-bitbucket.org}"
+        echo "https://${BITBUCKET_USERNAME}:${BITBUCKET_TOKEN}@${HOST}" >> "$CREDS"
+    elif [ -n "${BITBUCKET_HOST:-}" ]; then
+        AUTH_B64=$(printf 'Bearer %s' "$BITBUCKET_TOKEN")
+        git config --global "http.https://${BITBUCKET_HOST}/.extraheader" "Authorization: ${AUTH_B64}"
+    fi
+fi
 GIT_SETUP
 
 # Drop to non-root user (gosu handles signals properly for PID 1)
