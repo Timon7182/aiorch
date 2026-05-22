@@ -36,6 +36,14 @@ if [ "$ENABLE_LAN_FIREWALL" = "true" ]; then
     echo "[entrypoint] LAN firewall active."
 fi
 
+# Claim ownership of the ~/.claude named volume — Docker creates it root-owned
+# on first start, but the claude_token_service runs as the magesticai user and
+# needs to write credentials.json there. Idempotent: subsequent starts are
+# no-ops when the volume is already owned correctly.
+if [ -d /home/magesticai/.claude ]; then
+    chown -R magesticai:magesticai /home/magesticai/.claude
+fi
+
 # Configure git credentials from forwarded env vars so HTTPS clone/push works
 # without prompting. Runs as the magesticai user; writes ~/.git-credentials
 # (mode 600) and points git at the `store` helper.
