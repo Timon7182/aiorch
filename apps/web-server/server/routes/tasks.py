@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from .projects import load_projects
@@ -1019,10 +1019,6 @@ async def create_task(task: TaskCreate):
 - [ ] Feature works as described
 - [ ] Tests pass
 - [ ] Code review approved
-
-## Notes
-
-Created via Magestic AI Web UI
 """
     (spec_dir / "spec.md").write_text(spec_content)
 
@@ -1405,7 +1401,11 @@ class ApprovePlanRequest(BaseModel):
 
 
 @router.post("/{task_id}/approve-plan")
-async def approve_plan(task_id: str, request: ApprovePlanRequest = ApprovePlanRequest()):
+async def approve_plan(
+    task_id: str,
+    raw_request: Request,
+    request: ApprovePlanRequest = ApprovePlanRequest(),
+):
     """Approve a task's plan to allow coding to proceed.
 
     When a task is in plan_review status (waiting for human approval),
@@ -1510,6 +1510,8 @@ async def approve_plan(task_id: str, request: ApprovePlanRequest = ApprovePlanRe
                 except (json.JSONDecodeError, OSError):
                     pass
 
+            _ap_user = getattr(raw_request.state, "user", None)
+            _ap_user_id = _ap_user["id"] if isinstance(_ap_user, dict) and _ap_user.get("id") else ""
             await agent_service.start_task_execution(
                 task_id=task_id,
                 project_path=project_path,
@@ -1517,6 +1519,7 @@ async def approve_plan(task_id: str, request: ApprovePlanRequest = ApprovePlanRe
                 auto_continue=True,
                 mode=mode,
                 force=True,  # Bypass approval check since plan was manually approved
+                user_id=_ap_user_id,
             )
             auto_restarted = True
         except Exception as e:

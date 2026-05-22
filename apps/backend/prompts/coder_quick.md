@@ -111,9 +111,13 @@ After successful verification:
 
 ## STEP 7: COMMIT YOUR PROGRESS
 
+Use a **conventional commit** subject line (`feat:`, `fix:`, `refactor:`,
+`docs:`, `chore:` — pick based on the spec's workflow_type). Do not prefix the
+message with framework names, agent names, or task IDs.
+
 ```bash
 git add .
-git commit -m "magestic-ai: Complete [subtask-id] - [description]
+git commit -m "[type]: [short description of what changed]
 
 - Files modified: [list]
 - Verification: passed"

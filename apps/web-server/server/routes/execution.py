@@ -259,6 +259,10 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
             # === STANDARD PATH: Run full spec creation ===
             agent_service = get_agent_service()
 
+            # Resolve user identity for git authorship + email notifications.
+            _spec_user = getattr(raw_request.state, "user", None)
+            _spec_user_id = _spec_user["id"] if isinstance(_spec_user, dict) and _spec_user.get("id") else ""
+
             try:
                 await agent_service.start_spec_creation(
                     task_id=task_id,
@@ -267,6 +271,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
                     description=description,
                     complexity=complexity,
                     auto_continue=request.auto_continue,
+                    user_id=_spec_user_id,
                 )
 
                 # Persist status to implementation_plan.json for page refresh survival
@@ -464,7 +469,11 @@ async def stop_task(task_id: str):
 
 
 @router.post("/{task_id}/recover")
-async def recover_task(task_id: str, request: RecoverTaskRequest = RecoverTaskRequest()):
+async def recover_task(
+    task_id: str,
+    raw_request: Request,
+    request: RecoverTaskRequest = RecoverTaskRequest(),
+):
     """Recover a stuck task by resetting its status.
 
     Use this when a task shows as running but the process has died.
@@ -537,12 +546,15 @@ async def recover_task(task_id: str, request: RecoverTaskRequest = RecoverTaskRe
 
     # Auto-restart if requested
     if auto_restart:
+        _rec_user = getattr(raw_request.state, "user", None)
+        _rec_user_id = _rec_user["id"] if isinstance(_rec_user, dict) and _rec_user.get("id") else ""
         try:
             await agent_service.start_task_execution(
                 task_id=task_id,
                 project_path=project_path,
                 spec_id=spec_id,
                 auto_continue=True,
+                user_id=_rec_user_id,
             )
             auto_restarted = True
             reset_status = "in_progress"
@@ -580,6 +592,7 @@ async def create_and_run_task(
     title: str,
     description: str,
     request: StartTaskRequest,
+    raw_request: Request,
 ):
     """Create a new task and immediately start execution.
 
@@ -601,6 +614,9 @@ async def create_and_run_task(
     import uuid
     temp_task_id = f"{project_id}:pending-{uuid.uuid4().hex[:8]}"
 
+    _car_user = getattr(raw_request.state, "user", None)
+    _car_user_id = _car_user["id"] if isinstance(_car_user, dict) and _car_user.get("id") else ""
+
     try:
         await agent_service.start_spec_creation(
             task_id=temp_task_id,
@@ -609,6 +625,7 @@ async def create_and_run_task(
             description=description,
             complexity=request.complexity,
             auto_continue=request.auto_continue,
+            user_id=_car_user_id,
         )
     except Exception as e:
         raise HTTPException(

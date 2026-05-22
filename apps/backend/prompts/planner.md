@@ -516,6 +516,36 @@ If `complexity_assessment.json` exists in the spec directory, read it:
 cat complexity_assessment.json
 ```
 
+### HARD LIMITS from `planner_guidance` (NOT optional)
+
+If `complexity_assessment.json` includes a `planner_guidance` block, treat its
+limits as **hard ceilings**, not suggestions:
+
+```json
+"planner_guidance": {
+  "max_subtasks": 3,
+  "max_phases": 1
+}
+```
+
+- The total number of subtasks across all phases **MUST NOT exceed `max_subtasks`**.
+- The total number of phases **MUST NOT exceed `max_phases`**.
+- If you find yourself wanting more subtasks/phases than allowed, **collapse
+  related steps** into one subtask. Don't pad the plan with bookkeeping work
+  (e.g. "verify the previous step worked" is not a subtask, it's part of the
+  previous subtask).
+- For `simple` complexity, the typical shape is **1 phase, 1–3 subtasks**.
+  Three or more phases on a simple task is a planning bug — re-collapse.
+
+Trivial example: "Resolve a merge conflict on branch X by accepting the
+feature branch's changes" → 1 phase, 1 subtask:
+  - "Run `git fetch && git merge -X ours origin/<target>` on branch X,
+    push, and verify the PR shows mergeable."
+NOT 3 phases × 3 subtasks like "fetch / checkout / merge / identify conflicts /
+resolve / stage / commit / test / push / confirm".
+
+### `validation_recommendations` section
+
 Look for the `validation_recommendations` section:
 - `risk_level`: trivial, low, medium, high, critical
 - `skip_validation`: Whether validation can be skipped entirely

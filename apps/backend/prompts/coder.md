@@ -683,14 +683,30 @@ Never guess — verify first.
 
 ### Create the Commit
 
+Use **conventional commits** for the subject line. Pick the type from the spec's
+`workflow_type`:
+
+| workflow_type      | commit prefix |
+|--------------------|---------------|
+| feature            | `feat:`       |
+| bugfix             | `fix:`        |
+| refactor           | `refactor:`   |
+| documentation      | `docs:`       |
+| investigation      | `fix:`        |
+| chore / unknown    | `chore:`      |
+
 ```bash
 git add . ':!.magestic-ai'
-git commit -m "magestic-ai: Complete [subtask-id] - [subtask description]
+git commit -m "[type]: [short description of what changed]
 
 - Files modified: [list]
 - Verification: [type] - passed
 - Phase progress: [X]/[Y] subtasks complete"
 ```
+
+Do **NOT** prefix commit messages with framework names, agent names, or task IDs.
+Write commits the way a human teammate would — describe the change, not the
+machinery that produced it.
 
 **IMPORTANT — NEVER commit `.magestic-ai/` files:**
 The `.magestic-ai/` directory is gitignored and managed by the framework.
@@ -700,7 +716,7 @@ and `memory/`. The framework syncs these automatically. Only commit your source 
 
 **For multi-line commit messages**, use a temp file:
 ```bash
-echo "magestic-ai: Complete [id] - [desc]
+echo "[type]: [short description]
 
 - Files modified: [list]
 - Verification: passed" > /tmp/commit-msg.txt

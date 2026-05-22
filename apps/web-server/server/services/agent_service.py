@@ -21,6 +21,82 @@ from ..config import get_settings
 from ..websockets.events import emit_task_status, emit_task_update, emit_task_logs_stream, emit_subtask_update
 
 
+# Model + thinking-level overrides applied when the auto profile is selected on
+# a task the complexity assessor has flagged as `simple` + `mode=quick`. Stops
+# us from spending opus+high on what is effectively a shell-command task.
+_SIMPLE_QUICK_PHASE_MODELS = {
+    "spec": "sonnet",
+    "planning": "sonnet",
+    "coding": "sonnet",
+    "qa": "haiku",
+    "qa_fixer": "haiku",
+}
+_SIMPLE_QUICK_PHASE_THINKING = {
+    "spec": "low",
+    "planning": "low",
+    "coding": "low",
+    "qa": "low",
+    "qa_fixer": "low",
+}
+
+
+async def _resolve_git_identity(user_id: str) -> tuple[str, str] | None:
+    """Look up a user's name + email from the DB for git authorship.
+
+    Used to set GIT_AUTHOR_NAME/EMAIL on agent subprocesses so commits are
+    attributed to the human who clicked "run", not the container's identity.
+    Returns None when no user_id is supplied or the user isn't found.
+    """
+    if not user_id:
+        return None
+    try:
+        from sqlalchemy import select
+        from ..database.engine import async_session_factory
+        from ..database.models import User
+        async with async_session_factory() as session:
+            row = (await session.execute(
+                select(User.name, User.email).where(User.id == user_id)
+            )).first()
+            if row and row.name and row.email:
+                return row.name, row.email
+    except Exception:
+        # Don't let a DB issue block task launch — just fall back to
+        # whatever git identity the container has configured.
+        pass
+    return None
+
+
+def _apply_simple_quick_overrides(metadata: dict) -> bool:
+    """Downgrade auto-profile phase models/thinking for simple+quick tasks.
+
+    Mutates `metadata` in place. Returns True if anything was changed.
+    Only applies when the user picked the auto profile — explicit profile
+    choices (Complex / Balanced / Custom) are respected as-is.
+    """
+    if not metadata.get("isAutoProfile"):
+        return False
+    if metadata.get("complexity") != "simple" or metadata.get("mode") != "quick":
+        return False
+    changed = False
+    current_models = metadata.get("phaseModels") or {}
+    if current_models != _SIMPLE_QUICK_PHASE_MODELS:
+        metadata["phaseModels"] = dict(_SIMPLE_QUICK_PHASE_MODELS)
+        changed = True
+    current_thinking = metadata.get("phaseThinking") or {}
+    if current_thinking != _SIMPLE_QUICK_PHASE_THINKING:
+        metadata["phaseThinking"] = dict(_SIMPLE_QUICK_PHASE_THINKING)
+        changed = True
+    # Keep the top-level model/thinkingLevel in sync so any downstream code
+    # that reads them rather than phaseModels also sees the downgrade.
+    if metadata.get("model") != "sonnet":
+        metadata["model"] = "sonnet"
+        changed = True
+    if metadata.get("thinkingLevel") != "low":
+        metadata["thinkingLevel"] = "low"
+        changed = True
+    return changed
+
+
 class TaskPhase(str, Enum):
     """Task execution phases."""
 
@@ -2132,7 +2208,15 @@ class AgentService:
                     if metadata.get("requireReviewBeforeCoding", False):
                         should_auto_approve = False
                         logger.info(f"[AgentService] Task {task_id} requires manual review - NOT auto-approving spec")
-                    # Read spec phase model from auto profile config
+                    # Auto-downgrade opus→sonnet for simple+quick auto-profile tasks
+                    # (e.g. merge-conflict resolutions don't need opus + high thinking).
+                    if _apply_simple_quick_overrides(metadata):
+                        task_metadata_file.write_text(json.dumps(metadata, indent=2))
+                        logger.info(
+                            f"[AgentService] Task {task_id} is simple+quick (auto-profile) — "
+                            f"downgraded phase models to sonnet/haiku and thinking to low"
+                        )
+                    # Read spec phase model from (possibly downgraded) auto profile config
                     if metadata.get("isAutoProfile") and metadata.get("phaseModels"):
                         spec_phase_model = metadata["phaseModels"].get("spec")
                 except (json.JSONDecodeError, OSError) as e:
@@ -2229,6 +2313,17 @@ class AgentService:
         else:
             logger.warning("[AgentService] No Claude OAuth token available for spec creation")
             self._task_profiles[task_id] = {"attempt": 1, "model": spec_phase_model or "sonnet"}
+
+        # Attribute git commits to the human who started the task instead of
+        # the container's baked-in MagesticAI identity.
+        identity = await _resolve_git_identity(user_id)
+        if identity:
+            name, email = identity
+            env["GIT_AUTHOR_NAME"] = name
+            env["GIT_AUTHOR_EMAIL"] = email
+            env["GIT_COMMITTER_NAME"] = name
+            env["GIT_COMMITTER_EMAIL"] = email
+            logger.info(f"[AgentService] Git author for task {task_id}: {name} <{email}>")
 
         # Start subprocess with a pseudo-TTY to prevent "Stream closed" errors
         # Claude Code CLI expects a TTY for permission handling
@@ -2427,12 +2522,19 @@ class AgentService:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
             logger.info(f"[AgentService] Using Claude profile: {profile_name} ({profile_id})")
             # Store for potential retry — read model from task_metadata.json
+            # (and apply simple+quick auto-downgrade if it wasn't applied earlier).
             exec_model = "sonnet"  # default
             exec_spec_dir = project_path / ".magestic-ai" / "specs" / spec_id
             exec_metadata_file = exec_spec_dir / "task_metadata.json"
             if exec_metadata_file.exists():
                 try:
                     exec_metadata = json.loads(exec_metadata_file.read_text())
+                    if _apply_simple_quick_overrides(exec_metadata):
+                        exec_metadata_file.write_text(json.dumps(exec_metadata, indent=2))
+                        logger.info(
+                            f"[AgentService] Task {task_id} downgraded to sonnet/haiku "
+                            f"(simple+quick auto-profile)"
+                        )
                     exec_model = exec_metadata.get("model", "sonnet")
                 except (json.JSONDecodeError, OSError):
                     pass
@@ -2444,6 +2546,17 @@ class AgentService:
             }
         else:
             logger.warning("[AgentService] No Claude OAuth token available")
+
+        # Attribute git commits to the human who started the task instead of
+        # the container's baked-in MagesticAI identity.
+        identity = await _resolve_git_identity(user_id)
+        if identity:
+            name, email = identity
+            env["GIT_AUTHOR_NAME"] = name
+            env["GIT_AUTHOR_EMAIL"] = email
+            env["GIT_COMMITTER_NAME"] = name
+            env["GIT_COMMITTER_EMAIL"] = email
+            logger.info(f"[AgentService] Git author for task {task_id}: {name} <{email}>")
 
         exec_model_display = self._task_profiles.get(task_id, {}).get("model", "sonnet")
         logger.info(f"[AgentService] [Model: {exec_model_display}] Starting task execution for {task_id}")

@@ -116,9 +116,13 @@ RUN /home/projects/MagesticAI/.venv/bin/pip install --no-cache-dir \
     -r /home/projects/MagesticAI/apps/web-server/requirements.txt \
     -r /home/projects/MagesticAI/apps/backend/requirements.txt
 
-# Git config (required for worktree operations inside the container)
-RUN git config --global user.name "MagesticAI" && \
-    git config --global user.email "magesticai@container"
+# Git needs *some* identity configured globally to allow `git commit` from
+# worktree operations during installation/setup. The per-task launcher in
+# agent_service.py overrides this with GIT_AUTHOR_NAME/EMAIL (resolved from
+# the user who started the task) so commits ship under the human's identity,
+# not this placeholder.
+RUN git config --global user.name "Magestic Agent" && \
+    git config --global user.email "agent@magestic.local"
 
 # Create data directory for persistent state
 RUN mkdir -p /home/magesticai/.magestic-ai

@@ -1016,10 +1016,6 @@ async def create_project_task(project_id: str, task_data: TaskCreateRequest):
 - [ ] Feature works as described
 - [ ] Tests pass
 - [ ] Code review approved
-
-## Notes
-
-Created via Magestic AI Web UI
 """
     (spec_dir / "spec.md").write_text(spec_content)
 
