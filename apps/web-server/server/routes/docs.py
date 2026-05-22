@@ -58,8 +58,16 @@ def _backend_path() -> FilePath:
     return FilePath(__file__).resolve().parents[3] / "backend"
 
 
-def _resolve_oauth_token() -> str | None:
-    """Reuse the same env-based token that agent_service uses."""
+async def _resolve_oauth_token() -> str | None:
+    """Get a freshly-refreshed OAuth token from ClaudeTokenService, falling
+    back to the static env var if the service is unavailable."""
+    try:
+        from ..services.claude_token_service import get_claude_token_service
+        token = await get_claude_token_service().get_access_token()
+        if token:
+            return token
+    except Exception:
+        pass
     import os
     return os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or None
 
@@ -107,7 +115,7 @@ async def generate_docs(project_id: str, raw_request: Request):
         }
 
     user_identity = await _resolve_user_identity(raw_request)
-    oauth_token = _resolve_oauth_token()
+    oauth_token = await _resolve_oauth_token()
 
     # Fire-and-forget: the agent writes to disk; the UI polls /status.
     async def _run():

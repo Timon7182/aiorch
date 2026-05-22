@@ -17,6 +17,12 @@ services:
     volumes:
       - /home/saya/magestic-data:/home/magesticai/.magestic-ai
       - /home/saya/projects:/home/magesticai/projects:rw
+      # Seed the in-container Claude credentials from the host. The CLI on
+      # the host keeps this refreshed; the container's claude_token_service
+      # copies it to ~/.claude/.credentials.json on startup, then maintains
+      # its own refresh loop. Read-only here — the container's copy of the
+      # file under ~/.claude/.credentials.json is the writable one.
+      - /home/saya/.claude/.credentials.json:/home/magesticai/.claude-seed.json:ro
     cap_add:
       - NET_ADMIN
     environment:

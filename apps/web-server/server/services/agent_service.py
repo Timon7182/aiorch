@@ -543,14 +543,16 @@ class AgentService:
         """
         return self._task_current_phases.get(task_id, TaskPhase.PLANNING)
 
-    def _resolve_claude_token(self, exclude_profile_id: str | None = None) -> tuple[str | None, str | None, str | None]:
+    async def _resolve_claude_token(self, exclude_profile_id: str | None = None) -> tuple[str | None, str | None, str | None]:
         """Resolve Claude OAuth token from profiles with fallback chain.
 
         Resolution order:
-        1. Environment override (CLAUDE_CODE_OAUTH_TOKEN already set)
-        2. Active profile from ~/.magestic-ai/claude-profiles.json
-        3. Best available profile (excluding failed profile if provided)
-        4. Fallback to ~/.claude/oauth_token
+        1. ClaudeTokenService (live-refreshing OAuth state — preferred over
+           the static env var since Max OAuth access tokens expire ~hourly)
+        2. Environment override (CLAUDE_CODE_OAUTH_TOKEN already set)
+        3. Active profile from ~/.magestic-ai/claude-profiles.json
+        4. Best available profile (excluding failed profile if provided)
+        5. Fallback to ~/.claude/oauth_token
 
         Args:
             exclude_profile_id: Profile ID to exclude (for retry after failure)
@@ -561,7 +563,21 @@ class AgentService:
         import logging
         logger = logging.getLogger(__name__)
 
-        # Check environment override first
+        # Live OAuth refresh service — returns a token guaranteed fresh for
+        # the next ~5 minutes. Bypass when the caller is explicitly excluding
+        # the "env-override" profile (used for failover to API key profiles).
+        if exclude_profile_id != "env-override":
+            try:
+                from .claude_token_service import get_claude_token_service
+                live_token = await get_claude_token_service().get_access_token()
+                if live_token:
+                    logger.debug("[AgentService] Using OAuth token from ClaudeTokenService")
+                    return (live_token, "env-override", "Environment Override")
+            except Exception as exc:
+                logger.warning(f"[AgentService] ClaudeTokenService unavailable: {exc!r}")
+
+        # Check environment override as fallback (initial bootstrap before
+        # the token service has run, or container without the service).
         if "CLAUDE_CODE_OAUTH_TOKEN" in os.environ:
             # Allow failover when this "env-override" profile is excluded.
             if exclude_profile_id != "env-override":
@@ -897,7 +913,7 @@ class AgentService:
         logger = logging.getLogger(__name__)
 
         # Resolve alternate token (excluding failed profile)
-        token, profile_id, profile_name = self._resolve_claude_token(exclude_profile_id=failed_profile_id)
+        token, profile_id, profile_name = await self._resolve_claude_token(exclude_profile_id=failed_profile_id)
 
         if not token:
             logger.warning(f"[AgentService] No alternate profile available for retry (excluded: {failed_profile_id})")
@@ -2297,7 +2313,7 @@ class AgentService:
                 logger.warning(f"[AgentService] Failed to load project .env: {e}")
 
         # Get OAuth token with profile tracking
-        token, profile_id, profile_name = self._resolve_claude_token()
+        token, profile_id, profile_name = await self._resolve_claude_token()
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
             logger.info(
@@ -2517,7 +2533,7 @@ class AgentService:
                 logger.warning(f"[AgentService] Failed to load project .env: {e}")
 
         # Get OAuth token with profile tracking
-        token, profile_id, profile_name = self._resolve_claude_token()
+        token, profile_id, profile_name = await self._resolve_claude_token()
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
             logger.info(f"[AgentService] Using Claude profile: {profile_name} ({profile_id})")

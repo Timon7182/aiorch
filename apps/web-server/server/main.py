@@ -84,10 +84,19 @@ async def lifespan(app: FastAPI):
     init_skills_service()
     logger.info("SkillsService initialized")
 
+    # Claude OAuth token: seed from mounted credentials file (or env vars)
+    # and start the background refresh loop. Without this, agents 401 once
+    # the initial access token expires (~1 hour).
+    from .services.claude_token_service import get_claude_token_service
+    token_service = get_claude_token_service()
+    await token_service.start()
+    logger.info("ClaudeTokenService started")
+
     yield
 
     # Shutdown
     logger.info("Shutting down Magestic AI Web Server...")
+    await token_service.stop()
 
 
 def create_app() -> FastAPI:
