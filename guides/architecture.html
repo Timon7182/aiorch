@@ -69,6 +69,80 @@
     display: block;
   }
 
+  /* Annex below the diagram — details for contributors, hidden in screenshots */
+  .annex {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 16px 56px;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr;
+    gap: 18px;
+  }
+  .annex h2 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .annex .card {
+    background: #111827;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .annex table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .annex td {
+    padding: 5px 6px;
+    border-bottom: 1px solid #1a2438;
+    vertical-align: top;
+    color: #cbd5e1;
+  }
+  .annex td:first-child { white-space: nowrap; color: #93c5fd; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .annex td .ask { color: #94a3b8; font-style: italic; }
+  .annex pre {
+    margin: 0;
+    background: #0a1020;
+    border: 1px solid #1a2438;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 11.5px;
+    color: #cbd5e1;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  .annex pre .k { color: #93c5fd; }
+  .annex pre .s { color: #a7f3d0; }
+  .annex pre .c { color: #64748b; font-style: italic; }
+  .annex ul.logs {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12px;
+  }
+  .annex ul.logs li {
+    padding: 6px 0;
+    border-bottom: 1px solid #1a2438;
+    color: #cbd5e1;
+  }
+  .annex ul.logs li:last-child { border-bottom: none; }
+  .annex ul.logs code {
+    color: #93c5fd;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: transparent;
+    padding: 0;
+  }
+  .annex .desc { color: #94a3b8; display: block; margin-top: 2px; font-size: 11.5px; }
+  @media (max-width: 1000px) {
+    .annex { grid-template-columns: 1fr; }
+  }
+
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -345,6 +419,123 @@
 
   </svg>
 </main>
+
+<section class="annex">
+
+  <!-- ============= PROMPTS ============= -->
+  <div class="card">
+    <h2>Prompts &amp; what each asks the model</h2>
+    <table>
+      <tr>
+        <td>spec_gatherer.md</td>
+        <td><span class="ask">"Understand what the user wants and output a structured requirements.json. Ask smart questions, produce valid JSON."</span></td>
+      </tr>
+      <tr>
+        <td>spec_researcher.md</td>
+        <td><span class="ask">"Validate external integrations and dependencies. Verify everything. Trust nothing assumed. Document findings."</span></td>
+      </tr>
+      <tr>
+        <td>architecture.md</td>
+        <td><span class="ask">"You are Winston, Principal Architect. Design ERD, OpenAPI, ADRs, Mermaid diagrams for this requirements set."</span></td>
+      </tr>
+      <tr>
+        <td>spec_writer.md</td>
+        <td><span class="ask">"Read the gathered context and write a complete spec.md. Synthesize context into actionable spec. No user interaction."</span></td>
+      </tr>
+      <tr>
+        <td>spec_critic.md</td>
+        <td><span class="ask">"Critically review spec.md, find issues, fix them. Use extended thinking (max). Find problems BEFORE implementation."</span></td>
+      </tr>
+      <tr>
+        <td>complexity_assessor.md</td>
+        <td><span class="ask">"Analyze the task and determine its true complexity. Accuracy over speed. Wrong complexity → failed implementation."</span></td>
+      </tr>
+      <tr>
+        <td>planner.md</td>
+        <td><span class="ask">"Create a subtask-based implementation plan. Subtasks, not tests. Implementation order matters. Each subtask = one unit of work."</span></td>
+      </tr>
+      <tr>
+        <td>coder.md</td>
+        <td><span class="ask">"You are Alex. FRESH context — no memory of prior sessions. Work on ONE subtask at a time. Complete it. Verify. Move on."</span></td>
+      </tr>
+      <tr>
+        <td>coder_recovery.md</td>
+        <td><span class="ask">"Previous attempts failed. Read attempt_history.json. Try a different approach — don't repeat the same fix."</span></td>
+      </tr>
+      <tr>
+        <td>qa_reviewer.md</td>
+        <td><span class="ask">"You are Morgan. Last line of defense. Verify acceptance criteria via real commands. If you approve, the feature ships."</span></td>
+      </tr>
+      <tr>
+        <td>qa_fixer.md</td>
+        <td><span class="ask">"You are Riley. Fix exactly what QA found. Don't introduce new issues. Get to approval."</span></td>
+      </tr>
+      <tr>
+        <td>validation_fixer.md</td>
+        <td><span class="ask">"This artifact failed schema validation. Repair it. Return only valid JSON."</span></td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ============= SUBTASKS ============= -->
+  <div class="card">
+    <h2>Subtasks — implementation_plan.json</h2>
+    <pre><span class="c">// stories grouped, each story has subtasks</span>
+{
+  <span class="k">"stories"</span>: [{
+    <span class="k">"id"</span>: <span class="s">"story-1"</span>,
+    <span class="k">"title"</span>: <span class="s">"User authentication"</span>,
+    <span class="k">"acceptance_criteria"</span>: [
+      <span class="s">"User can sign up with email"</span>,
+      <span class="s">"Session persists across reload"</span>
+    ],
+    <span class="k">"tech_context"</span>: {
+      <span class="k">"stack"</span>: <span class="s">"Next.js · NextAuth"</span>
+    },
+    <span class="k">"subtasks"</span>: [{
+      <span class="k">"id"</span>: <span class="s">"sub-1.1"</span>,
+      <span class="k">"title"</span>: <span class="s">"Add /api/auth route"</span>,
+      <span class="k">"files"</span>: [<span class="s">"app/api/auth/*"</span>],
+      <span class="k">"verification"</span>: {
+        <span class="k">"type"</span>: <span class="s">"command"</span>,
+        <span class="k">"run"</span>: <span class="s">"npm test auth"</span>
+      },
+      <span class="k">"status"</span>: <span class="s">"completed"</span>,
+      <span class="k">"attempts"</span>: 1
+    }]
+  }]
+}</pre>
+    <p style="margin:10px 0 0; font-size:11.5px; color:var(--muted);">
+      <strong style="color:#cbd5e1;">Status transitions:</strong>
+      <code style="color:#93c5fd;">pending</code> →
+      <code style="color:#fbbf24;">in_progress</code> →
+      <code style="color:#34d399;">completed</code> ·
+      or → <code style="color:#f87171;">stuck</code> after 3 failed attempts.
+      Coder picks the next <code style="color:#93c5fd;">pending</code> on every iteration via <code style="color:#93c5fd;">get_next_subtask()</code>.
+    </p>
+  </div>
+
+  <!-- ============= LOGS / ARTIFACTS ============= -->
+  <div class="card">
+    <h2>Logs &amp; artifacts</h2>
+    <ul class="logs">
+      <li><code>spec.md</code><span class="desc">Spec document written by spec_writer.</span></li>
+      <li><code>requirements.json</code><span class="desc">Structured user requirements + acceptance.</span></li>
+      <li><code>context.json</code><span class="desc">Relevant files / patterns / imports discovered.</span></li>
+      <li><code>architecture.json</code><span class="desc">ERD · OpenAPI · ADRs · Mermaid (Lv 3+ only).</span></li>
+      <li><code>implementation_plan.json</code><span class="desc">Stories + subtasks + statuses (single source of truth for coder).</span></li>
+      <li><code>build-progress.txt</code><span class="desc">Append-only line per completed subtask. Streamed to the frontend.</span></li>
+      <li><code>memory/attempt_history.json</code><span class="desc">Per-subtask attempt log — feeds coder_recovery.md.</span></li>
+      <li><code>qa_report.md</code><span class="desc">QA reviewer verdict (approved / rejected + issues).</span></li>
+      <li><code>QA_FIX_REQUEST.md</code><span class="desc">Issues for the fixer to address (consumed, then deleted).</span></li>
+      <li><code>QA_ESCALATION.md</code><span class="desc">Written when same issue recurs 3× → human escalation.</span></li>
+      <li><code>critique_report.json</code><span class="desc">Issues found + fixes applied by spec_critic (ultrathink).</span></li>
+      <li><code>complexity_assessment.json</code><span class="desc">bmad_level · track · phases_to_run.</span></li>
+      <li style="border-top:1px solid #1a2438; padding-top:8px; margin-top:4px;"><strong style="color:#cbd5e1;">WebSocket events</strong><span class="desc"><code>phase:*</code>, <code>task:status</code>, <code>build:progress</code> — emitted by <code>agent_service.py</code> for live UI updates.</span></li>
+    </ul>
+  </div>
+
+</section>
 
 </body>
 </html>
