@@ -11,7 +11,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import { clearAuthToken, getAuthToken, setAuthToken } from '../lib/auth';
+import {
+  clearAuthToken,
+  clearRefreshToken,
+  getAuthToken,
+  setAuthToken,
+  setRefreshToken,
+} from '../lib/auth';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -83,6 +89,9 @@ async function _credentialAuth(
       refresh_token?: string;
     };
     setAuthToken(data.access_token);
+    if (data.refresh_token) {
+      setRefreshToken(data.refresh_token);
+    }
     set({
       isAuthenticated: true,
       isLoading: false,
@@ -117,35 +126,29 @@ export const useAuthStore = create<AuthState>()(
 
       logout: () => {
         clearAuthToken();
+        clearRefreshToken();
         set({ isAuthenticated: false, error: null, user: null });
       },
 
       checkAuth: async () => {
+        // api-client.apiRequest already handles 401 → refresh → retry, so
+        // route this probe through it. That way an expired-but-refreshable
+        // session boots straight back in instead of bouncing to login.
+        const { get } = await import('../lib/api-client');
         const token = getAuthToken();
         if (!token) {
           set({ isAuthenticated: false, isLoading: false });
           return false;
         }
         set({ isLoading: true });
-        try {
-          const response = await fetch('/api/settings', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (response.ok) {
-            set({ isAuthenticated: true, isLoading: false });
-            return true;
-          }
-          if (response.status === 401 || response.status === 403) {
-            clearAuthToken();
-            set({ isAuthenticated: false, isLoading: false, user: null });
-          } else {
-            set({ isAuthenticated: false, isLoading: false });
-          }
-          return false;
-        } catch {
-          set({ isAuthenticated: false, isLoading: false });
-          return false;
+        const result = await get('/settings');
+        if (result.success) {
+          set({ isAuthenticated: true, isLoading: false });
+          return true;
         }
+        // api-client cleared tokens on a failed refresh; mirror that here.
+        set({ isAuthenticated: false, isLoading: false, user: null });
+        return false;
       },
     }),
     {

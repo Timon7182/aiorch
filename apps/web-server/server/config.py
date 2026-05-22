@@ -31,9 +31,13 @@ class Settings(BaseSettings):
     DISABLE_AUTH: bool = False  # Set to True to disable auth (dev only)
 
     # JWT Configuration
+    # 15-minute access tokens were forcing users to re-login every quarter hour
+    # because the frontend never used the refresh token. With the refresh flow
+    # now wired up (see api-client.ts), the access token can be short — but
+    # there's no harm in giving it real headroom on a self-hosted instance.
     JWT_SECRET: str = ""  # Auto-generated if not set
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 720      # 12 hours
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     JWT_ALGORITHM: str = "HS256"
 
     # Database
