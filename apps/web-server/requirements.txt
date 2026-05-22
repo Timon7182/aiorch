@@ -40,5 +40,8 @@ paramiko>=3.4.0
 
 # Authentication (JWT + password hashing)
 python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
+passlib>=1.7.4
+# passlib 1.7.4's bcrypt backend hits ValueError on bcrypt>=4.1 (detect_wrap_bug
+# feeds a >72-byte secret which newer bcrypt rejects). Pin to last compatible.
+bcrypt<4.1
 email-validator>=2.0.0
