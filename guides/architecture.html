@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MagesticAI — End-to-End Task Architecture</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --ink: #1a1f2c;
+    --muted: #5b6478;
+    --line: #d8dee9;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --phase: #e0e7ff;
+    --phase-stroke: #4f46e5;
+    --decision: #fef3c7;
+    --decision-stroke: #b45309;
+    --human: #ede9fe;
+    --human-stroke: #6d28d9;
+    --loop: #dc2626;
+    --done: #d1fae5;
+    --done-stroke: #047857;
+    --code: #f1f3f8;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    background: var(--code);
+    padding: 0 4px;
+    border-radius: 3px;
+    color: #2937a8;
+  }
+  header {
+    background: var(--panel);
+    padding: 24px 32px;
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 {
+    margin: 0 0 6px 0;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+  }
+  header p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13.5px;
+    max-width: 900px;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .chip .swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1.5px solid var(--ink);
+  }
+  .chip .swatch.phase { background: var(--phase); border-color: var(--phase-stroke); }
+  .chip .swatch.decision { background: var(--decision); border-color: var(--decision-stroke); transform: rotate(45deg); }
+  .chip .swatch.human { background: var(--human); border-color: var(--human-stroke); }
+  .chip .swatch.cond { background: var(--panel); border-color: var(--phase-stroke); border-style: dashed; }
+  .chip .swatch.loop { background: transparent; border: 2px solid var(--loop); border-radius: 50%; }
+
+  main {
+    display: grid;
+    grid-template-columns: 240px 1fr 260px;
+    gap: 18px;
+    padding: 20px 24px 40px 24px;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+  aside {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .panel h2 {
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .panel ul { margin: 0; padding-left: 16px; }
+  .panel li { margin-bottom: 4px; font-size: 13px; }
+  .panel li .role { color: var(--muted); font-style: italic; }
+
+  .center {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    overflow: auto;
+  }
+  svg.flow {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-width: 720px;
+  }
+
+  table.detail {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 14px;
+    font-size: 12.5px;
+  }
+  table.detail th, table.detail td {
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.detail th {
+    background: #f3f5f9;
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  table.detail tr:last-child td { border-bottom: none; }
+  .bound {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: #fee2e2;
+    color: #991b1b;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  footer {
+    padding: 18px 32px 28px;
+    color: var(--muted);
+    font-size: 12px;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; }
+    aside { flex-direction: row; flex-wrap: wrap; }
+    aside .panel { flex: 1 1 240px; }
+  }
+
+  @media print {
+    body { background: white; }
+    header, footer, .panel { border-color: #999; }
+    aside { break-inside: avoid; }
+    .center { break-inside: avoid; border-color: #999; }
+    svg.flow { min-width: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MagesticAI — End-to-End Task Architecture</h1>
+  <p>One task's journey from user input to merged code. Every box maps to a prompt file under <code>apps/backend/prompts/</code> and an artifact under <code>.magestic-ai/specs/&lt;id&gt;/</code>. Conditional phases (dashed) depend on BMad complexity level. Loop bounds are highlighted in red. Two human gates sit between AI passes.</p>
+  <div class="legend">
+    <span class="chip"><span class="swatch phase"></span> Phase / agent</span>
+    <span class="chip"><span class="swatch cond"></span> Conditional (level-gated)</span>
+    <span class="chip"><span class="swatch decision"></span> Decision / fork</span>
+    <span class="chip"><span class="swatch human"></span> Human gate</span>
+    <span class="chip"><span class="swatch loop"></span> Loop back / retry</span>
+  </div>
+</header>
+
+<main>
+
+  <aside>
+    <div class="panel">
+      <h2>Personas (BMad)</h2>
+      <ul>
+        <li><strong>Sarah</strong> <span class="role">Staff PM — planner</span></li>
+        <li><strong>Winston</strong> <span class="role">Principal Architect</span></li>
+        <li><strong>Alex</strong> <span class="role">Senior Dev — coder</span></li>
+        <li><strong>Morgan</strong> <span class="role">QA Engineer — reviewer</span></li>
+        <li><strong>Riley</strong> <span class="role">Senior Dev — fixer</span></li>
+        <li><strong>Jordan</strong> <span class="role">Lead QA — escalations</span></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h2>Tracks &amp; phase counts</h2>
+      <ul>
+        <li><strong>Quick Flow</strong> (Lv 0–1) — 3 phases</li>
+        <li><strong>Standard</strong> (Lv 2) — 6 phases</li>
+        <li><strong>Standard + Arch</strong> (Lv 3) — 7 phases</li>
+        <li><strong>Enterprise</strong> (Lv 4) — 9 phases</li>
+      </ul>
+      <p style="margin:8px 0 0; font-size:12px; color:var(--muted);">Source: <code>integrations/bmad/track_config.py</code></p>
+    </div>
+    <div class="panel">
+      <h2>Sub-agents</h2>
+      <ul>
+        <li><code>RequirementsAnalyst</code></li>
+        <li><code>CodebaseAnalyzer</code></li>
+        <li><code>TechnicalEvaluator</code></li>
+      </ul>
+      <p style="margin:6px 0 0; font-size:12px; color:var(--muted);">Optional, invoked from planner / architect via <code>analyzer.analyze()</code>.</p>
+    </div>
+  </aside>
+
+  <section class="center">
+    <svg class="flow" viewBox="0 0 980 2520" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">
+      <defs>
+        <!-- Arrow heads -->
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+        </marker>
+        <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
+        </marker>
+        <marker id="arrowHuman" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#6d28d9"/>
+        </marker>
+      </defs>
+
+      <!-- ============================ -->
+      <!-- 1. ENTRY -->
+      <!-- ============================ -->
+      <g>
+        <rect x="320" y="20" width="340" height="64" rx="8" fill="#e0e7ff" stroke="#4f46e5" stroke-width="2"/>
+        <text x="490" y="44" text-anchor="middle" font-size="15" font-weight="700">1. Task input</text>
+        <text x="490" y="62" text-anchor="middle" font-size="11.5" fill="#475569">CLI: spec_runner.py · Web: routes/tasks.py</text>
+        <text x="490" y="76" text-anchor="middle" font-size="11" fill="#64748b">writes requirements.json + task_metadata.json</text>
+      </g>
+      <line x1="490" y1="84" x2="490" y2="118" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- ============================ -->
+      <!-- 2. COMPLEXITY DETECTION (3-way fork) -->
+      <!-- ============================ -->
+      <g>
+        <polygon points="490,128 620,196 490,264 360,196" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+        <text x="490" y="188" text-anchor="middle" font-size="14" font-weight="700">2. Complexity</text>
+        <text x="490" y="206" text-anchor="middle" font-size="12">detection (priority)</text>
+        <text x="490" y="224" text-anchor="middle" font-size="10.5" fill="#475569">complexity_assessment.json</text>
+      </g>
+      <!-- Three sources feeding the decision -->
+      <g font-size="11" fill="#475569">
+        <text x="180" y="160">BMad detector</text>
+        <text x="180" y="175" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">complexity_detector.py</text>
+        <text x="180" y="190" font-size="10">keywords + story-count est.</text>
+        <line x1="278" y1="178" x2="358" y2="190" stroke="#334155" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <text x="180" y="222">AI fallback</text>
+        <text x="180" y="237" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">complexity_assessor.md</text>
+        <text x="180" y="252" font-size="10">if confidence &lt; 0.8</text>
+        <line x1="290" y1="232" x2="358" y2="208" stroke="#334155" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <text x="180" y="280">Heuristic</text>
+        <text x="180" y="295" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">spec/complexity.py</text>
+        <text x="180" y="310" font-size="10">no-AI path</text>
+        <line x1="270" y1="288" x2="395" y2="240" stroke="#334155" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#arrow)"/>
+      </g>
+
+      <!-- Output: bmad_level / track / phases_to_run -->
+      <line x1="490" y1="264" x2="490" y2="300" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- ============================ -->
+      <!-- 3. TRACK FORK -->
+      <!-- ============================ -->
+      <g>
+        <rect x="180" y="305" width="620" height="74" rx="8" fill="#fff7ed" stroke="#b45309" stroke-width="1.5"/>
+        <text x="490" y="328" text-anchor="middle" font-size="13" font-weight="700">3. Track selection — bmad_level → phases_to_run</text>
+        <g font-size="11" fill="#1a1f2c">
+          <text x="220" y="352"><tspan font-weight="600">Quick Flow</tspan> (Lv 0–1)</text>
+          <text x="220" y="366" font-size="10" fill="#64748b">3 phases · discovery→tech_spec→validate</text>
+          <text x="400" y="352"><tspan font-weight="600">Standard</tspan> (Lv 2)</text>
+          <text x="400" y="366" font-size="10" fill="#64748b">6 phases · +requirements/context/spec/plan</text>
+          <text x="580" y="352"><tspan font-weight="600">Std+Arch</tspan> (Lv 3)</text>
+          <text x="580" y="366" font-size="10" fill="#64748b">7 phases · +architecture (Winston)</text>
+          <text x="720" y="352"><tspan font-weight="600">Enterprise</tspan> (Lv 4)</text>
+          <text x="720" y="366" font-size="10" fill="#64748b">9 phases · +security/devops</text>
+        </g>
+      </g>
+      <line x1="490" y1="379" x2="490" y2="408" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- ============================ -->
+      <!-- 4. PHASE PIPELINE column (vertical) -->
+      <!-- Each phase: rect + name + prompt + artifact -->
+      <!-- ============================ -->
+
+      <!-- discovery -->
+      <g>
+        <rect x="320" y="412" width="340" height="58" rx="6" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.6"/>
+        <text x="334" y="432" font-size="13" font-weight="700">Discovery</text>
+        <text x="334" y="450" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">spec_gatherer.md</text>
+        <text x="334" y="464" font-size="11" fill="#475569">→ discovery.json (codebase map)</text>
+      </g>
+      <line x1="490" y1="470" x2="490" y2="492" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- requirements -->
+      <g>
+        <rect x="320" y="496" width="340" height="58" rx="6" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.6"/>
+        <text x="334" y="516" font-size="13" font-weight="700">Requirements</text>
+        <text x="334" y="534" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">spec_gatherer.md (interactive or auto)</text>
+        <text x="334" y="548" font-size="11" fill="#475569">→ requirements.json</text>
+      </g>
+      <line x1="490" y1="554" x2="490" y2="576" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- research (conditional) -->
+      <g>
+        <rect x="320" y="580" width="340" height="58" rx="6" fill="#fff" stroke="#4f46e5" stroke-width="1.6" stroke-dasharray="5,3"/>
+        <text x="334" y="600" font-size="13" font-weight="700">Research <tspan font-size="11" font-weight="400" fill="#64748b">— if flagged</tspan></text>
+        <text x="334" y="618" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">spec_researcher.md</text>
+        <text x="334" y="632" font-size="11" fill="#475569">→ research.json (deps, API docs)</text>
+      </g>
+      <line x1="490" y1="638" x2="490" y2="660" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- architecture (conditional, level 3+) -->
+      <g>
+        <rect x="320" y="664" width="340" height="62" rx="6" fill="#fff" stroke="#4f46e5" stroke-width="1.6" stroke-dasharray="5,3"/>
+        <text x="334" y="684" font-size="13" font-weight="700">Architecture <tspan font-size="11" font-weight="400" fill="#64748b">— Level 3+ only · Winston</tspan></text>
+        <text x="334" y="702" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">spec/phases/architecture_phases.py · architecture.md</text>
+        <text x="334" y="718" font-size="11" fill="#475569">→ architecture.json (ERD · OpenAPI · ADRs · Mermaid)</text>
+      </g>
+      <line x1="490" y1="726" x2="490" y2="748" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- context -->
+      <g>
+        <rect x="320" y="752" width="340" height="58" rx="6" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.6"/>
+        <text x="334" y="772" font-size="13" font-weight="700">Context</text>
+        <text x="334" y="790" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">spec_writer.md (embedded discovery)</text>
+        <text x="334" y="804" font-size="11" fill="#475569">→ context.json (relevant files / patterns)</text>
+      </g>
+      <line x1="490" y1="810" x2="490" y2="832" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- spec writing -->
+      <g>
+        <rect x="320" y="836" width="340" height="58" rx="6" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.6"/>
+        <text x="334" y="856" font-size="13" font-weight="700">Spec writing</text>
+        <text x="334" y="874" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">spec_writer.md  (quick variant: spec_quick.md)</text>
+        <text x="334" y="888" font-size="11" fill="#475569">→ spec.md</text>
+      </g>
+      <line x1="490" y1="894" x2="490" y2="916" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- self critique (conditional) -->
+      <g>
+        <rect x="320" y="920" width="340" height="62" rx="6" fill="#fff" stroke="#4f46e5" stroke-width="1.6" stroke-dasharray="5,3"/>
+        <text x="334" y="940" font-size="13" font-weight="700">Self-critique <tspan font-size="11" font-weight="400" fill="#64748b">— Lv 3+ or flagged · ultrathink</tspan></text>
+        <text x="334" y="958" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">spec_critic.md</text>
+        <text x="334" y="972" font-size="11" fill="#475569">→ updated spec.md + critique_report.json</text>
+      </g>
+      <line x1="490" y1="982" x2="490" y2="1004" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- planning -->
+      <g>
+        <rect x="320" y="1008" width="340" height="62" rx="6" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.6"/>
+        <text x="334" y="1028" font-size="13" font-weight="700">Planning <tspan font-size="11" font-weight="400" fill="#64748b">· Sarah</tspan></text>
+        <text x="334" y="1046" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">agents/planner.py (script) → planner.md (fallback)</text>
+        <text x="334" y="1060" font-size="11" fill="#475569">→ implementation_plan.json (stories · acceptance · subtasks)</text>
+      </g>
+      <line x1="490" y1="1070" x2="490" y2="1092" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- validation (with auto-fix loop) -->
+      <g>
+        <rect x="320" y="1096" width="340" height="62" rx="6" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.6"/>
+        <text x="334" y="1116" font-size="13" font-weight="700">Validation</text>
+        <text x="334" y="1134" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">SpecValidator + validation_fixer.md (auto-fix retry)</text>
+        <text x="334" y="1148" font-size="11" fill="#475569">→ all artifacts checked &amp; auto-repaired on schema drift</text>
+      </g>
+      <!-- validation self-loop indicator -->
+      <path d="M 660 1127 C 720 1110, 720 1145, 660 1145" fill="none" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+      <text x="725" y="1132" font-size="10" fill="#dc2626">auto-fix</text>
+
+      <line x1="490" y1="1158" x2="490" y2="1184" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- phase compaction annotation, on the right of phases -->
+      <g>
+        <rect x="690" y="540" width="240" height="200" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,2"/>
+        <text x="710" y="560" font-size="11.5" font-weight="700" fill="#475569">Per-phase compaction</text>
+        <text x="710" y="578" font-size="10.5" fill="#64748b">After each phase succeeds,</text>
+        <text x="710" y="592" font-size="10.5" fill="#64748b"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">_store_phase_summary()</tspan> writes</text>
+        <text x="710" y="606" font-size="10.5" fill="#64748b">a ~500-word summary; later</text>
+        <text x="710" y="620" font-size="10.5" fill="#64748b">phases consume summaries</text>
+        <text x="710" y="634" font-size="10.5" fill="#64748b">instead of raw artifacts for</text>
+        <text x="710" y="648" font-size="10.5" fill="#64748b">token efficiency.</text>
+        <text x="710" y="672" font-size="11" font-weight="700" fill="#475569">Sub-agents</text>
+        <text x="710" y="686" font-size="10.5" fill="#64748b">RequirementsAnalyst /</text>
+        <text x="710" y="700" font-size="10.5" fill="#64748b">CodebaseAnalyzer /</text>
+        <text x="710" y="714" font-size="10.5" fill="#64748b">TechnicalEvaluator —</text>
+        <text x="710" y="728" font-size="10.5" fill="#64748b">optional, called from</text>
+        <text x="710" y="742" font-size="10.5" fill="#64748b">planner / architect.</text>
+      </g>
+
+      <!-- ============================ -->
+      <!-- 5. PLAN REVIEW HUMAN GATE -->
+      <!-- ============================ -->
+      <g>
+        <polygon points="490,1188 640,1248 490,1308 340,1248" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+        <text x="490" y="1238" text-anchor="middle" font-size="13" font-weight="700">5. Plan review?</text>
+        <text x="490" y="1254" text-anchor="middle" font-size="11" fill="#4c1d95">human gate · optional</text>
+        <text x="490" y="1270" text-anchor="middle" font-size="10.5" fill="#6d28d9">requireReviewBeforeCoding</text>
+        <text x="490" y="1283" text-anchor="middle" font-size="10.5" fill="#6d28d9">OR mode == "quick"</text>
+      </g>
+      <!-- side annotation: frontend + pause -->
+      <g>
+        <text x="660" y="1232" font-size="11" fill="#475569">yes →</text>
+        <text x="660" y="1248" font-size="10.5" fill="#6d28d9" font-family="ui-monospace,SF Mono,monospace">PlanReviewSection.tsx</text>
+        <text x="660" y="1262" font-size="10.5" fill="#475569">coder.py sets status</text>
+        <text x="660" y="1275" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">"human_review"</tspan>, exits loop</text>
+        <text x="660" y="1290" font-size="10.5" fill="#475569">→ resumes on POST</text>
+        <text x="660" y="1304" font-size="10.5" fill="#2937a8" font-family="ui-monospace,SF Mono,monospace">/tasks/{id}/approve-plan</text>
+      </g>
+      <g>
+        <text x="200" y="1232" font-size="11" fill="#475569">no →</text>
+        <text x="200" y="1248" font-size="10.5" fill="#475569">straight through</text>
+      </g>
+      <line x1="490" y1="1308" x2="490" y2="1334" stroke="#6d28d9" stroke-width="1.7" marker-end="url(#arrowHuman)"/>
+
+      <!-- ============================ -->
+      <!-- 6. WORKTREE SETUP -->
+      <!-- ============================ -->
+      <g>
+        <rect x="320" y="1338" width="340" height="62" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+        <text x="334" y="1358" font-size="13" font-weight="700">6. Worktree setup</text>
+        <text x="334" y="1376" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">core/worktree.py · WorktreeManager.setup_worktree()</text>
+        <text x="334" y="1390" font-size="11" fill="#475569">.magestic-ai/worktrees/tasks/{spec}/  branch: magestic-ai/{spec}</text>
+      </g>
+      <line x1="490" y1="1400" x2="490" y2="1426" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- ============================ -->
+      <!-- 7. CODER LOOP (with retry arrow) -->
+      <!-- ============================ -->
+      <g>
+        <rect x="220" y="1430" width="540" height="170" rx="10" fill="#fdf4ff" stroke="#a855f7" stroke-width="1.5"/>
+        <text x="240" y="1452" font-size="14" font-weight="700">7. Coder loop  <tspan font-weight="400" fill="#64748b" font-size="11">— per subtask · Alex</tspan></text>
+        <text x="240" y="1472" font-size="11" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">agents/coder.py · prompts/coder.md (+ coder_recovery.md on retry)</text>
+
+        <!-- inner sub-flow -->
+        <rect x="240" y="1484" width="160" height="40" rx="5" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.4"/>
+        <text x="320" y="1500" text-anchor="middle" font-size="11" font-weight="700">Load next subtask</text>
+        <text x="320" y="1514" text-anchor="middle" font-size="10" fill="#475569">implementation_plan.json</text>
+
+        <line x1="400" y1="1504" x2="430" y2="1504" stroke="#334155" stroke-width="1.4" marker-end="url(#arrow)"/>
+
+        <rect x="430" y="1484" width="160" height="40" rx="5" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.4"/>
+        <text x="510" y="1500" text-anchor="middle" font-size="11" font-weight="700">Run session</text>
+        <text x="510" y="1514" text-anchor="middle" font-size="10" fill="#475569">core.client.create_client()</text>
+
+        <line x1="590" y1="1504" x2="620" y2="1504" stroke="#334155" stroke-width="1.4" marker-end="url(#arrow)"/>
+
+        <polygon points="640,1504 700,1474 760,1504 700,1534" fill="#fef3c7" stroke="#b45309" stroke-width="1.6"/>
+        <text x="700" y="1502" text-anchor="middle" font-size="10.5" font-weight="700">status?</text>
+
+        <!-- status branches -->
+        <text x="320" y="1546" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">complete</tspan> → next subtask</text>
+        <text x="320" y="1562" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">continue</tspan> → sleep 3s, loop  <tspan fill="#dc2626">(AUTO_CONTINUE_DELAY_SECONDS)</tspan></text>
+        <text x="320" y="1578" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">failed</tspan>, attempt &lt; 3 → inject <tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">coder_recovery.md</tspan>, retry</text>
+        <text x="320" y="1594" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">failed</tspan>, attempt ≥ 3 → mark STUCK <tspan fill="#dc2626">(recovery_manager)</tspan></text>
+
+        <!-- retry curve -->
+        <path d="M 700 1534 C 700 1620, 200 1620, 240 1520" fill="none" stroke="#dc2626" stroke-width="1.6" stroke-dasharray="5,3" marker-end="url(#arrowRed)"/>
+        <text x="430" y="1614" font-size="10.5" fill="#dc2626" font-weight="600">retry up to 3×</text>
+      </g>
+      <!-- session segmentation callout -->
+      <g>
+        <rect x="20" y="1432" width="180" height="120" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,2"/>
+        <text x="32" y="1450" font-size="11" font-weight="700" fill="#475569">Session segmentation</text>
+        <text x="32" y="1466" font-size="10" fill="#64748b">(BMad, optional)</text>
+        <text x="32" y="1484" font-size="10.5" fill="#64748b">env: <tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">BMAD_SESSION_</tspan></text>
+        <text x="32" y="1496" font-size="10.5" fill="#64748b"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">SEGMENTATION=true</tspan></text>
+        <text x="32" y="1514" font-size="10.5" fill="#64748b">Fresh session per story,</text>
+        <text x="32" y="1528" font-size="10.5" fill="#64748b">context_shard.py loads</text>
+        <text x="32" y="1542" font-size="10.5" fill="#64748b">only relevant arch slices.</text>
+      </g>
+
+      <line x1="490" y1="1610" x2="490" y2="1650" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- ============================ -->
+      <!-- 8. ALL SUBTASKS DONE? -->
+      <!-- ============================ -->
+      <g>
+        <polygon points="490,1654 620,1710 490,1766 360,1710" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+        <text x="490" y="1704" text-anchor="middle" font-size="13" font-weight="700">8. All subtasks</text>
+        <text x="490" y="1720" text-anchor="middle" font-size="13" font-weight="700">complete?</text>
+      </g>
+      <!-- "no" arrow loops back to coder loop -->
+      <path d="M 360 1710 C 60 1710, 60 1500, 220 1500" fill="none" stroke="#dc2626" stroke-width="1.6" marker-end="url(#arrowRed)"/>
+      <text x="80" y="1605" font-size="11" fill="#dc2626" font-weight="600">no</text>
+      <text x="80" y="1620" font-size="10" fill="#dc2626">next subtask</text>
+
+      <!-- "yes" forward -->
+      <line x1="490" y1="1766" x2="490" y2="1792" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <text x="500" y="1788" font-size="11" fill="#475569">yes</text>
+
+      <!-- ============================ -->
+      <!-- 9. QA REVIEW LOOP -->
+      <!-- ============================ -->
+      <g>
+        <rect x="220" y="1796" width="540" height="200" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.6"/>
+        <text x="240" y="1820" font-size="14" font-weight="700">9. AI QA loop  <tspan font-size="11" font-weight="400" fill="#64748b">— max 10 iterations</tspan></text>
+        <text x="240" y="1838" font-size="11" fill="#475569">bound: <tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">MAX_QA_ITERATIONS = 10</tspan> · <tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">MAX_CONSECUTIVE_ERRORS = 3</tspan> · <code>qa/loop.py:47</code></text>
+
+        <!-- Reviewer box -->
+        <rect x="240" y="1852" width="220" height="56" rx="6" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.5"/>
+        <text x="350" y="1872" text-anchor="middle" font-size="12.5" font-weight="700">QA Reviewer · Morgan</text>
+        <text x="350" y="1888" text-anchor="middle" font-size="10.5" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">qa_reviewer.md</text>
+        <text x="350" y="1902" text-anchor="middle" font-size="10.5" fill="#475569">→ qa_report.md</text>
+
+        <line x1="460" y1="1880" x2="510" y2="1880" stroke="#334155" stroke-width="1.4" marker-end="url(#arrow)"/>
+
+        <polygon points="525,1880 565,1856 605,1880 565,1904" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+        <text x="565" y="1884" text-anchor="middle" font-size="10.5" font-weight="700">approved?</text>
+
+        <!-- "rejected" → fixer -->
+        <path d="M 565 1904 L 565 1928 L 350 1928 L 350 1942" fill="none" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+        <text x="455" y="1922" font-size="10.5" fill="#dc2626" font-weight="600">rejected → writes QA_FIX_REQUEST.md</text>
+
+        <!-- Fixer box -->
+        <rect x="240" y="1946" width="220" height="40" rx="6" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.5"/>
+        <text x="350" y="1962" text-anchor="middle" font-size="12.5" font-weight="700">QA Fixer · Riley</text>
+        <text x="350" y="1978" text-anchor="middle" font-size="10.5" font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">qa_fixer.md → applies fixes</text>
+
+        <!-- Fixer back to reviewer -->
+        <path d="M 240 1966 L 200 1966 L 200 1880 L 240 1880" fill="none" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+        <text x="158" y="1928" font-size="10.5" fill="#dc2626" font-weight="600" transform="rotate(-90 175 1928)">re-review</text>
+
+        <!-- Escalation -->
+        <text x="612" y="1875" font-size="10.5" fill="#6d28d9">if same issue ≥ 3×:</text>
+        <text x="612" y="1888" font-size="10.5" fill="#6d28d9"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#6d28d9">escalate_to_human()</tspan></text>
+        <text x="612" y="1901" font-size="10.5" fill="#6d28d9">(Jordan, lead QA)</text>
+      </g>
+
+      <line x1="490" y1="2002" x2="490" y2="2032" stroke="#334155" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <text x="500" y="2024" font-size="11" fill="#475569">approved</text>
+
+      <!-- ============================ -->
+      <!-- 10. HUMAN MERGE GATE -->
+      <!-- ============================ -->
+      <g>
+        <polygon points="490,2036 660,2110 490,2184 320,2110" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+        <text x="490" y="2092" text-anchor="middle" font-size="14" font-weight="700">10. Human review</text>
+        <text x="490" y="2110" text-anchor="middle" font-size="12.5" font-weight="700">&amp; merge</text>
+        <text x="490" y="2127" text-anchor="middle" font-size="10.5" fill="#6d28d9">run.py flags · final gate</text>
+        <text x="490" y="2143" text-anchor="middle" font-size="10.5" font-family="ui-monospace,SF Mono,monospace" fill="#6d28d9">--review · --merge · --discard</text>
+      </g>
+      <!-- side annotations for merge -->
+      <g>
+        <text x="680" y="2078" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">--review</tspan> → diffs</text>
+        <text x="680" y="2096" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">--merge</tspan> → branch</text>
+        <text x="688" y="2110" font-size="10.5" fill="#475569">into project main</text>
+        <text x="688" y="2124" font-size="10.5" fill="#475569">(auto-unstages</text>
+        <text x="688" y="2138" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">.magestic-ai/</tspan>)</text>
+        <text x="680" y="2158" font-size="10.5" fill="#475569"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">--discard</tspan> → delete</text>
+        <text x="688" y="2172" font-size="10.5" fill="#475569">worktree + branch</text>
+      </g>
+      <line x1="490" y1="2184" x2="490" y2="2210" stroke="#6d28d9" stroke-width="1.7" marker-end="url(#arrowHuman)"/>
+
+      <!-- ============================ -->
+      <!-- 11. DONE -->
+      <!-- ============================ -->
+      <g>
+        <rect x="380" y="2214" width="220" height="50" rx="25" fill="#d1fae5" stroke="#047857" stroke-width="2"/>
+        <text x="490" y="2244" text-anchor="middle" font-size="15" font-weight="700" fill="#047857">11. DONE</text>
+      </g>
+
+      <!-- ============================ -->
+      <!-- LEFT side: cross-cutting concerns -->
+      <!-- ============================ -->
+      <g>
+        <rect x="20" y="1796" width="180" height="200" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,2"/>
+        <text x="32" y="1814" font-size="11" font-weight="700" fill="#475569">Loop bounds</text>
+        <text x="32" y="1832" font-size="10.5" fill="#64748b">Coder retries / subtask: <tspan fill="#dc2626" font-weight="700">3</tspan></text>
+        <text x="32" y="1846" font-size="10.5" fill="#64748b">QA iterations max: <tspan fill="#dc2626" font-weight="700">10</tspan></text>
+        <text x="32" y="1860" font-size="10.5" fill="#64748b">QA consec errors: <tspan fill="#dc2626" font-weight="700">3</tspan></text>
+        <text x="32" y="1874" font-size="10.5" fill="#64748b">Recurring → escalate: <tspan fill="#dc2626" font-weight="700">3</tspan></text>
+        <text x="32" y="1888" font-size="10.5" fill="#64748b">Auto-continue sleep: <tspan fill="#dc2626" font-weight="700">3s</tspan></text>
+        <text x="32" y="1908" font-size="11" font-weight="700" fill="#475569">Memory &amp; MCP</text>
+        <text x="32" y="1924" font-size="10.5" fill="#64748b">Graphiti memory injected</text>
+        <text x="32" y="1938" font-size="10.5" fill="#64748b">into coder prompt context</text>
+        <text x="32" y="1956" font-size="10.5" fill="#64748b">MCP: Context7 (default),</text>
+        <text x="32" y="1970" font-size="10.5" fill="#64748b">Playwright (opt-in),</text>
+        <text x="32" y="1984" font-size="10.5" fill="#64748b">Custom (allowlisted).</text>
+      </g>
+
+      <!-- ============================ -->
+      <!-- RIGHT side: prompt injection mechanics -->
+      <!-- ============================ -->
+      <g>
+        <rect x="780" y="2030" width="180" height="200" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,2"/>
+        <text x="794" y="2048" font-size="11" font-weight="700" fill="#475569">Prompt injection</text>
+        <text x="794" y="2064" font-size="10.5" fill="#64748b"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">core/client.py</tspan></text>
+        <text x="794" y="2080" font-size="10.5" fill="#64748b">→ <tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">create_client()</tspan></text>
+        <text x="794" y="2098" font-size="10.5" fill="#64748b">Order of injection:</text>
+        <text x="794" y="2114" font-size="10.5" fill="#64748b">  1. Role prompt</text>
+        <text x="794" y="2128" font-size="10.5" fill="#64748b">  2. Persona prefix</text>
+        <text x="794" y="2142" font-size="10.5" fill="#64748b">  3. Phase context</text>
+        <text x="794" y="2156" font-size="10.5" fill="#64748b">  4. Recovery hints</text>
+        <text x="794" y="2170" font-size="10.5" fill="#64748b">     (if retry)</text>
+        <text x="794" y="2184" font-size="10.5" fill="#64748b">  5. Graphiti memory</text>
+        <text x="794" y="2198" font-size="10.5" fill="#64748b">  6. Tool permissions</text>
+        <text x="794" y="2212" font-size="10.5" fill="#64748b">  7. MCP server config</text>
+      </g>
+
+      <!-- ============================ -->
+      <!-- Footer of SVG: spec storage -->
+      <!-- ============================ -->
+      <g>
+        <rect x="20" y="2290" width="940" height="60" rx="6" fill="#fff" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,2"/>
+        <text x="40" y="2310" font-size="11.5" font-weight="700" fill="#475569">All artifacts persisted under <tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">.magestic-ai/specs/&lt;spec-id&gt;/</tspan></text>
+        <text x="40" y="2326" font-size="10.5" fill="#64748b"><tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">requirements.json · context.json · spec.md · implementation_plan.json · qa_report.md · QA_FIX_REQUEST.md</tspan></text>
+        <text x="40" y="2340" font-size="10.5" fill="#64748b">Synced to main spec dir from worktree every 3s during execution (see <tspan font-family="ui-monospace,SF Mono,monospace" fill="#2937a8">agent_service.py:_sync_worktree_files()</tspan>)</text>
+      </g>
+
+    </svg>
+
+    <!-- ============================ -->
+    <!-- BELOW SVG: detail tables -->
+    <!-- ============================ -->
+    <table class="detail">
+      <thead>
+        <tr>
+          <th style="width:24%">Stage</th>
+          <th style="width:30%">Prompt / Code</th>
+          <th style="width:22%">Persona</th>
+          <th style="width:24%">Artifact produced</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Discovery</td>
+          <td><code>spec_gatherer.md</code></td>
+          <td>—</td>
+          <td><code>discovery.json</code></td>
+        </tr>
+        <tr>
+          <td>Requirements</td>
+          <td><code>spec_gatherer.md</code> (interactive or auto)</td>
+          <td>—</td>
+          <td><code>requirements.json</code></td>
+        </tr>
+        <tr>
+          <td>Research <em>(conditional)</em></td>
+          <td><code>spec_researcher.md</code></td>
+          <td>—</td>
+          <td><code>research.json</code></td>
+        </tr>
+        <tr>
+          <td>Architecture <em>(Lv 3+)</em></td>
+          <td><code>architecture.md</code> via <code>spec/phases/architecture_phases.py</code></td>
+          <td>Winston</td>
+          <td><code>architecture.json</code> (ERD · OpenAPI · ADRs · Mermaid)</td>
+        </tr>
+        <tr>
+          <td>Context / Spec writing</td>
+          <td><code>spec_writer.md</code> (or <code>spec_quick.md</code>)</td>
+          <td>—</td>
+          <td><code>context.json</code>, <code>spec.md</code></td>
+        </tr>
+        <tr>
+          <td>Self-critique <em>(Lv 3+ / flagged)</em></td>
+          <td><code>spec_critic.md</code> (ultrathink)</td>
+          <td>—</td>
+          <td>updated <code>spec.md</code> + <code>critique_report.json</code></td>
+        </tr>
+        <tr>
+          <td>Complexity (AI fallback)</td>
+          <td><code>complexity_assessor.md</code></td>
+          <td>—</td>
+          <td><code>complexity_assessment.json</code></td>
+        </tr>
+        <tr>
+          <td>Planning</td>
+          <td><code>agents/planner.py</code> (script) → <code>planner.md</code> (fallback)</td>
+          <td>Sarah</td>
+          <td><code>implementation_plan.json</code></td>
+        </tr>
+        <tr>
+          <td>Validation</td>
+          <td><code>SpecValidator</code> + <code>validation_fixer.md</code> (auto-fix loop)</td>
+          <td>—</td>
+          <td>schema-clean artifacts</td>
+        </tr>
+        <tr>
+          <td>Coding</td>
+          <td><code>prompts/coder.md</code> (+ <code>coder_recovery.md</code> when <em>attempt &gt; 0</em>)</td>
+          <td>Alex</td>
+          <td>code in worktree, <code>build-progress.txt</code></td>
+        </tr>
+        <tr>
+          <td>QA Review</td>
+          <td><code>qa_reviewer.md</code></td>
+          <td>Morgan</td>
+          <td><code>qa_report.md</code> (approved / rejected)</td>
+        </tr>
+        <tr>
+          <td>QA Fix</td>
+          <td><code>qa_fixer.md</code></td>
+          <td>Riley</td>
+          <td>code patches; <code>QA_FIX_REQUEST.md</code> consumed</td>
+        </tr>
+        <tr>
+          <td>QA Escalation <em>(3+ recurring)</em></td>
+          <td><code>escalate_to_human()</code> in <code>qa/loop.py</code></td>
+          <td>Jordan</td>
+          <td><code>QA_ESCALATION.md</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table class="detail" style="margin-top:18px;">
+      <thead>
+        <tr>
+          <th colspan="2">BMad track ↔ phase count</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Quick Flow</strong> (Lv 0–1, 1–10 stories)</td><td>3 phases — discovery → tech_spec (quick) → validate</td></tr>
+        <tr><td><strong>Standard</strong> (Lv 2, 5–15 stories)</td><td>6 phases — discovery, requirements, context, spec_writing, planning, validation</td></tr>
+        <tr><td><strong>Standard + Architecture</strong> (Lv 3, 12–40 stories)</td><td>7 phases — adds <code>architecture</code> (and often <code>self_critique</code>)</td></tr>
+        <tr><td><strong>Enterprise</strong> (Lv 4, 40+ stories)</td><td>9 phases — adds <code>security_review</code>, <code>devops_planning</code></td></tr>
+      </tbody>
+    </table>
+
+    <table class="detail" style="margin-top:18px;">
+      <thead>
+        <tr>
+          <th style="width:30%">Loop / retry</th>
+          <th style="width:30%">Bound</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Coder per-subtask retries</td><td><span class="bound">3 attempts</span> then STUCK</td><td><code>agents/coder.py</code> · <code>services/recovery.py</code></td></tr>
+        <tr><td>Auto-continue between sessions</td><td><span class="bound">3 second sleep</span></td><td><code>AUTO_CONTINUE_DELAY_SECONDS</code> in coder.py</td></tr>
+        <tr><td>QA review-fix iterations</td><td><span class="bound">10 iterations</span></td><td><code>qa/loop.py:47 MAX_QA_ITERATIONS</code></td></tr>
+        <tr><td>QA consecutive errors</td><td><span class="bound">3 errors</span> → abort</td><td><code>qa/loop.py:48 MAX_CONSECUTIVE_ERRORS</code></td></tr>
+        <tr><td>QA recurring issue → escalate</td><td><span class="bound">same issue 3× </span></td><td><code>qa/loop.py</code> · <code>escalate_to_human()</code></td></tr>
+        <tr><td>BMad detection confidence → AI fallback</td><td><span class="bound">&lt; 0.8 confidence</span></td><td><code>integrations/bmad/complexity_detector.py</code></td></tr>
+        <tr><td>Validation auto-fix loop</td><td>Retry per artifact via <code>validation_fixer.md</code></td><td><code>spec/validator</code></td></tr>
+        <tr><td>Worktree → main spec sync (UI)</td><td>Every <span class="bound">3 seconds</span> during execution</td><td><code>web-server/services/agent_service.py</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <h2>Prompts directory</h2>
+      <p style="margin:0 0 6px; font-size:12px; color:var(--muted);">All under <code>apps/backend/prompts/</code></p>
+      <ul>
+        <li><code>spec_gatherer.md</code></li>
+        <li><code>spec_researcher.md</code></li>
+        <li><code>spec_writer.md</code> / <code>_quick.md</code></li>
+        <li><code>spec_critic.md</code></li>
+        <li><code>architecture.md</code></li>
+        <li><code>complexity_assessor.md</code></li>
+        <li><code>planner.md</code> / <code>_quick.md</code> / <code>_story_based.md</code></li>
+        <li><code>coder.md</code> / <code>_quick.md</code> / <code>_recovery.md</code> / <code>_story_enhanced.md</code></li>
+        <li><code>qa_reviewer.md</code> / <code>_quick.md</code></li>
+        <li><code>qa_fixer.md</code></li>
+        <li><code>followup_planner.md</code></li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h2>Key source files</h2>
+      <ul>
+        <li><code>spec_runner.py</code> · CLI entry</li>
+        <li><code>spec/pipeline/orchestrator.py</code></li>
+        <li><code>spec/phases/*_phases.py</code></li>
+        <li><code>integrations/bmad/complexity_detector.py</code></li>
+        <li><code>integrations/bmad/track_config.py</code></li>
+        <li><code>integrations/bmad/session_spawner.py</code></li>
+        <li><code>integrations/bmad/context_shard.py</code></li>
+        <li><code>integrations/bmad/subagents/</code></li>
+        <li><code>agents/planner.py</code></li>
+        <li><code>agents/coder.py</code></li>
+        <li><code>qa/loop.py</code></li>
+        <li><code>core/client.py</code> · SDK injection</li>
+        <li><code>core/worktree.py</code></li>
+        <li><code>services/recovery.py</code> · stuck detection</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h2>Storage layout</h2>
+      <p style="margin:0; font-size:12.5px;">Per-spec:</p>
+      <ul>
+        <li><code>.magestic-ai/specs/&lt;id&gt;/</code>
+          <ul style="margin-top:4px;">
+            <li>requirements.json</li>
+            <li>context.json</li>
+            <li>spec.md</li>
+            <li>implementation_plan.json</li>
+            <li>qa_report.md</li>
+            <li>QA_FIX_REQUEST.md</li>
+            <li>complexity_assessment.json</li>
+          </ul>
+        </li>
+        <li><code>.magestic-ai/worktrees/tasks/&lt;spec&gt;/</code></li>
+      </ul>
+    </div>
+  </aside>
+
+</main>
+
+<footer>
+  Sources: <code>apps/backend/spec/pipeline/orchestrator.py</code>, <code>apps/backend/integrations/bmad/track_config.py</code>, <code>apps/backend/qa/loop.py</code>, <code>apps/backend/agents/coder.py</code>, <code>apps/backend/agents/planner.py</code>, <code>apps/backend/core/worktree.py</code>, <code>apps/backend/services/recovery.py</code>. Companion narrative doc: <code>guides/ARCHITECTURE.md</code>. CLAUDE.md has the canonical project overview.
+</footer>
+
+</body>
+</html>
