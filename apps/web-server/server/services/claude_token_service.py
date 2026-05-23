@@ -269,12 +269,16 @@ class ClaudeTokenService:
 
         # CLI didn't update the file (often because the call itself 401'd
         # because the access token was already expired AND the refresh
-        # token was rejected). Surface the stderr so the operator can see
-        # what happened.
+        # token was rejected). Capture BOTH streams: the `claude` CLI
+        # writes auth errors like "Failed to authenticate. API Error: 401"
+        # to stdout, not stderr, so stderr-only logging would just show
+        # exit=1 with nothing useful.
         stderr_text = (stderr or b"").decode("utf-8", "replace")[:500].strip()
+        stdout_text = (stdout or b"").decode("utf-8", "replace")[:500].strip()
         logger.warning(
             f"[ClaudeToken] CLI refresh did not update credentials "
-            f"(exit={proc.returncode}). stderr: {stderr_text}"
+            f"(exit={proc.returncode}). stderr: {stderr_text!r} | "
+            f"stdout: {stdout_text!r}"
         )
         return None
 
