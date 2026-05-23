@@ -55,6 +55,12 @@ class PTYSession:
         env["COLORTERM"] = "truecolor"
         # Remove CLAUDECODE to allow launching claude CLI from the terminal
         env.pop("CLAUDECODE", None)
+        # Strip OAuth env vars so the CLI reads ~/.claude/.credentials.json
+        # (kept fresh by claude_token_service) and triggers its native refresh
+        # on expiry. Otherwise the stale CLAUDE_CODE_OAUTH_TOKEN from container
+        # boot wins and `claude` 401s. Same fix as e1ee23f for the refresh path.
+        for key in ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "ANTHROPIC_API_KEY"):
+            env.pop(key, None)
         if self.env:
             env.update(self.env)
 

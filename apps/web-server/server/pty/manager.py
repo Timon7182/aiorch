@@ -32,15 +32,21 @@ class PTYManager:
     ) -> PTYSession:
         """Create a new PTY session."""
         logger = logging.getLogger(__name__)
+        # Don't inject CLAUDE_CODE_OAUTH_TOKEN into the terminal env — the CLI
+        # prefers that var over ~/.claude/.credentials.json, and the token
+        # value resolved here is the stale container-boot token (or a profile
+        # snapshot) that the CLI won't refresh. PTYSession.start() also strips
+        # any inherited OAuth env vars so the CLI reads the credentials file
+        # that claude_token_service keeps fresh. We still resolve here just to
+        # log which profile would have been used, for diagnostics.
         token_env: dict[str, str] = {}
-        token, profile_id, profile_name = self._resolve_claude_token()
-        if token:
-            token_env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        _, profile_id, profile_name = self._resolve_claude_token()
+        if profile_id:
             logger.info(
-                f"[PTYManager] Using Claude profile for terminal: {profile_name} ({profile_id})"
+                f"[PTYManager] Active Claude profile (for diagnostics): {profile_name} ({profile_id})"
             )
         else:
-            logger.warning("[PTYManager] No Claude OAuth token available for terminal")
+            logger.warning("[PTYManager] No Claude OAuth profile resolved for terminal")
 
         with self._lock:
             # Check session limit
