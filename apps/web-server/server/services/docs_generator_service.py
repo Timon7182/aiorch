@@ -397,35 +397,27 @@ class DocsGeneratorService:
         except OSError:
             pass
 
-        # After a successful mkdocs build, fold the docs + repo into the
-        # graphify knowledge graph. Graphify is the single source Hermes
-        # and the coder/planner all query, so keeping it fresh on every
-        # docs run means uploaded transcripts and regenerated docs both
-        # flow into the same graph the agents read. Non-fatal: docs
-        # generation already succeeded by this point.
-        if ok:
-            await self.refresh_graph(project_path)
-
         return (output, ok)
 
     async def refresh_graph(self, project_path: Path) -> None:
-        """Run `graphify extract --update` against the project (best-effort).
+        """Run `graphify extract` against the project (manual-trigger only).
 
         Writes graphify-out/{graph.json, GRAPH_REPORT.md, graph.html} at the
         project root, following graphify's own convention. The graph picks
         up source code (via tree-sitter, no API), generated docs/, and
         anything under .magestic-ai/uploaded-docs/ or .magestic-ai/transcripts/.
 
-        Auth path: `--backend claude-cli` routes through the user's Claude
-        Code CLI, which means graphify rides on the existing Claude Max
-        subscription. Recent deploy work persists ~/.claude/ across
-        restarts (named volume) and refreshes the OAuth token in the
-        background, so the CLI is authenticated by the time we get here.
-        No ANTHROPIC_API_KEY required.
+        NOT called automatically. The user invokes graphify themselves
+        (typically via the `/graphify` slash command inside Claude Code, or
+        by SSH'ing and running `graphify extract <path>`). This method
+        stays as a callable shim in case a future endpoint wants to
+        trigger it from the web UI — the downstream consumers (Hermes,
+        coder/planner MCP) read whatever graph happens to exist.
 
-        If the claude binary isn't on PATH (or the user hasn't completed
-        OAuth setup yet), graphify will error out; we log and continue —
-        docs generation already succeeded by this point.
+        Backend: `gemini`. graphify v0.8.16 does NOT support a `claude-cli`
+        backend (despite the upstream README's example), so we cannot ride
+        the Claude Max subscription. GEMINI_API_KEY is already deployed
+        for Hermes, so reusing it here avoids a new credential.
         """
         bin_path = self._resolve_graphify_bin()
         if bin_path is None:
@@ -435,12 +427,14 @@ class DocsGeneratorService:
             )
             return
 
-        # We deliberately do NOT strip CLAUDE_CODE_OAUTH_TOKEN here — the
-        # `claude` CLI graphify shells out to reads it (along with
-        # ~/.claude/.credentials.json) to authenticate against the user's
-        # subscription. The "strip OAuth env vars" pattern in this codebase
-        # is only for the *refresh* code path (commit e1ee23f), not for
-        # normal CLI invocations like this one.
+        if not os.environ.get("GEMINI_API_KEY"):
+            logger.info(
+                "[DocsGenerator] GEMINI_API_KEY not set; skipping graphify "
+                "refresh. Set it in /home/saya/.aiorch-secrets or pick a "
+                "different backend in refresh_graph()."
+            )
+            return
+
         env = os.environ.copy()
 
         cmd = [
@@ -448,8 +442,9 @@ class DocsGeneratorService:
             "extract",
             str(project_path),
             "--backend",
-            "claude-cli",
-            "--update",
+            "gemini",
+            "--max-workers",
+            "2",
         ]
         logger.info(f"[DocsGenerator] Refreshing graphify graph: {' '.join(cmd)}")
 

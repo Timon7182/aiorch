@@ -18,7 +18,6 @@ Why a separate route from /ingest-docs:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from pathlib import Path
@@ -117,42 +116,19 @@ async def ingest_transcripts(
             detail={"saved": 0, "rejected": rejected},
         )
 
-    # Kick off the graph refresh in the background. Caller doesn't wait —
-    # graphify can take minutes on a meeting recording, and the client
-    # already has the upload acknowledged. UI polls /docs/status for
-    # last_graphify to know when the graph caught up.
-    graph_refresh_status = await _maybe_queue_graph_refresh(project_path)
-
+    # We do NOT auto-trigger graphify here. graphify v0.8.16 doesn't yet
+    # support the Claude Max subscription (no `claude-cli` backend in the
+    # shipped CLI), so any auto-trigger would either burn Gemini tokens
+    # silently or fail. The user runs `graphify extract` manually when
+    # they want to fold new transcripts into the graph; Hermes and the
+    # coder/planner agents read whatever graph happens to exist.
     return TranscriptIngestResult(
         project=project,
         saved=saved,
         rejected=rejected,
         transcripts_dir=str(transcripts_dir),
-        graph_refresh=graph_refresh_status,
+        graph_refresh="manual",
     )
-
-
-async def _maybe_queue_graph_refresh(project_path: Path) -> str:
-    """Schedule `graphify extract --update` on the project; return status string."""
-    try:
-        from ..services.docs_generator_service import get_docs_generator_service
-        # Backend path doesn't matter here — refresh_graph doesn't use the
-        # runner, only the graphify CLI. Pass a dummy path of the same shape
-        # the rest of the codebase uses.
-        backend_path = Path(__file__).resolve().parents[3] / "backend"
-        svc = get_docs_generator_service(backend_path)
-    except Exception as e:
-        logger.warning(f"[transcripts] could not resolve docs service: {e}")
-        return "skipped"
-
-    async def _run() -> None:
-        try:
-            await svc.refresh_graph(project_path)
-        except Exception:
-            logger.exception("[transcripts] graphify refresh crashed")
-
-    asyncio.create_task(_run())
-    return "queued"
 
 
 @router.get("/projects/{project}/transcripts")
