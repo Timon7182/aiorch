@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { SkillCategory, SkillSummary, SkillDetail, SkillSuggestion } from '../shared/types';
-import { get } from '../lib/api-client';
+import { get, post, put, del } from '../lib/api-client';
 
 interface SkillsState {
   // Data
@@ -198,6 +198,80 @@ export async function fetchSkillDetail(category: string, name: string): Promise<
   } finally {
     store.setLoadingSkills(false);
   }
+}
+
+/**
+ * Create a new skill. Refreshes categories + the affected category list on
+ * success and selects the new skill in the detail pane.
+ */
+export async function createSkill(
+  category: string,
+  name: string,
+  content: string,
+): Promise<{ ok: true; detail: SkillDetail } | { ok: false; error: string }> {
+  const store = useSkillsStore.getState();
+  store.clearError();
+  const result = await post<SkillDetail>('/skills', { category, name, content });
+  if (!result.success || !result.data) {
+    const error = result.error ?? 'Failed to create skill';
+    store.setError(error);
+    return { ok: false, error };
+  }
+  await fetchCategories(true);
+  await fetchSkills(category, true);
+  store.setSelectedSkillDetail(result.data);
+  return { ok: true, detail: result.data };
+}
+
+/**
+ * Update an existing skill's content. Refreshes the affected category list
+ * (description may have changed) and the detail pane.
+ */
+export async function updateSkill(
+  category: string,
+  name: string,
+  content: string,
+): Promise<{ ok: true; detail: SkillDetail } | { ok: false; error: string }> {
+  const store = useSkillsStore.getState();
+  store.clearError();
+  const result = await put<SkillDetail>(
+    `/skills/${encodeURIComponent(category)}/${encodeURIComponent(name)}`,
+    { content },
+  );
+  if (!result.success || !result.data) {
+    const error = result.error ?? 'Failed to update skill';
+    store.setError(error);
+    return { ok: false, error };
+  }
+  await fetchSkills(category, true);
+  store.setSelectedSkillDetail(result.data);
+  return { ok: true, detail: result.data };
+}
+
+/**
+ * Delete a skill. Refreshes categories (category may have been removed if
+ * it was the last skill) and clears the detail pane.
+ */
+export async function deleteSkill(
+  category: string,
+  name: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const store = useSkillsStore.getState();
+  store.clearError();
+  const result = await del<void>(
+    `/skills/${encodeURIComponent(category)}/${encodeURIComponent(name)}`,
+  );
+  if (!result.success) {
+    const error = result.error ?? 'Failed to delete skill';
+    store.setError(error);
+    return { ok: false, error };
+  }
+  await fetchCategories(true);
+  await fetchSkills(category, true);
+  if (store.selectedSkillDetail?.id === `${category}/${name}`) {
+    store.setSelectedSkillDetail(null);
+  }
+  return { ok: true };
 }
 
 /**

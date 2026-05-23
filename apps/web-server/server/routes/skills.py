@@ -231,6 +231,29 @@ async def get_skill_detail(
             detail=f"Skill '{category}/{skill_name}' not found",
         )
 
+    return _detail_to_model(detail)
+
+
+# --------------------------------------------------------------------------
+# Mutation endpoints (create / update / delete)
+# --------------------------------------------------------------------------
+
+
+class SkillCreateRequest(BaseModel):
+    """Payload for creating a new skill."""
+
+    category: str = Field(..., description="Category directory name")
+    name: str = Field(..., description="Skill filename stem (without .md)")
+    content: str = Field(..., description="Full markdown content of the skill file")
+
+
+class SkillUpdateRequest(BaseModel):
+    """Payload for updating an existing skill's content."""
+
+    content: str = Field(..., description="Replacement markdown content")
+
+
+def _detail_to_model(detail) -> SkillDetail:
     return SkillDetail(
         id=detail.id,
         name=detail.name,
@@ -239,3 +262,76 @@ async def get_skill_detail(
         source=detail.source,
         content=detail.content,
     )
+
+
+@router.post(
+    "",
+    response_model=SkillDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new skill",
+    description=(
+        "Creates a new skill markdown file under the given category. "
+        "Category and name must use only letters, digits, '-' and '_'."
+    ),
+)
+async def create_skill(payload: SkillCreateRequest) -> SkillDetail:
+    service = get_skills_service()
+    try:
+        detail = service.create_skill(payload.category, payload.name, payload.content)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to write skill file: {exc}",
+        )
+    return _detail_to_model(detail)
+
+
+@router.put(
+    "/{category}/{skill_name}",
+    response_model=SkillDetail,
+    summary="Replace a skill's content",
+    description="Overwrites the markdown body of an existing skill file.",
+)
+async def update_skill(
+    category: str,
+    skill_name: str,
+    payload: SkillUpdateRequest,
+) -> SkillDetail:
+    service = get_skills_service()
+    try:
+        detail = service.update_skill(category, skill_name, payload.content)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to write skill file: {exc}",
+        )
+    return _detail_to_model(detail)
+
+
+@router.delete(
+    "/{category}/{skill_name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a skill",
+    description="Deletes a skill file. If the category directory becomes empty, it is removed too.",
+)
+async def delete_skill(category: str, skill_name: str) -> None:
+    service = get_skills_service()
+    try:
+        service.delete_skill(category, skill_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete skill file: {exc}",
+        )

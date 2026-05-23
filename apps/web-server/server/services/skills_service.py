@@ -393,6 +393,103 @@ class SkillsService:
             for cat, entries in sorted(self._index.items())
         ]
 
+    # ------------------------------------------------------------------
+    # Mutation API (create / update / delete)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_name(value: str, label: str) -> str:
+        """Allow letters, digits, dash, underscore. Reject anything that
+        could escape the skills root (slashes, dots, traversal sequences)."""
+        cleaned = (value or "").strip()
+        if not cleaned:
+            raise ValueError(f"{label} must not be empty")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_\-]*", cleaned):
+            raise ValueError(
+                f"{label} may only contain letters, digits, '-', '_' "
+                "and must start with a letter or digit"
+            )
+        if len(cleaned) > 64:
+            raise ValueError(f"{label} must be 64 characters or fewer")
+        return cleaned
+
+    def _resolve_skill_path(self, category: str, name: str) -> Path:
+        """Resolve a category/name pair to an absolute file path, checking
+        it stays within the configured skills base path."""
+        cat = self._validate_name(category, "category")
+        nm = self._validate_name(name, "skill name")
+        target = (self._base_path / cat / f"{nm}.md").resolve()
+        base = self._base_path.resolve()
+        # Defence-in-depth — should be impossible given the regex above
+        if base not in target.parents and target != base:
+            raise ValueError("Resolved path escapes skills directory")
+        return target
+
+    def _ensure_base_path(self) -> None:
+        """Create the skills base directory if it does not yet exist."""
+        self._base_path.mkdir(parents=True, exist_ok=True)
+
+    def _reindex_after_change(self, category: str, path: Path, removed: bool) -> None:
+        """Update the in-memory index and cache after a file mutation."""
+        if removed:
+            entries = self._index.get(category, [])
+            self._index[category] = [e for e in entries if e.file_path != path]
+            if not self._index[category]:
+                del self._index[category]
+        else:
+            entry = self._parse_skill_file(path, category)
+            entries = self._index.setdefault(category, [])
+            # Replace any existing entry for this file
+            for i, existing in enumerate(entries):
+                if existing.file_path == path:
+                    entries[i] = entry
+                    break
+            else:
+                entries.append(entry)
+            entries.sort(key=lambda e: e.summary.name)
+        self._save_cache()
+
+    def create_skill(self, category: str, name: str, content: str) -> SkillDetail:
+        """Create a new skill file. Fails if the file already exists."""
+        self._ensure_base_path()
+        path = self._resolve_skill_path(category, name)
+        if path.exists():
+            raise FileExistsError(f"Skill '{category}/{name}' already exists")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content or "", encoding="utf-8")
+        cat = path.parent.name
+        self._reindex_after_change(cat, path, removed=False)
+        detail = self.get_skill_detail(cat, name)
+        if detail is None:  # pragma: no cover — should never happen
+            raise RuntimeError("Skill created but could not be re-loaded")
+        return detail
+
+    def update_skill(self, category: str, name: str, content: str) -> SkillDetail:
+        """Overwrite an existing skill file's content."""
+        path = self._resolve_skill_path(category, name)
+        if not path.exists():
+            raise FileNotFoundError(f"Skill '{category}/{name}' not found")
+        path.write_text(content or "", encoding="utf-8")
+        self._reindex_after_change(path.parent.name, path, removed=False)
+        detail = self.get_skill_detail(category, name)
+        if detail is None:  # pragma: no cover
+            raise RuntimeError("Skill updated but could not be re-loaded")
+        return detail
+
+    def delete_skill(self, category: str, name: str) -> None:
+        """Delete a skill file. Removes its category directory if empty."""
+        path = self._resolve_skill_path(category, name)
+        if not path.exists():
+            raise FileNotFoundError(f"Skill '{category}/{name}' not found")
+        path.unlink()
+        self._reindex_after_change(category, path, removed=True)
+        # Clean up empty category directory
+        try:
+            if path.parent.exists() and not any(path.parent.iterdir()):
+                path.parent.rmdir()
+        except OSError:
+            pass
+
     def list_skills(self, category: str) -> list[SkillSummary]:
         """Return all skill summaries for a category."""
         entries = self._index.get(category, [])
