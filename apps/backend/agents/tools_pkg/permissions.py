@@ -17,6 +17,7 @@ for backwards compatibility.
 from .models import (
     AGENT_CONFIGS,
     CONTEXT7_TOOLS,
+    GRAPHIFY_TOOLS,
     GRAPHITI_MCP_TOOLS,
     PLAYWRIGHT_TOOLS,
     get_agent_config,
@@ -29,6 +30,7 @@ def get_allowed_tools(
     agent_type: str,
     project_capabilities: dict | None = None,
     mcp_config: dict | None = None,
+    project_dir: object | None = None,
 ) -> list[str]:
     """
     Get the list of allowed tools for a specific agent type.
@@ -62,6 +64,7 @@ def get_allowed_tools(
         agent_type,
         project_capabilities,
         mcp_config,
+        project_dir,
     )
 
     # Add magestic-ai tools ONLY if the MCP server is available
@@ -94,6 +97,8 @@ def _get_mcp_tools_for_servers(servers: list[str]) -> list[str]:
             tools.extend(CONTEXT7_TOOLS)
         elif server == "graphiti":
             tools.extend(GRAPHITI_MCP_TOOLS)
+        elif server == "graphify":
+            tools.extend(GRAPHIFY_TOOLS)
         elif server == "playwright":
             tools.extend(PLAYWRIGHT_TOOLS)
         # magestic-ai tools are already added via config["magestic_ai_tools"]

@@ -10,6 +10,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Hammer,
+  Square,
+  RotateCw,
 } from 'lucide-react';
 
 import { Button } from './ui/button';
@@ -49,8 +51,13 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   const [files, setFiles] = useState<DocFile[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [content, setContent] = useState<string>('');
-  const [busy, setBusy] = useState<'generate' | 'build' | null>(null);
+  const [busy, setBusy] = useState<'generate' | 'build' | 'stop' | 'restart' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Optimistic flag: set true the instant the user clicks Generate/Restart,
+  // cleared once the server confirms (status=running) or the request fails.
+  // Closes the small window between the POST returning and the subprocess
+  // appearing in /status.
+  const [optimisticRunning, setOptimisticRunning] = useState(false);
 
   const loadStatus = useCallback(async () => {
     const r = await get<DocsStatus>(`/projects/${projectId}/docs/status`);
@@ -112,15 +119,18 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   const handleGenerate = useCallback(async () => {
     setBusy('generate');
     setError(null);
+    setOptimisticRunning(true);
     const r = await post<{ state?: string; error?: string }>(
       `/projects/${projectId}/docs/generate`,
     );
     setBusy(null);
     if (!r.success) {
+      setOptimisticRunning(false);
       setError(r.error ?? 'Failed to start generation');
       return;
     }
     await loadStatus();
+    setOptimisticRunning(false);
   }, [projectId, loadStatus]);
 
   const handleBuild = useCallback(async () => {
@@ -135,7 +145,39 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     await loadTree();
   }, [projectId, loadStatus, loadTree]);
 
-  const isRunning = status?.state === 'running';
+  const handleStop = useCallback(async () => {
+    setBusy('stop');
+    setError(null);
+    const r = await post<{ state?: string; error?: string }>(
+      `/projects/${projectId}/docs/cancel`,
+    );
+    setBusy(null);
+    setOptimisticRunning(false);
+    if (!r.success) {
+      setError(r.error ?? 'Failed to stop generation');
+    }
+    await loadStatus();
+  }, [projectId, loadStatus]);
+
+  const handleRestart = useCallback(async () => {
+    setBusy('restart');
+    setError(null);
+    await post(`/projects/${projectId}/docs/cancel`);
+    setOptimisticRunning(true);
+    const r = await post<{ state?: string; error?: string }>(
+      `/projects/${projectId}/docs/generate`,
+    );
+    setBusy(null);
+    if (!r.success) {
+      setOptimisticRunning(false);
+      setError(r.error ?? 'Failed to restart generation');
+      return;
+    }
+    await loadStatus();
+    setOptimisticRunning(false);
+  }, [projectId, loadStatus]);
+
+  const isRunning = status?.state === 'running' || optimisticRunning;
 
   const treeByFolder = useMemo(() => {
     const groups: Record<string, DocFile[]> = {};
@@ -169,6 +211,48 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
               </>
             )}
           </Button>
+          {isRunning && (
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleStop}
+                disabled={busy === 'stop' || busy === 'restart'}
+                title="Cancel the running generation"
+              >
+                {busy === 'stop' ? (
+                  <>
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                    Stopping...
+                  </>
+                ) : (
+                  <>
+                    <Square className="mr-2 h-3.5 w-3.5" />
+                    Stop
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRestart}
+                disabled={busy === 'restart' || busy === 'stop'}
+                title="Cancel and start a new generation"
+              >
+                {busy === 'restart' ? (
+                  <>
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                    Restarting...
+                  </>
+                ) : (
+                  <>
+                    <RotateCw className="mr-2 h-3.5 w-3.5" />
+                    Restart
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
           <Button
             variant="outline"
             className="w-full"

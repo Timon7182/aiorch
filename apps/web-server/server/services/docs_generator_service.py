@@ -61,10 +61,49 @@ class DocsGeneratorService:
         # Track currently-running generations keyed by project_id so we don't
         # spawn two at once for the same project.
         self._running: dict[str, asyncio.subprocess.Process] = {}
+        # Set of project_ids the route has accepted but whose subprocess
+        # hasn't been spawned yet. Lets /status reflect "running" in the
+        # window between accept and spawn so the UI doesn't show idle.
+        self._starting: set[str] = set()
+        # Project IDs we deliberately cancelled — used to suppress the
+        # "exit code != 0" error in the post-run result.
+        self._cancelled: set[str] = set()
 
     def is_running(self, project_id: str) -> bool:
+        if project_id in self._starting:
+            return True
         proc = self._running.get(project_id)
         return proc is not None and proc.returncode is None
+
+    def mark_starting(self, project_id: str) -> None:
+        """Synchronously mark a project as starting.
+
+        Called by the route handler before the background task spawns the
+        subprocess, so a /status call that races the spawn still sees
+        `running`.
+        """
+        self._starting.add(project_id)
+
+    async def cancel(self, project_id: str) -> bool:
+        """Terminate an in-flight generation. Returns True if something
+        was actually running (or queued)."""
+        was_starting = project_id in self._starting
+        self._starting.discard(project_id)
+        proc = self._running.get(project_id)
+        if proc is None or proc.returncode is not None:
+            self._running.pop(project_id, None)
+            return was_starting
+        self._cancelled.add(project_id)
+        try:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+        finally:
+            self._running.pop(project_id, None)
+        return True
 
     async def generate(
         self,
@@ -84,7 +123,11 @@ class DocsGeneratorService:
                 writes the agent makes via git (the agent itself doesn't
                 commit, but stays consistent with the rest of the platform).
         """
-        if self.is_running(project_id):
+        # Only reject a duplicate run if there's an *actual* subprocess
+        # already running. The route handler may have called mark_starting()
+        # for this same task, so the _starting flag on its own is fine.
+        existing = self._running.get(project_id)
+        if existing is not None and existing.returncode is None:
             return GenerationResult(
                 success=False,
                 project_id=project_id,
@@ -95,7 +138,12 @@ class DocsGeneratorService:
                 error="A documentation generation is already in progress for this project.",
             )
 
+        # Idempotent: route may have already called mark_starting().
+        self._starting.add(project_id)
+        self._cancelled.discard(project_id)
+
         if not self.runner_path.exists():
+            self._starting.discard(project_id)
             return GenerationResult(
                 success=False,
                 project_id=project_id,
@@ -133,6 +181,9 @@ class DocsGeneratorService:
                 env=env,
             )
             self._running[project_id] = proc
+            # Subprocess is live; the _running entry is now the source of
+            # truth for is_running().
+            self._starting.discard(project_id)
             try:
                 stdout, _ = await asyncio.wait_for(
                     proc.communicate(),
@@ -151,10 +202,25 @@ class DocsGeneratorService:
                 )
         finally:
             self._running.pop(project_id, None)
+            self._starting.discard(project_id)
 
         runner_output = stdout.decode("utf-8", "replace") if stdout else ""
         # Cap stored output so we don't bloat the response.
         capped_log = runner_output[-4000:]
+
+        was_cancelled = project_id in self._cancelled
+        self._cancelled.discard(project_id)
+
+        if was_cancelled:
+            return GenerationResult(
+                success=False,
+                project_id=project_id,
+                docs_dir=project_path / "docs",
+                site_dir=project_path / ".magestic-ai" / "docs-site",
+                files_generated=[],
+                build_log=capped_log,
+                error="Documentation generation was cancelled.",
+            )
 
         if proc.returncode != 0:
             return GenerationResult(
@@ -331,7 +397,99 @@ class DocsGeneratorService:
         except OSError:
             pass
 
+        # After a successful mkdocs build, fold the docs + repo into the
+        # graphify knowledge graph. Graphify is the single source Hermes
+        # and the coder/planner all query, so keeping it fresh on every
+        # docs run means uploaded transcripts and regenerated docs both
+        # flow into the same graph the agents read. Non-fatal: docs
+        # generation already succeeded by this point.
+        if ok:
+            await self.refresh_graph(project_path)
+
         return (output, ok)
+
+    async def refresh_graph(self, project_path: Path) -> None:
+        """Run `graphify extract --update` against the project (best-effort).
+
+        Writes graphify-out/{graph.json, GRAPH_REPORT.md, graph.html} at the
+        project root, following graphify's own convention. The graph picks
+        up source code (via tree-sitter, no API), generated docs/, and
+        anything under .magestic-ai/uploaded-docs/ or .magestic-ai/transcripts/.
+
+        Auth path: `--backend claude-cli` routes through the user's Claude
+        Code CLI, which means graphify rides on the existing Claude Max
+        subscription. Recent deploy work persists ~/.claude/ across
+        restarts (named volume) and refreshes the OAuth token in the
+        background, so the CLI is authenticated by the time we get here.
+        No ANTHROPIC_API_KEY required.
+
+        If the claude binary isn't on PATH (or the user hasn't completed
+        OAuth setup yet), graphify will error out; we log and continue —
+        docs generation already succeeded by this point.
+        """
+        bin_path = self._resolve_graphify_bin()
+        if bin_path is None:
+            logger.info(
+                "[DocsGenerator] graphify CLI not installed; skipping graph "
+                "refresh. Ensure `graphifyy[mcp]` is in requirements.txt."
+            )
+            return
+
+        # We deliberately do NOT strip CLAUDE_CODE_OAUTH_TOKEN here — the
+        # `claude` CLI graphify shells out to reads it (along with
+        # ~/.claude/.credentials.json) to authenticate against the user's
+        # subscription. The "strip OAuth env vars" pattern in this codebase
+        # is only for the *refresh* code path (commit e1ee23f), not for
+        # normal CLI invocations like this one.
+        env = os.environ.copy()
+
+        cmd = [
+            bin_path,
+            "extract",
+            str(project_path),
+            "--backend",
+            "claude-cli",
+            "--update",
+        ]
+        logger.info(f"[DocsGenerator] Refreshing graphify graph: {' '.join(cmd)}")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(project_path),
+                env=env,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            logger.warning("[DocsGenerator] graphify refresh timed out after 10m")
+            return
+        except OSError as e:
+            logger.warning(f"[DocsGenerator] graphify spawn failed: {e}")
+            return
+
+        output = (stdout or b"").decode("utf-8", "replace")
+        if proc.returncode != 0:
+            logger.warning(
+                f"[DocsGenerator] graphify exited with code {proc.returncode}. "
+                f"Tail: {output[-1000:]}"
+            )
+            return
+
+        # Stamp the marker so the UI can show "graph as of <ts>".
+        try:
+            marker = project_path / ".magestic-ai" / ".docgen.json"
+            existing: dict = {}
+            if marker.exists():
+                try:
+                    existing = json.loads(marker.read_text())
+                except json.JSONDecodeError:
+                    pass
+            existing["last_graphify"] = datetime.now().isoformat()
+            marker.write_text(json.dumps(existing, indent=2))
+        except OSError:
+            pass
 
     def _resolve_mkdocs_bin(self) -> str | None:
         """Find a usable `mkdocs` executable, preferring the venv."""
@@ -341,6 +499,13 @@ class DocsGeneratorService:
             return str(venv_bin)
         which = shutil.which("mkdocs")
         return which
+
+    def _resolve_graphify_bin(self) -> str | None:
+        """Find the `graphify` executable, preferring the web-server venv."""
+        venv_bin = Path(sys.executable).parent / "graphify"
+        if venv_bin.exists():
+            return str(venv_bin)
+        return shutil.which("graphify")
 
 
 _singleton: DocsGeneratorService | None = None

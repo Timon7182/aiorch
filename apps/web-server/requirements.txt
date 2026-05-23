@@ -51,3 +51,11 @@ email-validator>=2.0.0
 mkdocs>=1.6.0
 mkdocs-material>=9.5.0
 pymdown-extensions>=10.0
+
+# Graphify: project knowledge-graph layer. After mkdocs builds, the docs
+# generator runs `graphify extract --update` against the project so Hermes
+# and the coder/planner agents can query the same graph the user browses.
+# Package name is `graphifyy` (double-y) per upstream README — `graphify`
+# on PyPI is an unrelated project. `[mcp]` extra ships the stdio MCP
+# server we wire into agent sessions.
+graphifyy[mcp]>=0.1.0

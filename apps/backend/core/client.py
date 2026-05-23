@@ -585,11 +585,13 @@ def create_client(
 
     # Get allowed tools using phase-aware configuration
     # This respects AGENT_CONFIGS and only includes tools the agent needs
-    # Also respects per-project MCP configuration
+    # Also respects per-project MCP configuration. project_dir is passed so
+    # graphify only shows up for projects that actually have a graph built.
     allowed_tools_list = get_allowed_tools(
         agent_type,
         project_capabilities,
         mcp_config,
+        project_dir,
     )
 
     # Get required MCP servers for this agent type
@@ -599,10 +601,13 @@ def create_client(
         agent_type,
         project_capabilities,
         mcp_config,
+        project_dir,
     )
 
     # Check if Graphiti MCP is enabled (already filtered by get_required_mcp_servers)
     graphiti_mcp_enabled = "graphiti" in required_servers
+    # Same idea for graphify (per-project knowledge graph).
+    graphify_mcp_enabled = "graphify" in required_servers
 
     # Determine browser tools for permissions (already in allowed_tools_list)
     browser_tools_permissions = []
@@ -738,6 +743,8 @@ def create_client(
         mcp_servers_list.append("playwright (browser automation)")
     if graphiti_mcp_enabled:
         mcp_servers_list.append("graphiti-memory (knowledge graph)")
+    if graphify_mcp_enabled:
+        mcp_servers_list.append("graphify (project knowledge graph)")
     if "magestic-ai" in required_servers and magestic_ai_tools_enabled:
         mcp_servers_list.append(f"magestic-ai ({agent_type} tools)")
     if mcp_servers_list:
@@ -782,6 +789,17 @@ def create_client(
         mcp_servers["graphiti-memory"] = {
             "type": "http",
             "url": get_graphiti_mcp_url(),
+        }
+
+    # Graphify MCP server (stdio): exposes query_graph / get_node /
+    # get_neighbors / shortest_path over the project's
+    # graphify-out/graph.json. The file-exists check already happened
+    # in get_required_mcp_servers, so if we're here the graph is there.
+    if graphify_mcp_enabled:
+        graph_file = project_dir / "graphify-out" / "graph.json"
+        mcp_servers["graphify"] = {
+            "command": "python",
+            "args": ["-m", "graphify.serve", str(graph_file)],
         }
 
     # Add custom magestic-ai MCP server if required and available

@@ -117,6 +117,10 @@ async def generate_docs(project_id: str, raw_request: Request):
     user_identity = await _resolve_user_identity(raw_request)
     oauth_token = await _resolve_oauth_token()
 
+    # Set the starting flag synchronously so any /status call that races
+    # ahead of the spawn (the create_task below) still sees state=running.
+    svc.mark_starting(project_id)
+
     # Fire-and-forget: the agent writes to disk; the UI polls /status.
     async def _run():
         try:
@@ -136,6 +140,17 @@ async def generate_docs(project_id: str, raw_request: Request):
 
     asyncio.create_task(_run())
     return {"success": True, "state": "started"}
+
+
+@router.post("/{project_id}/docs/cancel")
+async def cancel_docs_generation(project_id: str):
+    """Stop the running doc generator for this project (if any)."""
+    _resolve_project(project_id)  # 404 if project unknown
+    svc = get_docs_generator_service(_backend_path())
+    cancelled = await svc.cancel(project_id)
+    if not cancelled:
+        return {"success": False, "state": "idle", "error": "No generation in progress."}
+    return {"success": True, "state": "cancelled"}
 
 
 @router.post("/{project_id}/docs/build")
@@ -163,14 +178,17 @@ async def docs_status(project_id: str):
         except json.JSONDecodeError:
             meta = {}
 
+    graphify_out = project_path / "graphify-out"
     return {
         "success": True,
         "state": "running" if svc.is_running(project_id) else "idle",
         "has_docs": docs_dir.is_dir(),
         "has_site": (site_dir / "index.html").exists(),
+        "has_graph": (graphify_out / "graph.json").exists(),
         "last_run": meta.get("last_run"),
         "last_build": meta.get("last_build"),
         "last_build_ok": meta.get("last_build_ok"),
+        "last_graphify": meta.get("last_graphify"),
         "head_sha": meta.get("head_sha"),
     }
 

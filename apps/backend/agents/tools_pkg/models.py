@@ -71,6 +71,18 @@ GRAPHITI_MCP_TOOLS = [
     "mcp__graphiti-memory__get_entity_edge",  # Get specific entity/relationship
 ]
 
+# Graphify MCP tools for per-project knowledge graph (when the project has a
+# graphify-out/graph.json — populated by docs_generator_service.refresh_graph).
+# Distinct from Graphiti above: Graphiti is session memory across runs;
+# graphify is the structural knowledge of the project itself (code + docs +
+# transcripts + uploads).
+GRAPHIFY_TOOLS = [
+    "mcp__graphify__query_graph",
+    "mcp__graphify__get_node",
+    "mcp__graphify__get_neighbors",
+    "mcp__graphify__shortest_path",
+]
+
 # =============================================================================
 # Browser Automation MCP Tools (QA agents only)
 # =============================================================================
@@ -159,7 +171,7 @@ AGENT_CONFIGS = {
     # ═══════════════════════════════════════════════════════════════════════
     "planner": {
         "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS + WEB_TOOLS,
-        "mcp_servers": ["context7", "graphiti", "magestic-ai"],
+        "mcp_servers": ["context7", "graphiti", "graphify", "magestic-ai"],
         "magestic_ai_tools": [
             TOOL_GET_BUILD_PROGRESS,
             TOOL_GET_SESSION_CONTEXT,
@@ -169,7 +181,7 @@ AGENT_CONFIGS = {
     },
     "coder": {
         "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS + WEB_TOOLS,
-        "mcp_servers": ["context7", "graphiti", "magestic-ai"],
+        "mcp_servers": ["context7", "graphiti", "graphify", "magestic-ai"],
         "magestic_ai_tools": [
             TOOL_UPDATE_SUBTASK_STATUS,
             TOOL_GET_BUILD_PROGRESS,
@@ -187,7 +199,7 @@ AGENT_CONFIGS = {
         # Read + Write/Edit (for QA reports and plan updates) + Bash (for tests)
         # Note: Reviewer writes to spec directory only (qa_report.md, implementation_plan.json)
         "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS + WEB_TOOLS,
-        "mcp_servers": ["context7", "graphiti", "magestic-ai", "browser"],
+        "mcp_servers": ["context7", "graphiti", "graphify", "magestic-ai", "browser"],
         "magestic_ai_tools": [
             TOOL_GET_BUILD_PROGRESS,
             TOOL_UPDATE_QA_STATUS,
@@ -198,7 +210,7 @@ AGENT_CONFIGS = {
     },
     "qa_fixer": {
         "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS + WEB_TOOLS,
-        "mcp_servers": ["context7", "graphiti", "magestic-ai", "browser"],
+        "mcp_servers": ["context7", "graphiti", "graphify", "magestic-ai", "browser"],
         "magestic_ai_tools": [
             TOOL_UPDATE_SUBTASK_STATUS,
             TOOL_GET_BUILD_PROGRESS,
@@ -339,6 +351,7 @@ def _map_mcp_server_name(
         "context7": "context7",
         "graphiti-memory": "graphiti",
         "graphiti": "graphiti",
+        "graphify": "graphify",
         "playwright": "playwright",
         "puppeteer": "playwright",  # backward compat: puppeteer maps to playwright
         "magestic-ai": "magestic-ai",
@@ -357,6 +370,7 @@ def get_required_mcp_servers(
     agent_type: str,
     project_capabilities: dict | None = None,
     mcp_config: dict | None = None,
+    project_dir: object | None = None,
 ) -> list[str]:
     """
     Get MCP servers required for this agent type.
@@ -411,6 +425,21 @@ def get_required_mcp_servers(
     if "graphiti" in servers:
         if not os.environ.get("GRAPHITI_MCP_URL"):
             servers = [s for s in servers if s != "graphiti"]
+
+    # Filter graphify based on whether the project has a graph built.
+    # Two conditions to enable: (a) GRAPHIFY_DISABLED env not truthy,
+    # (b) project_dir was passed AND <project>/graphify-out/graph.json
+    # exists. If project_dir is missing we keep graphify enabled so callers
+    # that don't pass it (e.g. permission introspection) don't lose tools;
+    # client.py does a final file-exists check before spawning the server.
+    if "graphify" in servers:
+        if str(os.environ.get("GRAPHIFY_DISABLED", "")).lower() == "true":
+            servers = [s for s in servers if s != "graphify"]
+        elif project_dir is not None:
+            from pathlib import Path as _Path
+            graph_file = _Path(str(project_dir)) / "graphify-out" / "graph.json"
+            if not graph_file.is_file():
+                servers = [s for s in servers if s != "graphify"]
 
     # ========== Apply per-agent MCP overrides ==========
     # Format: AGENT_MCP_<agent_type>_ADD=server1,server2

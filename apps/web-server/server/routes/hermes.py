@@ -36,9 +36,10 @@ async def hermes_chat(req: HermesChatRequest) -> StreamingResponse:
 @router.post("/hermes/classify", tags=["Hermes"])
 async def hermes_classify(req: HermesChatRequest) -> dict[str, Any]:
     """Non-streaming classification — useful for UI to show routing before send."""
-    route = hermes_service.route_and_augment(req.query, req.project)
+    route = await hermes_service.route_and_augment(req.query, req.project)
     return {
         "intent": route.intent,
         "model": route.model,
         "citation_count": len(route.citations),
+        "has_graph_context": bool(route.graph_context),
     }

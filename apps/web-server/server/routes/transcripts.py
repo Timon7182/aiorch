@@ -1,0 +1,176 @@
+"""Transcript ingest: upload audio / video / already-transcribed text into
+a project so graphify can fold it into the knowledge graph.
+
+POST /api/ext/projects/{project}/ingest-transcripts
+    multipart/form-data: files[] = [...]
+    Saves to <project>/.magestic-ai/transcripts/ inside the project tree.
+    Audio/video gets transcribed by graphify's bundled faster-whisper on the
+    next graph refresh; text files are read directly.
+    Returns immediately with a 202 — the graphify refresh runs async.
+
+Why a separate route from /ingest-docs:
+    - Different file types (media + transcripts vs. markdown / text docs).
+    - Different size profile (media files dwarf the 5MB doc limit).
+    - Different destination (.magestic-ai/transcripts/ vs.
+      .magestic-ai/uploaded-docs/) so users can curate them separately in
+      the UI and so graphify's source attribution stays clean.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from pydantic import BaseModel
+
+from .projects import load_projects
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+# Audio + video formats faster-whisper handles natively, plus pre-
+# transcribed text. Anything else gets rejected with a clear message.
+_AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".opus"}
+_VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+_TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".vtt", ".srt"}
+_ALLOWED_SUFFIXES = _AUDIO_SUFFIXES | _VIDEO_SUFFIXES | _TEXT_SUFFIXES
+
+# Generous — meeting recordings are routinely 100MB+. 500MB matches the
+# upper bound of what we want sitting in a project's working tree.
+_MAX_BYTES = 500 * 1024 * 1024
+
+
+def _slugify(name: str) -> str:
+    """Match AddProjectModal.tsx so projectSlug round-trips."""
+    return re.sub(r"[^a-z0-9-_]", "-", (name or "").lower()).strip("-") or ""
+
+
+def _resolve_project_dir(project_slug: str) -> Path | None:
+    """Find the registered project that owns this slug; return its path or None."""
+    for pdata in load_projects().values():
+        name = pdata.get("name") or Path(pdata["path"]).name
+        if _slugify(name) == project_slug or pdata.get("id") == project_slug:
+            project_path = Path(pdata["path"])
+            if project_path.is_dir():
+                return project_path
+    return None
+
+
+class TranscriptIngestResult(BaseModel):
+    project: str
+    saved: int
+    rejected: list[str]
+    transcripts_dir: str
+    graph_refresh: str  # "queued" | "skipped"
+
+
+@router.post(
+    "/projects/{project}/ingest-transcripts",
+    response_model=TranscriptIngestResult,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def ingest_transcripts(
+    project: str,
+    files: list[UploadFile] = File(...),
+) -> TranscriptIngestResult:
+    if not files:
+        raise HTTPException(status_code=400, detail="no files in upload")
+
+    project_path = _resolve_project_dir(project)
+    if project_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"project {project!r} not registered or path missing",
+        )
+
+    transcripts_dir = project_path / ".magestic-ai" / "transcripts"
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = 0
+    rejected: list[str] = []
+    for f in files:
+        name = Path(f.filename or "untitled").name
+        suffix = Path(name).suffix.lower()
+        if suffix not in _ALLOWED_SUFFIXES:
+            rejected.append(
+                f"{name} (suffix {suffix!r} not in audio/video/text)"
+            )
+            continue
+        contents = await f.read()
+        if len(contents) > _MAX_BYTES:
+            rejected.append(f"{name} (>{_MAX_BYTES // (1024 * 1024)}MB)")
+            continue
+        try:
+            (transcripts_dir / name).write_bytes(contents)
+        except OSError as e:
+            rejected.append(f"{name} (write failed: {e})")
+            continue
+        saved += 1
+
+    if saved == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"saved": 0, "rejected": rejected},
+        )
+
+    # Kick off the graph refresh in the background. Caller doesn't wait —
+    # graphify can take minutes on a meeting recording, and the client
+    # already has the upload acknowledged. UI polls /docs/status for
+    # last_graphify to know when the graph caught up.
+    graph_refresh_status = await _maybe_queue_graph_refresh(project_path)
+
+    return TranscriptIngestResult(
+        project=project,
+        saved=saved,
+        rejected=rejected,
+        transcripts_dir=str(transcripts_dir),
+        graph_refresh=graph_refresh_status,
+    )
+
+
+async def _maybe_queue_graph_refresh(project_path: Path) -> str:
+    """Schedule `graphify extract --update` on the project; return status string."""
+    try:
+        from ..services.docs_generator_service import get_docs_generator_service
+        # Backend path doesn't matter here — refresh_graph doesn't use the
+        # runner, only the graphify CLI. Pass a dummy path of the same shape
+        # the rest of the codebase uses.
+        backend_path = Path(__file__).resolve().parents[3] / "backend"
+        svc = get_docs_generator_service(backend_path)
+    except Exception as e:
+        logger.warning(f"[transcripts] could not resolve docs service: {e}")
+        return "skipped"
+
+    async def _run() -> None:
+        try:
+            await svc.refresh_graph(project_path)
+        except Exception:
+            logger.exception("[transcripts] graphify refresh crashed")
+
+    asyncio.create_task(_run())
+    return "queued"
+
+
+@router.get("/projects/{project}/transcripts")
+async def list_transcripts(project: str) -> dict[str, Any]:
+    """List files currently sitting in <project>/.magestic-ai/transcripts/."""
+    project_path = _resolve_project_dir(project)
+    if project_path is None:
+        raise HTTPException(status_code=404, detail=f"project {project!r} not registered")
+    transcripts_dir = project_path / ".magestic-ai" / "transcripts"
+    if not transcripts_dir.is_dir():
+        return {"success": True, "transcripts": []}
+    out: list[dict[str, Any]] = []
+    for p in sorted(transcripts_dir.iterdir()):
+        if p.is_file():
+            stat = p.stat()
+            out.append({
+                "name": p.name,
+                "size": stat.st_size,
+                "modified": stat.st_mtime,
+            })
+    return {"success": True, "transcripts": out}

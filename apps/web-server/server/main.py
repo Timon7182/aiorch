@@ -184,6 +184,10 @@ def create_app() -> FastAPI:
     from .routes import project_ingest as project_ingest_routes
     app.include_router(project_ingest_routes.router, prefix="/api/ext", tags=["Ingest"])
 
+    # Transcript ingest (audio/video/transcript upload → graphify refresh)
+    from .routes import transcripts as transcripts_routes
+    app.include_router(transcripts_routes.router, prefix="/api/ext", tags=["Transcripts"])
+
     # MkDocs-based per-project documentation: agent generates markdown,
     # service runs `mkdocs build`, viewer serves the static site.
     from .routes import docs as docs_routes
