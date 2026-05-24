@@ -198,6 +198,7 @@ export interface API {
   onTaskUpdate?: (callback: (data: { taskId: string; executionProgress?: ExecutionProgress; phase?: string; subtasksCompleted?: number; subtasksTotal?: number; subtasks?: { id: string; status: string }[] }) => void) => () => void;
   onTaskProfileSwitch?: (callback: (taskId: string, info: { oldProfileId?: string; newProfileId?: string; newProfileName?: string; reason?: string; timestamp?: string }) => void) => () => void;
   onTaskSubtaskUpdate?: (callback: (taskId: string, subtaskId: string, status: string, previousStatus?: string) => void) => () => void;
+  onTaskUsage?: (callback: (taskId: string, usage: import('./usage').UsageEvent) => void) => () => void;
 
   // Terminal operations
   createTerminal: (options: TerminalCreateOptions) => Promise<IPCResult>;

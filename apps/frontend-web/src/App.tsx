@@ -13,6 +13,7 @@ import { GitHubIssues } from './components/GitHubIssues';
 import { GitHubPRs } from './components/github-prs/GitHubPRs';
 import { Changelog } from './components/changelog/Changelog';
 import { Insights } from './components/Insights';
+import { UsageView } from './components/UsageView';
 import { AgentTools } from './components/AgentTools';
 import { SkillsPage } from './components/SkillsPage';
 import { WelcomeScreen } from './components/WelcomeScreen';
@@ -308,6 +309,7 @@ function AuthenticatedApp() {
                       onTaskClick={handleTaskClick}
                       onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
                       isInitialized={!!selectedProject?.autoBuildPath}
+                      onOpenUsage={() => setActiveView('usage')}
                     />
                   )}
                   {/* TerminalGrid stays mounted but hidden to preserve xterm instances and PTY connections */}
@@ -343,6 +345,9 @@ function AuthenticatedApp() {
                     />
                   )}
                   {activeView === 'changelog' && <Changelog />}
+                  {activeView === 'usage' && (
+                    <UsageView projectId={selectedProject?.id || ''} />
+                  )}
                   {activeView === 'insights' && (
                     <Insights projectId={selectedProject?.id || ''} onNavigate={setActiveView} />
                   )}

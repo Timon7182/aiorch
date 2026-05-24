@@ -37,6 +37,7 @@ from .routes import (
     skills,
     tasks,
     terminal,
+    usage,
 )
 from .routes import logs as logs_routes
 from .routes import cli_accounts as cli_accounts_routes
@@ -142,6 +143,7 @@ def create_app() -> FastAPI:
     # Include API routers
     app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
     app.include_router(tasks.router, prefix="/api/tasks", tags=["Tasks"])
+    app.include_router(usage.router, prefix="/api/usage", tags=["Usage"])
     # Execution routes also under /api/tasks for frontend compatibility
     app.include_router(execution.router, prefix="/api/tasks", tags=["Task Execution"])
     app.include_router(settings_routes.router, prefix="/api/settings", tags=["Settings"])

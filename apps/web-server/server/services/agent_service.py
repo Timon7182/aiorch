@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 
 from ..config import get_settings
-from ..websockets.events import emit_task_status, emit_task_update, emit_task_logs_stream, emit_subtask_update
+from ..websockets.events import emit_task_status, emit_task_update, emit_task_logs_stream, emit_subtask_update, emit_task_usage
 
 
 # Model + thinking-level overrides applied when the auto profile is selected on
@@ -1053,6 +1053,23 @@ class AgentService:
             except Exception:
                 pass
 
+    # Stdout marker emitted by core/usage_event.py — kept in sync with that file.
+    _USAGE_MARKER_PREFIX = "__USAGE_EVENT__:"
+
+    def _parse_usage_event(self, line: str) -> dict | None:
+        """Parse a `__USAGE_EVENT__:{json}` line emitted by the agent runtime.
+
+        Returns the parsed event dict or None when the line is not a usage
+        marker. The marker line itself is suppressed from the task log stream
+        by the caller to keep the UI clean.
+        """
+        if not line.startswith(self._USAGE_MARKER_PREFIX):
+            return None
+        try:
+            return json.loads(line[len(self._USAGE_MARKER_PREFIX):])
+        except json.JSONDecodeError:
+            return None
+
     def _parse_phase_event(self, line: str) -> dict | None:
         """Parse phase event from agent output.
 
@@ -1113,6 +1130,17 @@ class AgentService:
             # Log stderr to server logs for debugging
             if is_stderr and line:
                 logger.warning(f"[AgentService] Task {task_id} stderr: {line}")
+
+            # Intercept token-usage marker lines BEFORE they reach log writers,
+            # so they don't appear as raw text in the UI's task log stream.
+            usage_event = self._parse_usage_event(line) if not is_stderr else None
+            if usage_event is not None:
+                try:
+                    await emit_task_usage(task_id, usage_event)
+                except Exception as exc:
+                    logger.debug(f"[AgentService] emit_task_usage failed: {exc}")
+                # Skip further processing — this line carries no human-readable content.
+                continue
 
             # Create log entry
             log = TaskLog(
@@ -1238,6 +1266,7 @@ class AgentService:
         files_to_sync = [
             "implementation_plan.json",  # Most critical for UI
             "task_logs.json",  # Detailed phase logs for UI
+            "usage.json",  # Token usage totals + per-phase + per-model breakdown
             "build-progress.txt",
             "context.json",
             "qa_report.md",

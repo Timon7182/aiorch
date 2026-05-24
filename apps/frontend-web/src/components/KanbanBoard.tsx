@@ -26,6 +26,7 @@ import { Button } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { TaskCard } from './TaskCard';
 import { SortableTaskCard } from './SortableTaskCard';
+import { ProjectUsageCard } from './ProjectUsageCard';
 import { TASK_STATUS_COLUMNS, TASK_STATUS_LABELS } from '../shared/constants';
 import { cn } from '../lib/utils';
 import { persistTaskStatus, archiveTasks } from '../stores/task-store';
@@ -38,6 +39,8 @@ interface KanbanBoardProps {
   onRefresh?: () => void;
   isRefreshing?: boolean;
   isInitialized?: boolean;
+  /** Open the dedicated token-usage page (sidebar `usage` view). */
+  onOpenUsage?: () => void;
 }
 
 interface DroppableColumnProps {
@@ -330,7 +333,7 @@ const DroppableColumn = memo(function DroppableColumn({ status, tasks, onTaskCli
   );
 }, droppableColumnPropsAreEqual);
 
-export function KanbanBoard({ tasks, onTaskClick, onNewTaskClick, onRefresh, isRefreshing, isInitialized }: KanbanBoardProps) {
+export function KanbanBoard({ tasks, onTaskClick, onNewTaskClick, onRefresh, isRefreshing, isInitialized, onOpenUsage }: KanbanBoardProps) {
   const { t } = useTranslation('tasks');
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [overColumnId, setOverColumnId] = useState<string | null>(null);
@@ -471,6 +474,10 @@ export function KanbanBoard({ tasks, onTaskClick, onNewTaskClick, onRefresh, isR
     }
   };
 
+  // Derive projectId from the first task — every task in this board
+  // belongs to the same project (`App.tsx` filters by selectedProjectId).
+  const projectId = tasks[0]?.projectId;
+
   return (
     <div className="flex h-full flex-col">
       {/* Kanban header with refresh button */}
@@ -486,6 +493,15 @@ export function KanbanBoard({ tasks, onTaskClick, onNewTaskClick, onRefresh, isR
             <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
             {isRefreshing ? 'Refreshing...' : 'Refresh Tasks'}
           </Button>
+        </div>
+      )}
+      {/* Project-level token usage summary */}
+      {projectId && (
+        <div className="px-6 pb-3">
+          <ProjectUsageCard
+            projectId={projectId}
+            onOpenDetails={onOpenUsage}
+          />
         </div>
       )}
       {/* Kanban columns */}

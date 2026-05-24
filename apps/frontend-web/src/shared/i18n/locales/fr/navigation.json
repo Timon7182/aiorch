@@ -16,7 +16,8 @@
     "gitlabMRs": "MRs GitLab",
     "worktrees": "Worktrees",
     "agentTools": "MCP",
-    "skills": "Compétences"
+    "skills": "Compétences",
+    "usage": "Consommation"
   },
   "actions": {
     "settings": "Paramètres",

@@ -16,7 +16,8 @@
     "gitlabMRs": "GitLab MRs",
     "worktrees": "Worktrees",
     "agentTools": "MCP",
-    "skills": "Skills"
+    "skills": "Skills",
+    "usage": "Token Usage"
   },
   "actions": {
     "settings": "Settings",

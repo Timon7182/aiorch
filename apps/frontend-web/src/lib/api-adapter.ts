@@ -439,6 +439,13 @@ export const webAPI: API & { _isWebMode: boolean } = {
       callback(payload.taskId, payload.subtaskId, payload.status, payload.previousStatus);
     });
   },
+  onTaskUsage: (callback) => {
+    // Per-turn token usage events emitted by the backend after each SDK
+    // ResultMessage. Used by usage-store to update dashboard totals live.
+    return registerCallback('task:usage', (payload: { taskId: string; usage: unknown }) => {
+      callback(payload.taskId, payload.usage as never);
+    });
+  },
 
   // ========== Terminal Operations ==========
   createTerminal: async (options: TerminalCreateOptions) => {

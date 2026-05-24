@@ -277,6 +277,22 @@ async def emit_task_logs_stream(spec_id: str, chunk: dict):
     await broadcast_event("task-logs:stream", {"specId": spec_id, "chunk": chunk})
 
 
+async def emit_task_usage(task_id: str, usage: dict):
+    """Emit a token usage event for a task.
+
+    Fired each time the agent's SDK ResultMessage reports per-turn token counts.
+    The frontend uses these to update per-task and per-project token totals live
+    on the dashboard without re-fetching usage.json.
+    """
+    import logging
+    logging.getLogger(__name__).debug(
+        f"[WebSocket] Emitting task:usage - taskId: {task_id}, "
+        f"phase: {usage.get('phase')}, in: {usage.get('input_tokens')}, "
+        f"out: {usage.get('output_tokens')}"
+    )
+    await broadcast_event("task:usage", {"taskId": task_id, "usage": usage})
+
+
 async def emit_subtask_update(task_id: str, subtask_id: str, status: str, previous_status: str | None = None):
     """Emit a subtask status change event for granular real-time updates.
 

@@ -13,6 +13,7 @@ export * from './agent';
 export * from './settings';
 export * from './changelog';
 export * from './insights';
+export * from './usage';
 export * from './skills';
 export * from './integrations';
 export * from './app-update';

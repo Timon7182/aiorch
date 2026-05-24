@@ -1,4 +1,44 @@
 {
+  "usage": {
+    "title": "Token usage",
+    "projectTitle": "Project token usage",
+    "pageTitle": "Token Usage",
+    "pageSubtitle": "Per-task and per-project token consumption across all agent runs in this project.",
+    "input": "Input",
+    "output": "Output",
+    "cacheRead": "Cache read",
+    "cacheWrite": "Cache write",
+    "calls": "SDK calls",
+    "cost": "Est. cost",
+    "estCost": "est. cost",
+    "tokens": "tokens",
+    "totalTokens": "Total tokens",
+    "tracked": "Tasks tracked",
+    "acrossTasks": "{{count}} task(s) tracked",
+    "noData": "No agent runs yet — token totals will appear here once a task runs.",
+    "empty": "No agent runs have been recorded for this project yet. Start a task to populate usage data.",
+    "viewDetails": "Details",
+    "byPhase": "By phase",
+    "byModel": "By model",
+    "byTask": "By task",
+    "phases": {
+      "planning": "Planning",
+      "spec": "Spec",
+      "coding": "Coding",
+      "qa": "QA review",
+      "qaFix": "QA fixing"
+    },
+    "cols": {
+      "spec": "Spec",
+      "total": "Total",
+      "input": "Input",
+      "output": "Output",
+      "cacheRead": "Cache R",
+      "cacheWrite": "Cache W",
+      "cost": "Cost",
+      "updated": "Updated"
+    }
+  },
   "status": {
     "backlog": "Backlog",
     "todo": "To Do",

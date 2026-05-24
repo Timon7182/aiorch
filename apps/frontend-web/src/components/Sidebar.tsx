@@ -23,7 +23,8 @@ import {
   LogOut,
   ChevronDown,
   Check,
-  Library
+  Library,
+  Coins
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
@@ -60,7 +61,7 @@ import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from '../shared/types';
 
-export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts' | 'docs';
+export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts' | 'docs' | 'usage';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -87,6 +88,7 @@ const baseNavItems: NavItem[] = [
   { id: 'skills', labelKey: 'navigation:items.skills', icon: Lightbulb },
   { id: 'docs', labelKey: 'Docs', icon: Library },
   { id: 'changelog', labelKey: 'navigation:items.changelog', icon: FileText },
+  { id: 'usage', labelKey: 'navigation:items.usage', icon: Coins },
   { id: 'worktrees', labelKey: 'navigation:items.worktrees', icon: GitBranch },
   { id: 'context', labelKey: 'navigation:items.context', icon: BookOpen },
   { id: 'transcripts', labelKey: 'Transcripts', icon: FileAudio },

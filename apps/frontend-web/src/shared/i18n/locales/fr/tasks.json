@@ -1,4 +1,44 @@
 {
+  "usage": {
+    "title": "Consommation de tokens",
+    "projectTitle": "Consommation de tokens du projet",
+    "pageTitle": "Consommation de tokens",
+    "pageSubtitle": "Consommation de tokens par tâche et par projet pour toutes les exécutions d'agent dans ce projet.",
+    "input": "Entrée",
+    "output": "Sortie",
+    "cacheRead": "Cache (lecture)",
+    "cacheWrite": "Cache (écriture)",
+    "calls": "Appels SDK",
+    "cost": "Coût est.",
+    "estCost": "coût est.",
+    "tokens": "tokens",
+    "totalTokens": "Tokens totaux",
+    "tracked": "Tâches suivies",
+    "acrossTasks": "{{count}} tâche(s) suivie(s)",
+    "noData": "Aucune exécution d'agent — les totaux apparaîtront ici une fois qu'une tâche aura été lancée.",
+    "empty": "Aucune exécution d'agent enregistrée pour ce projet. Lancez une tâche pour alimenter les données.",
+    "viewDetails": "Détails",
+    "byPhase": "Par phase",
+    "byModel": "Par modèle",
+    "byTask": "Par tâche",
+    "phases": {
+      "planning": "Planification",
+      "spec": "Spec",
+      "coding": "Codage",
+      "qa": "QA",
+      "qaFix": "Corrections QA"
+    },
+    "cols": {
+      "spec": "Spec",
+      "total": "Total",
+      "input": "Entrée",
+      "output": "Sortie",
+      "cacheRead": "Cache L",
+      "cacheWrite": "Cache E",
+      "cost": "Coût",
+      "updated": "Mise à jour"
+    }
+  },
   "status": {
     "backlog": "Backlog",
     "todo": "À faire",

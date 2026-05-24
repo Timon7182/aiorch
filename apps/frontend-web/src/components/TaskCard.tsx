@@ -7,6 +7,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { cn, formatRelativeTime, sanitizeMarkdownForDisplay, extractTaskNumber, formatTaskTitleWithNumber } from '../lib/utils';
 import { PhaseProgressIndicator } from './PhaseProgressIndicator';
+import { TokenUsagePill } from './TokenUsagePill';
 import {
   TASK_CATEGORY_LABELS,
   TASK_CATEGORY_COLORS,
@@ -465,10 +466,11 @@ export const TaskCard = memo(function TaskCard({ task, onClick }: TaskCardProps)
         )}
 
         {/* Footer */}
-        <div className="mt-4 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Clock className="h-3 w-3" />
-            <span>{relativeTime}</span>
+        <div className="mt-4 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+            <Clock className="h-3 w-3 shrink-0" />
+            <span className="shrink-0">{relativeTime}</span>
+            <TokenUsagePill taskId={task.id} />
           </div>
 
           {/* Action buttons */}

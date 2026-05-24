@@ -18,6 +18,7 @@ from core.error_utils import (
     is_tool_concurrency_error,
     safe_receive_messages,
 )
+from core.usage_event import emit_usage
 from debug import debug, debug_detailed, debug_error, debug_section, debug_success
 from insight_extractor import extract_session_insights
 from progress import (
@@ -526,6 +527,34 @@ async def run_agent_session(
                                 )
 
                         current_tool = None
+
+            # Capture per-session token usage from the SDK's final ResultMessage.
+            # The SDK emits ResultMessage at the end of each query() turn with a
+            # `usage` dict containing input/output/cache token counts and
+            # `total_cost_usd`. We forward it both as a stdout marker (for the
+            # web server to mirror in real time) and persist to usage.json.
+            elif msg_type == "ResultMessage":
+                raw_usage = getattr(msg, "usage", None)
+                if isinstance(raw_usage, dict) and raw_usage:
+                    sdk_cost = getattr(msg, "total_cost_usd", None)
+                    model_name = getattr(msg, "model", None)
+                    try:
+                        emit_usage(
+                            phase=phase.value if hasattr(phase, "value") else str(phase),
+                            spec_dir=spec_dir,
+                            model=model_name,
+                            input_tokens=int(raw_usage.get("input_tokens", 0) or 0),
+                            output_tokens=int(raw_usage.get("output_tokens", 0) or 0),
+                            cache_read_input_tokens=int(
+                                raw_usage.get("cache_read_input_tokens", 0) or 0
+                            ),
+                            cache_creation_input_tokens=int(
+                                raw_usage.get("cache_creation_input_tokens", 0) or 0
+                            ),
+                            cost_usd=float(sdk_cost) if sdk_cost is not None else None,
+                        )
+                    except Exception as exc:
+                        debug_error("session", f"Usage emit failed: {exc}")
 
         print("\n" + "-" * 70 + "\n")
 
