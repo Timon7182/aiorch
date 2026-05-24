@@ -8,7 +8,9 @@
 
 import { create } from 'zustand';
 
-import { get } from '../lib/api-client';
+// Aliased: Zustand's store factory passes its own `get` (state getter) into
+// the slice, which would shadow this import. Use `apiGet` for HTTP calls.
+import { get as apiGet } from '../lib/api-client';
 import { createLogger } from '../lib/logger';
 import {
   emptyTotals,
@@ -71,7 +73,7 @@ export const useUsageStore = create<UsageState>((set, get) => ({
       loadingProject: { ...s.loadingProject, [projectId]: true },
     }));
     try {
-      const res = await get<ProjectUsage>(`/usage/projects/${projectId}`);
+      const res = await apiGet<ProjectUsage>(`/usage/projects/${projectId}`);
       if (res.success && res.data) {
         set((s) => ({
           projectUsage: { ...s.projectUsage, [projectId]: res.data! },
@@ -91,7 +93,7 @@ export const useUsageStore = create<UsageState>((set, get) => ({
     if (!taskId) return;
     set((s) => ({ loadingTask: { ...s.loadingTask, [taskId]: true } }));
     try {
-      const res = await get<TaskUsage>(
+      const res = await apiGet<TaskUsage>(
         `/usage/tasks/${encodeURIComponent(taskId)}`,
       );
       if (res.success && res.data) {
