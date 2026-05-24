@@ -111,19 +111,29 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         settings = get_settings()
         auth_header = request.headers.get("Authorization")
 
-        if not auth_header:
+        # Token can come from either:
+        #   - Authorization: Bearer <token>  (preferred, used by fetch())
+        #   - ?token=<token> query param     (fallback for browser-driven
+        #     navigations: <a href> downloads, <iframe src>, file viewers —
+        #     where the browser controls the request and can't add headers)
+        # Mirrors the WebSocket auth pattern. Header wins when both present
+        # so a stray ?token= can never downgrade a valid header.
+        token: str | None = None
+        if auth_header:
+            if not auth_header.startswith("Bearer "):
+                return JSONResponse(
+                    {"error": "Invalid Authorization header format"},
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                )
+            token = auth_header[7:]
+        else:
+            token = request.query_params.get("token")
+
+        if not token:
             return JSONResponse(
                 {"error": "Missing Authorization header"},
                 status_code=status.HTTP_401_UNAUTHORIZED,
             )
-
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                {"error": "Invalid Authorization header format"},
-                status_code=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        token = auth_header[7:]  # Remove "Bearer " prefix
 
         # Strategy 1: Try JWT validation
         jwt_payload = _try_decode_jwt(token)

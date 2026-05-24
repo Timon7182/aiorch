@@ -21,6 +21,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Separator } from './ui/separator';
 import { cn } from '../lib/utils';
 import { get, post } from '../lib/api-client';
+import { getAuthToken } from '../lib/auth';
 
 interface DocsStatus {
   state: 'idle' | 'running';
@@ -347,7 +348,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
                 <span className="truncate">GRAPH_REPORT.md</span>
               </button>
               <a
-                href={`/api/projects/${projectId}/docs/graph/graph.html`}
+                href={`/api/projects/${projectId}/docs/graph/graph.html?token=${encodeURIComponent(getAuthToken() ?? '')}`}
                 target="_blank"
                 rel="noreferrer"
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-primary hover:bg-accent/50"
@@ -357,7 +358,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
                 <span className="truncate">Interactive graph ↗</span>
               </a>
               <a
-                href={`/api/projects/${projectId}/docs/graph/graph.json`}
+                href={`/api/projects/${projectId}/docs/graph/graph.json?token=${encodeURIComponent(getAuthToken() ?? '')}`}
                 target="_blank"
                 rel="noreferrer"
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent/50"
@@ -420,7 +421,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
           </span>
           {status?.has_site && (
             <a
-              href={`/api/projects/${projectId}/docs/site/index.html`}
+              href={`/api/projects/${projectId}/docs/site/index.html?token=${encodeURIComponent(getAuthToken() ?? '')}`}
               target="_blank"
               rel="noreferrer"
               className="text-primary hover:underline"
