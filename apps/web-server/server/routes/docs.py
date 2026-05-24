@@ -232,6 +232,48 @@ async def docs_raw_markdown(project_id: str, path: str):
     }
 
 
+@router.get("/{project_id}/docs/graph-report")
+async def docs_graph_report(project_id: str):
+    """Return the markdown content of <project>/graphify-out/GRAPH_REPORT.md.
+
+    Mirrors the shape of /docs/raw so the frontend can drop the result
+    straight into its existing markdown viewer.
+    """
+    project_path = _resolve_project(project_id)
+    report = project_path / "graphify-out" / "GRAPH_REPORT.md"
+    if not report.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="No graph report. Run `graphify extract` first.",
+        )
+    return {
+        "success": True,
+        "path": "GRAPH_REPORT.md",
+        "content": report.read_text(encoding="utf-8", errors="replace"),
+    }
+
+
+@router.get("/{project_id}/docs/graph/{path:path}")
+async def docs_graph_serve(project_id: str, path: str):
+    """Serve any file from <project>/graphify-out/ (graph.html, graph.json, etc.).
+
+    Path-sanitized so the user can't escape the directory. Used to embed
+    the interactive graph.html viewer and to download graph.json.
+    """
+    project_path = _resolve_project(project_id)
+    graph_dir = (project_path / "graphify-out").resolve()
+    resolved_path = path if path else "graph.html"
+    target = (graph_dir / resolved_path).resolve()
+    try:
+        target.relative_to(graph_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes graph directory")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found in graph directory")
+    media_type, _ = mimetypes.guess_type(target.name)
+    return FileResponse(target, media_type=media_type or "application/octet-stream")
+
+
 @router.get("/{project_id}/docs/site/{path:path}")
 async def docs_site_serve(project_id: str, path: str):
     """Serve a built file from <project>/.magestic-ai/docs-site/."""
