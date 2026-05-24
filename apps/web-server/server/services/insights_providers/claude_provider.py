@@ -190,6 +190,7 @@ class ClaudeProvider(ProviderStrategy):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(project_path),
                 env=env,
+                limit=10 * 1024 * 1024,
             )
 
             accumulated_content = ""
