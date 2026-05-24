@@ -108,9 +108,9 @@ async def generate_docs(project_id: str, raw_request: Request):
     svc = get_docs_generator_service(_backend_path())
 
     if svc.is_running(project_id):
+        # Error shape: api-client preserves {success: false, error: ...} as-is.
         return {
             "success": False,
-            "state": "running",
             "error": "Documentation generation is already in progress for this project.",
         }
 
@@ -139,7 +139,8 @@ async def generate_docs(project_id: str, raw_request: Request):
             logger.exception(f"[docs] generation crashed for {project_id}")
 
     asyncio.create_task(_run())
-    return {"success": True, "state": "started"}
+    # Raw success payload; api-client wraps to {success: true, data: {state: ...}}
+    return {"state": "started"}
 
 
 @router.post("/{project_id}/docs/cancel")
@@ -149,8 +150,8 @@ async def cancel_docs_generation(project_id: str):
     svc = get_docs_generator_service(_backend_path())
     cancelled = await svc.cancel(project_id)
     if not cancelled:
-        return {"success": False, "state": "idle", "error": "No generation in progress."}
-    return {"success": True, "state": "cancelled"}
+        return {"success": False, "error": "No generation in progress."}
+    return {"state": "cancelled"}
 
 
 @router.post("/{project_id}/docs/build")
@@ -159,7 +160,9 @@ async def build_docs(project_id: str):
     project_path = _resolve_project(project_id)
     svc = get_docs_generator_service(_backend_path())
     log, ok = await svc.build_only(project_path)
-    return {"success": ok, "log": log[-4000:]}
+    if not ok:
+        return {"success": False, "error": log[-4000:]}
+    return {"log": log[-4000:]}
 
 
 @router.get("/{project_id}/docs/status")
@@ -179,8 +182,11 @@ async def docs_status(project_id: str):
             meta = {}
 
     graphify_out = project_path / "graphify-out"
+    # Raw payload (no success wrapper). api-client wraps to
+    # {success: true, data: <this>}, and DocumentationView reads r.data.*.
+    # Returning a top-level success field would trip the client's
+    # double-wrap detection and leave r.data undefined.
     return {
-        "success": True,
         "state": "running" if svc.is_running(project_id) else "idle",
         "has_docs": docs_dir.is_dir(),
         "has_site": (site_dir / "index.html").exists(),
@@ -204,12 +210,12 @@ async def docs_tree(project_id: str):
     project_path = _resolve_project(project_id)
     docs_dir = project_path / "docs"
     if not docs_dir.is_dir():
-        return {"success": True, "files": []}
+        return {"files": []}
     files: list[dict] = []
     for path in sorted(docs_dir.rglob("*.md")):
         rel = path.relative_to(docs_dir).as_posix()
         files.append({"path": rel, "size": path.stat().st_size})
-    return {"success": True, "files": files}
+    return {"files": files}
 
 
 @router.get("/{project_id}/docs/raw")
@@ -226,7 +232,6 @@ async def docs_raw_markdown(project_id: str, path: str):
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return {
-        "success": True,
         "path": path,
         "content": target.read_text(encoding="utf-8", errors="replace"),
     }
@@ -247,7 +252,6 @@ async def docs_graph_report(project_id: str):
             detail="No graph report. Run `graphify extract` first.",
         )
     return {
-        "success": True,
         "path": "GRAPH_REPORT.md",
         "content": report.read_text(encoding="utf-8", errors="replace"),
     }
