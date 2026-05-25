@@ -44,6 +44,23 @@ if [ -d /home/magesticai/.claude ]; then
     chown -R magesticai:magesticai /home/magesticai/.claude
 fi
 
+# Restore ~/.claude.json across container recreates. The named volume only
+# persists ~/.claude/ — the sibling ~/.claude.json (Claude CLI config/state)
+# lives in the container's writable layer and is wiped by `--force-recreate`
+# on every deploy. It can't be a bind/volume mount because the CLI rewrites it
+# via atomic rename (rename-over-a-mount fails), so instead we restore a
+# writable copy on start from the newest backup the CLI persists into the
+# volume (~/.claude/backups/). No-op once the file is present.
+CLAUDE_JSON=/home/magesticai/.claude.json
+if [ ! -f "$CLAUDE_JSON" ] && [ -d /home/magesticai/.claude/backups ]; then
+    NEWEST_BACKUP="$(ls -1t /home/magesticai/.claude/backups/.claude.json.backup.* 2>/dev/null | head -n1 || true)"
+    if [ -n "$NEWEST_BACKUP" ] && [ -f "$NEWEST_BACKUP" ]; then
+        cp "$NEWEST_BACKUP" "$CLAUDE_JSON"
+        chown magesticai:magesticai "$CLAUDE_JSON"
+        echo "[entrypoint] restored ~/.claude.json from $(basename "$NEWEST_BACKUP")"
+    fi
+fi
+
 # Configure git credentials from forwarded env vars so HTTPS clone/push works
 # without prompting. Runs as the magesticai user; writes ~/.git-credentials
 # (mode 600) and points git at the `store` helper.
