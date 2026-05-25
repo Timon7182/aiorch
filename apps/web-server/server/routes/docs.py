@@ -52,6 +52,19 @@ def _resolve_project(project_id: str) -> Path:
     return project_path
 
 
+def _resolve_docs_base(project_id: str, repo: str | None) -> Path:
+    """Directory that docs/graphify-out live in for a project.
+
+    For multi-repo projects (a parent folder of child repos), ``repo`` selects
+    which child repo's docs to use; it is validated against the project's
+    detected repos to prevent path traversal. Single-repo projects resolve to
+    the project root and ignore ``repo``.
+    """
+    project_path = _resolve_project(project_id)
+    from ..services.git_repos import resolve_repo_cwd
+    return FilePath(resolve_repo_cwd(str(project_path), repo))
+
+
 def _backend_path() -> FilePath:
     """Locate apps/backend relative to apps/web-server (where we run)."""
     # apps/web-server/server/routes/docs.py → apps/backend
@@ -102,9 +115,9 @@ async def _resolve_user_identity(raw_request: Request) -> tuple[str, str] | None
 
 
 @router.post("/{project_id}/docs/generate", status_code=status.HTTP_202_ACCEPTED)
-async def generate_docs(project_id: str, raw_request: Request):
+async def generate_docs(project_id: str, raw_request: Request, repo: str | None = None):
     """Spawn the doc-generator agent in the background; return immediately."""
-    project_path = _resolve_project(project_id)
+    project_path = _resolve_docs_base(project_id, repo)
     svc = get_docs_generator_service(_backend_path())
 
     if svc.is_running(project_id):
@@ -155,9 +168,9 @@ async def cancel_docs_generation(project_id: str):
 
 
 @router.post("/{project_id}/docs/build")
-async def build_docs(project_id: str):
+async def build_docs(project_id: str, repo: str | None = None):
     """Re-run `mkdocs build` without the agent."""
-    project_path = _resolve_project(project_id)
+    project_path = _resolve_docs_base(project_id, repo)
     svc = get_docs_generator_service(_backend_path())
     log, ok = await svc.build_only(project_path)
     if not ok:
@@ -166,8 +179,8 @@ async def build_docs(project_id: str):
 
 
 @router.get("/{project_id}/docs/status")
-async def docs_status(project_id: str):
-    project_path = _resolve_project(project_id)
+async def docs_status(project_id: str, repo: str | None = None):
+    project_path = _resolve_docs_base(project_id, repo)
     svc = get_docs_generator_service(_backend_path())
 
     docs_dir = project_path / "docs"
@@ -205,9 +218,9 @@ async def docs_status(project_id: str):
 
 
 @router.get("/{project_id}/docs/tree")
-async def docs_tree(project_id: str):
+async def docs_tree(project_id: str, repo: str | None = None):
     """List markdown files under <project>/docs/ for a sidebar tree."""
-    project_path = _resolve_project(project_id)
+    project_path = _resolve_docs_base(project_id, repo)
     docs_dir = project_path / "docs"
     if not docs_dir.is_dir():
         return {"files": []}
@@ -219,9 +232,9 @@ async def docs_tree(project_id: str):
 
 
 @router.get("/{project_id}/docs/raw")
-async def docs_raw_markdown(project_id: str, path: str):
+async def docs_raw_markdown(project_id: str, path: str, repo: str | None = None):
     """Return the raw markdown source of a doc file (for in-app editing)."""
-    project_path = _resolve_project(project_id)
+    project_path = _resolve_docs_base(project_id, repo)
     docs_dir = (project_path / "docs").resolve()
     target = (docs_dir / path).resolve()
     # Path-traversal guard.
@@ -238,13 +251,13 @@ async def docs_raw_markdown(project_id: str, path: str):
 
 
 @router.get("/{project_id}/docs/graph-report")
-async def docs_graph_report(project_id: str):
+async def docs_graph_report(project_id: str, repo: str | None = None):
     """Return the markdown content of <project>/graphify-out/GRAPH_REPORT.md.
 
     Mirrors the shape of /docs/raw so the frontend can drop the result
     straight into its existing markdown viewer.
     """
-    project_path = _resolve_project(project_id)
+    project_path = _resolve_docs_base(project_id, repo)
     report = project_path / "graphify-out" / "GRAPH_REPORT.md"
     if not report.is_file():
         raise HTTPException(
@@ -258,13 +271,13 @@ async def docs_graph_report(project_id: str):
 
 
 @router.get("/{project_id}/docs/graph/{path:path}")
-async def docs_graph_serve(project_id: str, path: str):
+async def docs_graph_serve(project_id: str, path: str, repo: str | None = None):
     """Serve any file from <project>/graphify-out/ (graph.html, graph.json, etc.).
 
     Path-sanitized so the user can't escape the directory. Used to embed
     the interactive graph.html viewer and to download graph.json.
     """
-    project_path = _resolve_project(project_id)
+    project_path = _resolve_docs_base(project_id, repo)
     graph_dir = (project_path / "graphify-out").resolve()
     resolved_path = path if path else "graph.html"
     target = (graph_dir / resolved_path).resolve()
@@ -279,9 +292,9 @@ async def docs_graph_serve(project_id: str, path: str):
 
 
 @router.get("/{project_id}/docs/site/{path:path}")
-async def docs_site_serve(project_id: str, path: str):
+async def docs_site_serve(project_id: str, path: str, repo: str | None = None):
     """Serve a built file from <project>/.magestic-ai/docs-site/."""
-    project_path = _resolve_project(project_id)
+    project_path = _resolve_docs_base(project_id, repo)
     site_dir = (project_path / ".magestic-ai" / "docs-site").resolve()
     # Default to index.html when path is empty or ends with /.
     resolved_path = path if path else "index.html"

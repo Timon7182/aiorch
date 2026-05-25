@@ -19,9 +19,11 @@ import {
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
 import { Separator } from './ui/separator';
+import { RepoSwitcher } from './RepoSwitcher';
 import { cn } from '../lib/utils';
 import { get, post } from '../lib/api-client';
 import { getAuthToken } from '../lib/auth';
+import { useProjectStore } from '../stores/project-store';
 
 interface DocsStatus {
   state: 'idle' | 'running';
@@ -69,13 +71,25 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   // appearing in /status.
   const [optimisticRunning, setOptimisticRunning] = useState(false);
 
+  // For multi-repo projects, scope docs to the active child repo. The query
+  // suffix is appended to every docs request so the backend reads/writes the
+  // right repo's docs/, graphify-out/, and docs-site/.
+  const reposByProject = useProjectStore((s) => s.reposByProject);
+  const activeRepoByProject = useProjectStore((s) => s.activeRepoByProject);
+  const repos = reposByProject[projectId] ?? [];
+  const activeRepoPath = repos.length > 1
+    ? (activeRepoByProject[projectId] ?? repos[0]?.path)
+    : undefined;
+  const repoSuffix = (hasQuery: boolean) =>
+    activeRepoPath ? `${hasQuery ? '&' : '?'}repo=${encodeURIComponent(activeRepoPath)}` : '';
+
   const loadStatus = useCallback(async () => {
-    const r = await get<DocsStatus>(`/projects/${projectId}/docs/status`);
+    const r = await get<DocsStatus>(`/projects/${projectId}/docs/status${repoSuffix(false)}`);
     if (r.success && r.data) setStatus(r.data);
-  }, [projectId]);
+  }, [projectId, activeRepoPath]);
 
   const loadTree = useCallback(async () => {
-    const r = await get<{ files: DocFile[] }>(`/projects/${projectId}/docs/tree`);
+    const r = await get<{ files: DocFile[] }>(`/projects/${projectId}/docs/tree${repoSuffix(false)}`);
     if (r.success && r.data) {
       setFiles(r.data.files);
       if (!selectedPath && r.data.files.length > 0) {
@@ -84,7 +98,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
         setSelectedPath(homePage.path);
       }
     }
-  }, [projectId, selectedPath]);
+  }, [projectId, selectedPath, activeRepoPath]);
 
   const loadContent = useCallback(
     async (path: string) => {
@@ -93,8 +107,8 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       // markdown viewer.
       const url =
         path === GRAPH_REPORT_PATH
-          ? `/projects/${projectId}/docs/graph-report`
-          : `/projects/${projectId}/docs/raw?path=${encodeURIComponent(path)}`;
+          ? `/projects/${projectId}/docs/graph-report${repoSuffix(false)}`
+          : `/projects/${projectId}/docs/raw?path=${encodeURIComponent(path)}${repoSuffix(true)}`;
       const r = await get<RawDoc>(url);
       if (r.success && r.data) {
         setContent(r.data.content);
@@ -102,7 +116,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
         setContent(`# Could not load ${path}\n\n${r.error ?? ''}`);
       }
     },
-    [projectId],
+    [projectId, activeRepoPath],
   );
 
   useEffect(() => {
@@ -118,7 +132,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   useEffect(() => {
     if (!status || status.state !== 'running') return;
     const id = setInterval(async () => {
-      const r = await get<DocsStatus>(`/projects/${projectId}/docs/status`);
+      const r = await get<DocsStatus>(`/projects/${projectId}/docs/status${repoSuffix(false)}`);
       if (r.success && r.data) {
         const prevState = status.state;
         setStatus(r.data);
@@ -129,14 +143,14 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [status, projectId, loadTree, loadContent, selectedPath]);
+  }, [status, projectId, activeRepoPath, loadTree, loadContent, selectedPath]);
 
   const handleGenerate = useCallback(async () => {
     setBusy('generate');
     setError(null);
     setOptimisticRunning(true);
     const r = await post<{ state?: string; error?: string }>(
-      `/projects/${projectId}/docs/generate`,
+      `/projects/${projectId}/docs/generate${repoSuffix(false)}`,
     );
     setBusy(null);
     if (!r.success) {
@@ -146,19 +160,19 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     setOptimisticRunning(false);
-  }, [projectId, loadStatus]);
+  }, [projectId, activeRepoPath, loadStatus]);
 
   const handleBuild = useCallback(async () => {
     setBusy('build');
     setError(null);
-    const r = await post<{ log?: string }>(`/projects/${projectId}/docs/build`);
+    const r = await post<{ log?: string }>(`/projects/${projectId}/docs/build${repoSuffix(false)}`);
     setBusy(null);
     if (!r.success) {
       setError(r.error ?? 'Build failed');
     }
     await loadStatus();
     await loadTree();
-  }, [projectId, loadStatus, loadTree]);
+  }, [projectId, activeRepoPath, loadStatus, loadTree]);
 
   const handleStop = useCallback(async () => {
     setBusy('stop');
@@ -180,7 +194,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     await post(`/projects/${projectId}/docs/cancel`);
     setOptimisticRunning(true);
     const r = await post<{ state?: string; error?: string }>(
-      `/projects/${projectId}/docs/generate`,
+      `/projects/${projectId}/docs/generate${repoSuffix(false)}`,
     );
     setBusy(null);
     if (!r.success) {
@@ -190,7 +204,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     setOptimisticRunning(false);
-  }, [projectId, loadStatus]);
+  }, [projectId, activeRepoPath, loadStatus]);
 
   const isRunning = status?.state === 'running' || optimisticRunning;
 
@@ -209,6 +223,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       {/* Left rail: actions + file tree */}
       <div className="flex w-72 shrink-0 flex-col border-r border-border bg-sidebar/40">
         <div className="p-3 space-y-2">
+          <RepoSwitcher projectId={projectId} className="w-full justify-between" />
           <Button
             className="w-full"
             onClick={handleGenerate}
@@ -348,7 +363,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
                 <span className="truncate">GRAPH_REPORT.md</span>
               </button>
               <a
-                href={`/api/projects/${projectId}/docs/graph/graph.html?token=${encodeURIComponent(getAuthToken() ?? '')}`}
+                href={`/api/projects/${projectId}/docs/graph/graph.html?token=${encodeURIComponent(getAuthToken() ?? '')}${repoSuffix(true)}`}
                 target="_blank"
                 rel="noreferrer"
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-primary hover:bg-accent/50"
@@ -358,7 +373,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
                 <span className="truncate">Interactive graph ↗</span>
               </a>
               <a
-                href={`/api/projects/${projectId}/docs/graph/graph.json?token=${encodeURIComponent(getAuthToken() ?? '')}`}
+                href={`/api/projects/${projectId}/docs/graph/graph.json?token=${encodeURIComponent(getAuthToken() ?? '')}${repoSuffix(true)}`}
                 target="_blank"
                 rel="noreferrer"
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent/50"
@@ -421,7 +436,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
           </span>
           {status?.has_site && (
             <a
-              href={`/api/projects/${projectId}/docs/site/index.html?token=${encodeURIComponent(getAuthToken() ?? '')}`}
+              href={`/api/projects/${projectId}/docs/site/index.html?token=${encodeURIComponent(getAuthToken() ?? '')}${repoSuffix(true)}`}
               target="_blank"
               rel="noreferrer"
               className="text-primary hover:underline"
