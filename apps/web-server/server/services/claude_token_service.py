@@ -15,13 +15,21 @@ hardcoding Anthropic's OAuth token endpoint, client_id, or the exact
 refresh-grant body — when Anthropic changes any of that, the CLI
 incorporates the change and our code keeps working.
 
-Seeding (first start):
+Seeding (and re-seeding from the host):
     Option 1 — mount ``/home/saya/.claude/.credentials.json`` into the
-    container at ``/home/magesticai/.claude-seed.json``. The service
-    copies it to ``~/.claude/.credentials.json`` on first start.
+    container at ``/home/magesticai/.claude-seed.json``. The service copies
+    it to ``~/.claude/.credentials.json`` when the container has no
+    credentials, and also re-adopts it on (re)start when the container's
+    own credentials have gone stale and the host seed is fresher. Anthropic
+    rotates the refresh token on every refresh, so a single subscription
+    can't be shared by two clients that both refresh — the container loses
+    the race whenever the host refreshes. Re-seeding lets a host re-login
+    propagate into the container on the next restart/redeploy. (The seed is
+    a single-file bind mount, so the container must be re-created — a deploy
+    force-recreate — to see a host file the host replaced via atomic rename.)
     Option 2 — set ``CLAUDE_CODE_OAUTH_REFRESH_TOKEN`` env var alongside
     ``CLAUDE_CODE_OAUTH_TOKEN``. The service constructs a minimal
-    credentials.json from these.
+    credentials.json from these (only when there is no usable seed).
 """
 
 from __future__ import annotations
@@ -115,28 +123,48 @@ class ClaudeTokenService:
     # ------------------------------------------------------------------ #
 
     def _seed_if_needed(self) -> None:
-        """Populate ~/.claude/.credentials.json from the seed file or env."""
-        if _CREDS_PATH.exists():
-            return
-        _CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        """Populate or refresh ~/.claude/.credentials.json from the host seed or env.
 
-        # Option 1: copy from mounted seed file.
-        if _SEED_PATH.exists():
-            try:
-                data = json.loads(_SEED_PATH.read_text())
-                # Validate it's the expected shape.
-                if data.get("claudeAiOauth", {}).get("accessToken"):
-                    _CREDS_PATH.write_text(json.dumps(data, indent=2))
+        Re-seeds from the host's mounted credentials not only when the
+        container has none, but also when the ones it holds are stale (past
+        the refresh buffer) and the host seed is genuinely fresher — so a host
+        re-login propagates into the container on the next (re)start.
+        """
+        _CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        current = self._read_creds()
+
+        # A still-valid container token wins: don't clobber it with a possibly
+        # older host copy. We only (re)seed when we have nothing, or the token
+        # is expired/near-expiry (meaning a refresh has likely been failing).
+        if current and not self._needs_refresh(current):
+            return
+
+        # Option 1: adopt the host seed when it is fresher than what we hold.
+        seed = self._read_seed()
+        if seed is not None:
+            current_expiry = int(
+                (current or {}).get("claudeAiOauth", {}).get("expiresAt") or 0
+            )
+            seed_expiry = int(seed.get("claudeAiOauth", {}).get("expiresAt") or 0)
+            if seed_expiry > current_expiry:
+                try:
+                    _CREDS_PATH.write_text(json.dumps(seed, indent=2))
                     try:
                         _CREDS_PATH.chmod(0o600)
                     except OSError:
                         pass
                     logger.info(
-                        f"[ClaudeToken] seeded credentials from {_SEED_PATH}"
+                        f"[ClaudeToken] (re)seeded credentials from host {_SEED_PATH}"
                     )
                     return
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.warning(f"[ClaudeToken] seed read failed: {exc}")
+                except OSError as exc:
+                    logger.warning(f"[ClaudeToken] seed write failed: {exc}")
+
+        # Keep stale-but-present creds (the CLI refresh path may still revive
+        # them); only bootstrap from env vars when we have no credentials and
+        # no usable seed.
+        if current is not None:
+            return
 
         # Option 2: env var bootstrap.
         access = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
@@ -176,6 +204,19 @@ class ClaudeTokenService:
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning(f"[ClaudeToken] credentials read failed: {exc}")
             return None
+
+    def _read_seed(self) -> dict | None:
+        """Read the host-mounted seed credentials, if present and well-formed."""
+        if not _SEED_PATH.exists():
+            return None
+        try:
+            data = json.loads(_SEED_PATH.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(f"[ClaudeToken] seed read failed: {exc}")
+            return None
+        if not data.get("claudeAiOauth", {}).get("accessToken"):
+            return None
+        return data
 
     def _needs_refresh(self, creds: dict) -> bool:
         expires_at_ms = int(creds.get("claudeAiOauth", {}).get("expiresAt") or 0)
