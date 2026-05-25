@@ -1,14 +1,16 @@
 import { RefreshCw, Check } from 'lucide-react';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
+import { RepoSwitcher } from '../RepoSwitcher';
 import type { WizardStep } from './hooks/useChangelog';
 
 interface ChangelogHeaderProps {
   step: WizardStep;
+  projectId: string;
   onRefresh: () => void;
 }
 
-export function ChangelogHeader({ step, onRefresh }: ChangelogHeaderProps) {
+export function ChangelogHeader({ step, projectId, onRefresh }: ChangelogHeaderProps) {
   return (
     <div className="flex items-center justify-between border-b border-border px-6 py-4">
       <div className="flex items-center gap-4">
@@ -32,6 +34,7 @@ export function ChangelogHeader({ step, onRefresh }: ChangelogHeaderProps) {
           <div className="w-6 h-px bg-border" />
           <StepIndicator step={3} currentStep={step} label="Release" />
         </div>
+        <RepoSwitcher projectId={projectId} className="mr-2" />
         <Button variant="outline" size="sm" onClick={onRefresh}>
           <RefreshCw className="mr-2 h-4 w-4" />
           Refresh

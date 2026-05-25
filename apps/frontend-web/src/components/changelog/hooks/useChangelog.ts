@@ -17,6 +17,13 @@ export type WizardStep = 1 | 2 | 3;
 export function useChangelog() {
   const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
 
+  // Active git repo for multi-repo projects — changing it should reload git data.
+  const reposByProject = useProjectStore((state) => state.reposByProject);
+  const activeRepoByProject = useProjectStore((state) => state.activeRepoByProject);
+  const activeRepoPath = selectedProjectId && (reposByProject[selectedProjectId]?.length ?? 0) > 1
+    ? (activeRepoByProject[selectedProjectId] ?? reposByProject[selectedProjectId]?.[0]?.path)
+    : undefined;
+
   // Data state
   const doneTasks = useChangelogStore((state) => state.doneTasks);
   const selectedTaskIds = useChangelogStore((state) => state.selectedTaskIds);
@@ -105,13 +112,14 @@ export function useChangelog() {
     initializeFromSettings();
   }, [initializeFromSettings]);
 
-  // Load data when project changes
+  // Load data when project changes, and reload git data when the active repo changes
   useEffect(() => {
     if (selectedProjectId) {
       loadChangelogData(selectedProjectId);
       loadGitData(selectedProjectId);
     }
-  }, [selectedProjectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId, activeRepoPath]);
 
   // Load commits preview when source mode or options change
   const handleLoadCommitsPreview = useCallback(() => {

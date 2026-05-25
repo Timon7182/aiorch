@@ -38,6 +38,7 @@ import {
 } from './ui/alert-dialog';
 import { useProjectStore } from '../stores/project-store';
 import { useTaskStore } from '../stores/task-store';
+import { RepoSwitcher } from './RepoSwitcher';
 import type { WorktreeListItem, WorktreeMergeResult } from '../shared/types';
 
 interface WorktreesProps {
@@ -255,7 +256,8 @@ export function Worktrees({ projectId }: WorktreesProps) {
             Manage isolated workspaces for your Magestic AI tasks
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <RepoSwitcher projectId={projectId} />
           {emptyWorktrees.length > 0 && (
             <Button
               variant="outline"

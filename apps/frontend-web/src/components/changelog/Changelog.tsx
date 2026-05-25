@@ -98,7 +98,7 @@ export function Changelog() {
     <TooltipProvider>
       <div className="flex h-full flex-col">
         {/* Header */}
-        <ChangelogHeader step={step} onRefresh={handleRefresh} />
+        <ChangelogHeader step={step} projectId={selectedProjectId} onRefresh={handleRefresh} />
 
         {/* Content */}
         {step === 1 && (
