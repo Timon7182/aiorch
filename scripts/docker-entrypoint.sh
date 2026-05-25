@@ -61,6 +61,25 @@ if [ ! -f "$CLAUDE_JSON" ] && [ -d /home/magesticai/.claude/backups ]; then
     fi
 fi
 
+# Ensure the CLI treats the container as already onboarded. The restored
+# config (and the CLI's own backups) can lack `hasCompletedOnboarding`, which
+# makes the interactive `claude` REPL re-run its login/onboarding wizard even
+# though valid subscription credentials exist. Idempotent — only writes when
+# the flag isn't already true.
+if [ -f "$CLAUDE_JSON" ] && command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+p=sys.argv[1]
+try:
+ d=json.load(open(p))
+except Exception:
+ sys.exit(0)
+if d.get("hasCompletedOnboarding") is not True:
+ d["hasCompletedOnboarding"]=True
+ json.dump(d,open(p,"w"),indent=2)
+ print("[entrypoint] set hasCompletedOnboarding=true in ~/.claude.json")' "$CLAUDE_JSON" || true
+    chown magesticai:magesticai "$CLAUDE_JSON"
+fi
+
 # Configure git credentials from forwarded env vars so HTTPS clone/push works
 # without prompting. Runs as the magesticai user; writes ~/.git-credentials
 # (mode 600) and points git at the `store` helper.
