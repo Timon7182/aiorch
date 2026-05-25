@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from ...websockets.events import broadcast_event
+from ..usage_recorder import record_project_usage
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,15 @@ class OpenAICompatProvider(ProviderStrategy):
 
             accumulated = ""
             stream_start = time.monotonic()
+            # OpenAI-spec servers may send a final chunk with `stream_options:
+            # {"include_usage": true}` opted-in containing real token totals.
+            # Track the latest value we observe and record it after the stream
+            # closes — fall back to estimates if the server never sends it.
+            final_usage: dict | None = None
+
+            # Ask the server to include usage on the final chunk. Harmless for
+            # servers that don't support it (extra payload key is ignored).
+            payload = {**payload, "stream_options": {"include_usage": True}}
 
             async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
                 async with client.stream(
@@ -144,6 +154,9 @@ class OpenAICompatProvider(ProviderStrategy):
                                 break
                             try:
                                 data = json.loads(data_str)
+                                usage_obj = data.get("usage")
+                                if isinstance(usage_obj, dict):
+                                    final_usage = usage_obj
                                 delta = data.get("choices", [{}])[0].get("delta", {})
                                 content = delta.get("content", "")
                                 if content:
@@ -157,17 +170,36 @@ class OpenAICompatProvider(ProviderStrategy):
                                 continue
 
             elapsed = time.monotonic() - stream_start
-            estimated_tokens = max(1, len(accumulated) // 4)
-            tokens_per_sec = round(estimated_tokens / elapsed, 1) if elapsed > 0 else 0
+            # Prefer real usage from the server's final chunk; fall back to a
+            # crude 4-chars-per-token estimate for servers that don't supply it.
+            if final_usage:
+                output_tokens = int(final_usage.get("completion_tokens", 0) or 0)
+                input_tokens = int(final_usage.get("prompt_tokens", 0) or 0)
+                record_project_usage(
+                    project_path=project_path,
+                    project_id=project_id,
+                    feature="insights",
+                    phase="chat",
+                    model=effective_model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
+                reported_tokens = output_tokens or max(1, len(accumulated) // 4)
+                estimated_flag = False
+            else:
+                reported_tokens = max(1, len(accumulated) // 4)
+                estimated_flag = True
+
+            tokens_per_sec = round(reported_tokens / elapsed, 1) if elapsed > 0 else 0
 
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
                 "type": "done",
                 "metrics": {
-                    "outputTokens": estimated_tokens,
+                    "outputTokens": reported_tokens,
                     "tokensPerSecond": tokens_per_sec,
                     "elapsedSeconds": round(elapsed, 1),
-                    "estimated": True,
+                    "estimated": estimated_flag,
                 },
             })
 

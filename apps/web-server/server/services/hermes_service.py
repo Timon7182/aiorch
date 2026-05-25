@@ -35,6 +35,11 @@ from typing import Any
 import httpx
 
 from . import docs_index_service
+from .project_resolve import (
+    resolve_project_dir as _resolve_project_path,
+    resolve_project_info as _resolve_project_info,
+)
+from .usage_recorder import record_project_usage
 
 logger = logging.getLogger(__name__)
 
@@ -79,29 +84,6 @@ class HermesRoute:
     model: str
     citations: list[dict[str, Any]]
     graph_context: str = field(default="")
-
-
-def _slugify(name: str) -> str:
-    return re.sub(r"[^a-z0-9-_]", "-", (name or "").lower()).strip("-") or ""
-
-
-def _resolve_project_path(project_slug: str) -> Path | None:
-    """Resolve a project slug to its on-disk path. Returns None on miss.
-
-    Duplicated from routes/transcripts.py — a third caller would justify a
-    shared helper, but two doesn't.
-    """
-    try:
-        from ..routes.projects import load_projects
-    except Exception:
-        return None
-    for pdata in load_projects().values():
-        name = pdata.get("name") or Path(pdata["path"]).name
-        if _slugify(name) == project_slug or pdata.get("id") == project_slug:
-            path = Path(pdata["path"])
-            if path.is_dir():
-                return path
-    return None
 
 
 def _resolve_graphify_bin() -> str | None:
@@ -256,6 +238,11 @@ async def stream_chat(query: str, project: str | None) -> AsyncIterator[dict[str
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1500},
     }
 
+    # Gemini sends `usageMetadata` on the final SSE chunk with cumulative
+    # totals — track the latest values we've seen so we can record them
+    # exactly once after the stream closes.
+    final_usage: dict[str, Any] | None = None
+
     try:
         async with httpx.AsyncClient(timeout=180) as client:
             async with client.stream(
@@ -283,6 +270,11 @@ async def stream_chat(query: str, project: str | None) -> AsyncIterator[dict[str
                         chunk = json.loads(payload)
                     except json.JSONDecodeError:
                         continue
+                    # Gemini's usageMetadata holds running totals; the final
+                    # chunk has the canonical count. Always overwrite.
+                    usage_md = chunk.get("usageMetadata")
+                    if isinstance(usage_md, dict):
+                        final_usage = usage_md
                     try:
                         text = chunk["candidates"][0]["content"]["parts"][0]["text"]
                     except (KeyError, IndexError, TypeError):
@@ -291,4 +283,25 @@ async def stream_chat(query: str, project: str | None) -> AsyncIterator[dict[str
                         yield {"type": "token", "value": text}
     except Exception as exc:
         yield {"type": "error", "value": f"LLM call failed: {exc!r}"}
+
+    # Record real token usage to .magestic-ai/usage/hermes.json so the
+    # dashboard can roll it into the project total. Anything that fails here
+    # is swallowed inside record_project_usage — never break the chat reply.
+    if final_usage and project:
+        info = _resolve_project_info(project)
+        if info:
+            project_id, project_path = info
+            record_project_usage(
+                project_path=project_path,
+                project_id=project_id,
+                feature="hermes",
+                phase=route.intent,
+                model=route.model,
+                input_tokens=int(final_usage.get("promptTokenCount", 0) or 0),
+                output_tokens=int(final_usage.get("candidatesTokenCount", 0) or 0),
+                cache_read_input_tokens=int(
+                    final_usage.get("cachedContentTokenCount", 0) or 0
+                ),
+            )
+
     yield {"type": "done"}

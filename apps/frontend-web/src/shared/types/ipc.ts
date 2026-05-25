@@ -23,6 +23,7 @@ import type {
   GraphitiValidationResult,
   GraphitiConnectionTestResult,
   GitStatus,
+  GitRepoInfo,
   CustomMcpServer,
   McpHealthCheckResult,
   McpTestConnectionResult,
@@ -131,6 +132,11 @@ export interface API {
   // Project operations
   addProject: (projectPath: string) => Promise<IPCResult<Project>>;
   cloneProject: (url: string, name?: string, targetDir?: string) => Promise<IPCResult<Project>>;
+  createProjectFromPrompt: (
+    prompt: string,
+    name?: string,
+    parentDir?: string,
+  ) => Promise<IPCResult<Project>>;
   removeProject: (projectId: string) => Promise<IPCResult>;
   getProjects: () => Promise<IPCResult<Project[]>>;
   updateProjectSettings: (projectId: string, settings: Partial<ProjectSettings>) => Promise<IPCResult>;
@@ -180,7 +186,7 @@ export interface API {
     upstream?: string;
     upstreamDefaultBranch?: string;
   }>>;
-  listWorktrees: (projectId: string) => Promise<IPCResult<WorktreeListResult>>;
+  listWorktrees: (projectId: string, repo?: string) => Promise<IPCResult<WorktreeListResult>>;
   worktreeOpenInIDE: (worktreePath: string, ide: SupportedIDE, customPath?: string) => Promise<IPCResult<{ opened: boolean }>>;
   worktreeOpenInTerminal: (worktreePath: string, terminal: SupportedTerminal, customPath?: string) => Promise<IPCResult<{ opened: boolean }>>;
   worktreeDetectTools: () => Promise<IPCResult<{ ides: Array<{ id: string; name: string; path: string; installed: boolean }>; terminals: Array<{ id: string; name: string; path: string; installed: boolean }> }>>;
@@ -199,6 +205,7 @@ export interface API {
   onTaskProfileSwitch?: (callback: (taskId: string, info: { oldProfileId?: string; newProfileId?: string; newProfileName?: string; reason?: string; timestamp?: string }) => void) => () => void;
   onTaskSubtaskUpdate?: (callback: (taskId: string, subtaskId: string, status: string, previousStatus?: string) => void) => () => void;
   onTaskUsage?: (callback: (taskId: string, usage: import('./usage').UsageEvent) => void) => () => void;
+  onProjectUsage?: (callback: (projectId: string, usage: import('./usage').UsageEvent) => void) => () => void;
 
   // Terminal operations
   createTerminal: (options: TerminalCreateOptions) => Promise<IPCResult>;
@@ -469,12 +476,13 @@ export interface API {
   ) => Promise<IPCResult<{ version: string; reason: string }>>;
 
   // Changelog git operations (for git-based changelog generation)
-  getChangelogBranches: (projectId: string) => Promise<IPCResult<GitBranchInfo[]>>;
-  getChangelogTags: (projectId: string) => Promise<IPCResult<GitTagInfo[]>>;
+  getChangelogBranches: (projectId: string, repo?: string) => Promise<IPCResult<GitBranchInfo[]>>;
+  getChangelogTags: (projectId: string, repo?: string) => Promise<IPCResult<GitTagInfo[]>>;
   getChangelogCommitsPreview: (
     projectId: string,
     options: GitHistoryOptions | BranchDiffOptions,
-    mode: 'git-history' | 'branch-diff'
+    mode: 'git-history' | 'branch-diff',
+    repo?: string
   ) => Promise<IPCResult<GitCommit[]>>;
   saveChangelogImage: (
     projectId: string,
@@ -557,6 +565,7 @@ export interface API {
   getCurrentGitBranch: (projectPath: string) => Promise<IPCResult<string | null>>;
   detectMainBranch: (projectPath: string) => Promise<IPCResult<string | null>>;
   checkGitStatus: (projectPath: string) => Promise<IPCResult<GitStatus>>;
+  getGitRepos: (projectPath: string) => Promise<IPCResult<GitRepoInfo[]>>;
   initializeGit: (projectPath: string) => Promise<IPCResult<InitializationResult>>;
 
   // Ollama model detection operations

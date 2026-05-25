@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # --------------------------------------------------------------------------
@@ -26,6 +26,7 @@ MemoryBackendType = Literal["graphiti", "file"]
 
 from ..config import get_settings
 from . import changelog, context, files, git, github
+from .git import run_git_command
 
 router = APIRouter()
 
@@ -537,6 +538,140 @@ async def clone_project(payload: ProjectClone):
     return response
 
 
+# --------------------------------------------------------------------------
+# Create from prompt
+# --------------------------------------------------------------------------
+
+
+_DEFAULT_GITIGNORE = (
+    "# Auto-generated gitignore\n"
+    "node_modules/\n"
+    ".env\n"
+    ".env.local\n"
+    "__pycache__/\n"
+    "*.pyc\n"
+    ".venv/\n"
+    "venv/\n"
+    ".magestic-ai/\n"
+    "dist/\n"
+    "build/\n"
+)
+
+
+def _slugify_for_folder(text: str, fallback: str = "project") -> str:
+    """Turn a free-form string into a safe folder name (matches _SAFE_FOLDER_RE)."""
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    words = re.findall(r"[A-Za-z0-9]+", first_line)[:6]
+    slug = "-".join(w.lower() for w in words)
+    slug = slug.strip("-.") or fallback
+    if not slug[0].isalnum() and slug[0] != "_":
+        slug = "p-" + slug
+    return slug[:60]
+
+
+class ProjectFromPrompt(BaseModel):
+    """Model for creating a fresh project from a natural-language prompt."""
+
+    prompt: str = Field(..., description="What the user wants built")
+    name: str | None = Field(None, description="Folder name (defaults to slugified prompt)")
+    parent_dir: str | None = Field(
+        None,
+        description="Absolute parent directory (defaults to PROJECTS_CLONE_DIR)",
+    )
+
+    @field_validator("prompt")
+    @classmethod
+    def _validate_prompt(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Prompt is required")
+        if len(v) > 20_000:
+            raise ValueError("Prompt is too long (max 20000 chars)")
+        return v
+
+
+@router.post("/from-prompt", status_code=status.HTTP_201_CREATED)
+async def create_project_from_prompt(payload: ProjectFromPrompt):
+    """Create a brand-new project directory from a natural-language prompt.
+
+    Scaffolds an empty directory, runs `git init`, drops a `.gitignore` and a
+    `README.md` containing the prompt, makes an initial commit, and registers
+    the project. The frontend then opens the Task Creation Wizard pre-filled
+    with the same prompt so agents can take over.
+    """
+    folder_name = (payload.name or _slugify_for_folder(payload.prompt)).strip()
+    if not _SAFE_FOLDER_RE.match(folder_name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Folder name may only contain letters, digits, '.', '_' and '-' "
+                   "(and may not start with a dot).",
+        )
+
+    parent = Path(payload.parent_dir).expanduser() if payload.parent_dir else _DEFAULT_CLONE_PARENT
+    if not parent.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="parent_dir must be an absolute path",
+        )
+    parent.mkdir(parents=True, exist_ok=True)
+    target = parent / folder_name
+
+    if target.exists() and any(target.iterdir()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Target path exists and is not empty: {target}",
+        )
+
+    target.mkdir(parents=True, exist_ok=True)
+    target_str = str(target)
+
+    # git init + .gitignore + README + initial commit. README captures the
+    # prompt so the agent has it as on-disk context even if the user navigates
+    # away before launching the first task.
+    init_result = run_git_command(["init"], target_str)
+    if not init_result["success"]:
+        shutil.rmtree(target, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"git init failed: {init_result.get('error')}",
+        )
+
+    (target / ".gitignore").write_text(_DEFAULT_GITIGNORE)
+    (target / "README.md").write_text(
+        f"# {folder_name}\n\n## Initial prompt\n\n{payload.prompt}\n"
+    )
+
+    run_git_command(["add", "-A"], target_str)
+    run_git_command(
+        ["commit", "-m", "Initial commit from prompt", "--allow-empty"],
+        target_str,
+    )
+
+    resolved = str(target.resolve())
+    projects = load_projects()
+    for pid, pdata in projects.items():
+        if pdata["path"] == resolved:
+            response = project_to_response(pid, pdata)
+            response["initialPrompt"] = payload.prompt
+            return response
+
+    project_id = str(uuid4())
+    now = datetime.now().isoformat()
+    project_data = {
+        "path": resolved,
+        "name": payload.name or folder_name,
+        "created_at": now,
+        "updated_at": now,
+    }
+    projects[project_id] = project_data
+    save_projects(projects)
+
+    response = project_to_response(project_id, project_data)
+    response["createdDirectory"] = True
+    response["initialPrompt"] = payload.prompt
+    return response
+
+
 @router.get("/{project_id}")
 async def get_project(project_id: str):
     """Get a specific project by ID."""
@@ -790,10 +925,16 @@ async def update_project_settings(project_id: str, settings: ProjectSettingsUpda
 
 
 @router.get("/{project_id}/worktrees")
-async def list_project_worktrees(project_id: str):
-    """List worktrees for a project with detailed stats."""
+async def list_project_worktrees(project_id: str, repo: str | None = Query(None)):
+    """List worktrees for a project with detailed stats.
+
+    For multi-repo projects, ``repo`` selects which child repo to inspect;
+    it must be one of the repos detected for the project path.
+    """
     import re
     import subprocess
+
+    from ..services.git_repos import resolve_repo_cwd
 
     projects = load_projects()
     if project_id not in projects:
@@ -803,13 +944,13 @@ async def list_project_worktrees(project_id: str):
         )
 
     project_data = projects[project_id]
-    project_path = Path(project_data["path"])
+    git_cwd = resolve_repo_cwd(project_data["path"], repo)
 
     # Get the base branch (current branch of main repo)
     try:
         base_result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(project_path),
+            cwd=git_cwd,
             capture_output=True,
             text=True,
             timeout=5
@@ -822,7 +963,7 @@ async def list_project_worktrees(project_id: str):
     try:
         result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            cwd=str(project_path),
+            cwd=git_cwd,
             capture_output=True,
             text=True,
             timeout=10
@@ -852,7 +993,7 @@ async def list_project_worktrees(project_id: str):
             branch = wt.get("branch", "")
 
             # Skip main worktree and bare repos
-            if wt.get("bare") or wt_path == str(project_path):
+            if wt.get("bare") or wt_path == git_cwd:
                 continue
 
             # Extract spec name from path (e.g., .magestic-ai/worktrees/tasks/001-feature)

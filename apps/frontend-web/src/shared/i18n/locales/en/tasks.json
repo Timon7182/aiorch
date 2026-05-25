@@ -21,12 +21,19 @@
     "byPhase": "By phase",
     "byModel": "By model",
     "byTask": "By task",
+    "byFeature": "By feature",
     "phases": {
       "planning": "Planning",
       "spec": "Spec",
       "coding": "Coding",
       "qa": "QA review",
       "qaFix": "QA fixing"
+    },
+    "features": {
+      "agent": "Agent runs",
+      "hermes": "Hermes",
+      "insights": "Insights chat",
+      "session": "Sessions"
     },
     "cols": {
       "spec": "Spec",
@@ -36,7 +43,18 @@
       "cacheRead": "Cache R",
       "cacheWrite": "Cache W",
       "cost": "Cost",
-      "updated": "Updated"
+      "updated": "Updated",
+      "model": "Model",
+      "messages": "Msgs"
+    },
+    "claudeCli": {
+      "title": "Claude CLI limits",
+      "session": "Session",
+      "weekly": "Weekly",
+      "resets": "Resets",
+      "recentActivity": "Recent activity (msgs/day)",
+      "byModel": "By model (all-time)",
+      "source": "Source: ~/.claude/stats-cache.json — same data as `claude /usage`."
     }
   },
   "status": {

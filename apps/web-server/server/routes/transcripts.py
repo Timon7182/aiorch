@@ -19,14 +19,13 @@ Why a separate route from /ingest-docs:
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
-from .projects import load_projects
+from ..services.project_resolve import resolve_project_dir
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -41,22 +40,6 @@ _ALLOWED_SUFFIXES = _AUDIO_SUFFIXES | _VIDEO_SUFFIXES | _TEXT_SUFFIXES
 # Generous — meeting recordings are routinely 100MB+. 500MB matches the
 # upper bound of what we want sitting in a project's working tree.
 _MAX_BYTES = 500 * 1024 * 1024
-
-
-def _slugify(name: str) -> str:
-    """Match AddProjectModal.tsx so projectSlug round-trips."""
-    return re.sub(r"[^a-z0-9-_]", "-", (name or "").lower()).strip("-") or ""
-
-
-def _resolve_project_dir(project_slug: str) -> Path | None:
-    """Find the registered project that owns this slug; return its path or None."""
-    for pdata in load_projects().values():
-        name = pdata.get("name") or Path(pdata["path"]).name
-        if _slugify(name) == project_slug or pdata.get("id") == project_slug:
-            project_path = Path(pdata["path"])
-            if project_path.is_dir():
-                return project_path
-    return None
 
 
 class TranscriptIngestResult(BaseModel):
@@ -79,7 +62,7 @@ async def ingest_transcripts(
     if not files:
         raise HTTPException(status_code=400, detail="no files in upload")
 
-    project_path = _resolve_project_dir(project)
+    project_path = resolve_project_dir(project)
     if project_path is None:
         raise HTTPException(
             status_code=404,
@@ -134,7 +117,7 @@ async def ingest_transcripts(
 @router.get("/projects/{project}/transcripts")
 async def list_transcripts(project: str) -> dict[str, Any]:
     """List files currently sitting in <project>/.magestic-ai/transcripts/."""
-    project_path = _resolve_project_dir(project)
+    project_path = resolve_project_dir(project)
     if project_path is None:
         raise HTTPException(status_code=404, detail=f"project {project!r} not registered")
     transcripts_dir = project_path / ".magestic-ai" / "transcripts"

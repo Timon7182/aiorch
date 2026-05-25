@@ -1763,6 +1763,37 @@ async def request_usage_update():
         # Get model usage info
         model_usage = stats.get("modelUsage", {})
         total_output_tokens = sum(m.get("outputTokens", 0) for m in model_usage.values())
+        total_input_tokens = sum(m.get("inputTokens", 0) for m in model_usage.values())
+
+        # Per-model breakdown for the dashboard's "Claude CLI" card. Keep
+        # raw counts so the frontend can format/sort as it likes.
+        models_breakdown = [
+            {
+                "model": name,
+                "inputTokens": int(m.get("inputTokens", 0) or 0),
+                "outputTokens": int(m.get("outputTokens", 0) or 0),
+                "cacheReadTokens": int(m.get("cacheReadTokens", 0) or 0),
+                "cacheCreationTokens": int(m.get("cacheCreationTokens", 0) or 0),
+                "messageCount": int(m.get("messageCount", 0) or 0),
+            }
+            for name, m in model_usage.items()
+            if isinstance(m, dict)
+        ]
+        models_breakdown.sort(key=lambda m: m["outputTokens"], reverse=True)
+
+        # Last 14 days of message counts (oldest → newest) for a sparkline.
+        # Falls back to whatever the cache has if fewer days are present.
+        recent_daily = sorted(
+            [
+                {
+                    "date": d.get("date"),
+                    "messageCount": int(d.get("messageCount", 0) or 0),
+                }
+                for d in daily_activity
+                if d.get("date")
+            ],
+            key=lambda d: d["date"],
+        )[-14:]
 
         return {
             "sessionPercent": session_percent,
@@ -1776,7 +1807,13 @@ async def request_usage_update():
             # Extra stats for tooltip
             "todayMessages": today_messages,
             "weeklyMessages": weekly_messages,
-            "totalOutputTokens": total_output_tokens
+            "totalOutputTokens": total_output_tokens,
+            "totalInputTokens": total_input_tokens,
+            # Extended stats for the dashboard's Claude CLI card
+            "modelsBreakdown": models_breakdown,
+            "recentDaily": recent_daily,
+            "dailyLimit": DAILY_LIMIT_ESTIMATE,
+            "weeklyLimit": WEEKLY_LIMIT_ESTIMATE,
         }
 
     except (json.JSONDecodeError, KeyError, TypeError):

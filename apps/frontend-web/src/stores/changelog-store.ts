@@ -17,6 +17,7 @@ import type {
 import { useTaskStore } from './task-store';
 import { useSettingsStore } from './settings-store';
 import { saveSettings } from './settings-store';
+import { useProjectStore } from './project-store';
 
 interface ChangelogState {
   // Data
@@ -374,10 +375,13 @@ export async function loadGitData(projectId: string): Promise<void> {
   store.setError(null);
 
   try {
+    // For multi-repo projects, read git data from the active child repo.
+    const repo = useProjectStore.getState().getActiveRepoPath(projectId);
+
     // Load branches and tags in parallel
     const [branchesResult, tagsResult] = await Promise.all([
-      window.API.getChangelogBranches(projectId),
-      window.API.getChangelogTags(projectId)
+      window.API.getChangelogBranches(projectId, repo),
+      window.API.getChangelogTags(projectId, repo)
     ]);
 
     if (branchesResult.success && branchesResult.data) {
@@ -475,7 +479,8 @@ export async function loadCommitsPreview(projectId: string): Promise<void> {
       return;
     }
 
-    const result = await window.API.getChangelogCommitsPreview(projectId, options, mode);
+    const repo = useProjectStore.getState().getActiveRepoPath(projectId);
+    const result = await window.API.getChangelogCommitsPreview(projectId, options, mode, repo);
 
     if (result.success && result.data) {
       store.setPreviewCommits(result.data);
@@ -550,7 +555,9 @@ export function generateChangelog(projectId: string): void {
     format: store.format,
     audience: store.audience,
     emojiLevel: store.emojiLevel !== 'none' ? store.emojiLevel : undefined,
-    customInstructions: store.customInstructions || undefined
+    customInstructions: store.customInstructions || undefined,
+    // For multi-repo projects, generate from the active child repo's history.
+    repo: useProjectStore.getState().getActiveRepoPath(projectId)
   };
 
   if (store.sourceMode === 'tasks') {

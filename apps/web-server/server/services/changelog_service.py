@@ -124,6 +124,15 @@ class ChangelogService:
             str(changelog_runner),
             "--project", str(project_path),
             "--source-mode", request.get("sourceMode", "tasks"),
+        ]
+
+        # For multi-repo projects, git history/diff is read from the selected
+        # child repo while project data still lives under the project root.
+        git_cwd = request.get("gitCwd")
+        if git_cwd and str(git_cwd) != str(project_path):
+            cmd.extend(["--git-cwd", str(git_cwd)])
+
+        cmd += [
             "--version", request.get("version", "1.0.0"),
             "--date", request.get("date", datetime.now().strftime("%Y-%m-%d")),
             "--format", request.get("format", "keep-a-changelog"),

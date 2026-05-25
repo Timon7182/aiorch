@@ -277,6 +277,22 @@ async def emit_task_logs_stream(spec_id: str, chunk: dict):
     await broadcast_event("task-logs:stream", {"specId": spec_id, "chunk": chunk})
 
 
+async def emit_project_usage(project_id: str, usage: dict):
+    """Emit a token usage event scoped to a project (not tied to any spec).
+
+    Used by in-process LLM features (Hermes, Insights chat) that record
+    usage at the project root rather than under a spec dir. The dashboard
+    rolls these into the same project totals as per-task agent usage.
+    """
+    import logging
+    logging.getLogger(__name__).debug(
+        f"[WebSocket] Emitting project:usage - projectId: {project_id}, "
+        f"feature: {usage.get('feature')}, in: {usage.get('input_tokens')}, "
+        f"out: {usage.get('output_tokens')}"
+    )
+    await broadcast_event("project:usage", {"projectId": project_id, "usage": usage})
+
+
 async def emit_task_usage(task_id: str, usage: dict):
     """Emit a token usage event for a task.
 

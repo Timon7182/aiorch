@@ -14,9 +14,11 @@ export interface UsageTotals {
 
 export interface UsageEvent {
   phase: string | null;
+  /** Set on session features (hermes, insights). Absent for agent runs. */
+  feature?: string | null;
   model: string | null;
-  agent: string | null;
-  subtask: string | null;
+  agent?: string | null;
+  subtask?: string | null;
   input_tokens: number;
   output_tokens: number;
   cache_read_input_tokens: number;
@@ -51,6 +53,12 @@ export interface ProjectUsage {
   totals: UsageTotals;
   byPhase: Record<string, UsageTotals>;
   byModel: Record<string, UsageTotals>;
+  /**
+   * Token usage grouped by feature: "agent" (per-spec task runs),
+   * "hermes" (Hermes chat), "insights" (project Insights chat). Lets the
+   * dashboard show where tokens are actually being spent.
+   */
+  byFeature: Record<string, UsageTotals>;
   tasks: ProjectTaskUsageSummary[];
   taskCount: number;
   tasksWithData: number;

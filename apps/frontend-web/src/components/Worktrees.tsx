@@ -47,6 +47,9 @@ interface WorktreesProps {
 export function Worktrees({ projectId }: WorktreesProps) {
   const projects = useProjectStore((state) => state.projects);
   const selectedProject = projects.find((p) => p.id === projectId);
+  // For multi-repo projects, scope worktrees to the active child repo.
+  const activeRepoByProject = useProjectStore((state) => state.activeRepoByProject);
+  const reposByProject = useProjectStore((state) => state.reposByProject);
   const tasks = useTaskStore((state) => state.tasks);
 
   const [worktrees, setWorktrees] = useState<WorktreeListItem[]>([]);
@@ -67,6 +70,12 @@ export function Worktrees({ projectId }: WorktreesProps) {
   // Cleanup empty worktrees state
   const [isCleaningUp, setIsCleaningUp] = useState(false);
 
+  // Active repo path for multi-repo projects (undefined for single-repo)
+  const repos = reposByProject[projectId] ?? [];
+  const activeRepoPath = repos.length > 1
+    ? (activeRepoByProject[projectId] ?? repos[0]?.path)
+    : undefined;
+
   // Load worktrees
   const loadWorktrees = useCallback(async () => {
     if (!projectId) return;
@@ -75,7 +84,7 @@ export function Worktrees({ projectId }: WorktreesProps) {
     setError(null);
 
     try {
-      const result = await window.API.listWorktrees(projectId);
+      const result = await window.API.listWorktrees(projectId, activeRepoPath);
       if (result.success && result.data) {
         setWorktrees(result.data.worktrees);
       } else {
@@ -86,9 +95,9 @@ export function Worktrees({ projectId }: WorktreesProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, activeRepoPath]);
 
-  // Load on mount and when project changes
+  // Load on mount and when project (or active repo) changes
   useEffect(() => {
     loadWorktrees();
   }, [loadWorktrees]);

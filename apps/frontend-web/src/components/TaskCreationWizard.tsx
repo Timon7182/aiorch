@@ -57,12 +57,18 @@ interface TaskCreationWizardProps {
   projectId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Pre-fill the title field when the wizard opens (only when no draft exists). */
+  initialTitle?: string;
+  /** Pre-fill the description field when the wizard opens (only when no draft exists). */
+  initialDescription?: string;
 }
 
 export function TaskCreationWizard({
   projectId,
   open,
-  onOpenChange
+  onOpenChange,
+  initialTitle,
+  initialDescription
 }: TaskCreationWizardProps) {
   const { t } = useTranslation('tasks');
 
@@ -193,9 +199,14 @@ export function TaskCreationWizard({
         setThinkingLevel(selectedProfile.thinkingLevel);
         setPhaseModels(settings.customPhaseModels || selectedProfile.phaseModels || DEFAULT_PHASE_MODELS);
         setPhaseThinking(settings.customPhaseThinking || selectedProfile.phaseThinking || DEFAULT_PHASE_THINKING);
+        // Seed title/description from caller-supplied initial values (e.g. the
+        // prompt entered when creating the project). Skip when restoring a
+        // draft so we never clobber the user's in-progress edits.
+        if (initialTitle) setTitle(initialTitle);
+        if (initialDescription) setDescription(initialDescription);
       }
     }
-  }, [open, projectId, settings.selectedAgentProfile, settings.customPhaseModels, settings.customPhaseThinking, selectedProfile.model, selectedProfile.thinkingLevel]);
+  }, [open, projectId, settings.selectedAgentProfile, settings.customPhaseModels, settings.customPhaseThinking, selectedProfile.model, selectedProfile.thinkingLevel, initialTitle, initialDescription]);
 
   // Fetch branches and project default branch when dialog opens
   useEffect(() => {

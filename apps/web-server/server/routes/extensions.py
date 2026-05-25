@@ -204,14 +204,20 @@ class TranscriptUpload(BaseModel):
 
 @router.post("/transcripts", tags=["Transcripts"])
 async def upload_transcript(req: TranscriptUpload) -> dict[str, Any]:
-    return transcripts_service.store(
-        project=req.project,
-        title=req.title,
-        content=req.content,
-        occurred_at=req.occurred_at,
-        participants=req.participants,
-        source=req.source,
-    )
+    try:
+        return transcripts_service.store(
+            project=req.project,
+            title=req.title,
+            content=req.content,
+            occurred_at=req.occurred_at,
+            participants=req.participants,
+            source=req.source,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"project {req.project!r} not registered or path missing",
+        ) from exc
 
 
 @router.get("/transcripts/{project}", tags=["Transcripts"])
@@ -223,6 +229,11 @@ async def list_transcripts(project: str) -> list[dict[str, Any]]:
 async def read_transcript(project: str, filename: str) -> dict[str, Any]:
     try:
         content = transcripts_service.read(project, filename)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"project {project!r} not registered or path missing",
+        ) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="transcript not found") from exc
     return {"filename": filename, "content": content}

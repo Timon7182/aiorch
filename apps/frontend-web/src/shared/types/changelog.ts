@@ -101,6 +101,9 @@ export interface ChangelogGenerationRequest {
   audience: ChangelogAudience;
   emojiLevel?: ChangelogEmojiLevel; // Optional emoji usage level
   customInstructions?: string;
+
+  // Selected child repo path for multi-repo projects (git ops run here)
+  repo?: string;
 }
 
 export interface ChangelogGenerationResult {

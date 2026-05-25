@@ -11,6 +11,8 @@ from pathlib import Path
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
+from ..services.git_repos import resolve_git_repos
+
 router = APIRouter()
 
 
@@ -33,6 +35,17 @@ def run_git_command(args: list[str], cwd: str) -> dict:
         return {"success": True, "output": result.stdout.strip()}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@router.get("/repos")
+async def get_git_repos(path: str = Query(...)):
+    """List the git repositories backing a project path.
+
+    Returns the path itself when it's a git repo, otherwise its immediate
+    child repos. Supports projects whose root folder holds multiple repos
+    (e.g. a parent containing backend/ and frontend/).
+    """
+    return {"success": True, "data": resolve_git_repos(path)}
 
 
 @router.get("/branches")
@@ -72,33 +85,58 @@ async def detect_main_branch(path: str = Query(...)):
 
 @router.get("/status")
 async def check_git_status(path: str = Query(...)):
-    """Check git status for a repository."""
-    # Check if it's a git repo
+    """Check git status for a project path.
+
+    Reports a project as git-backed if the path itself is a repo OR its
+    immediate children are repos (multi-repo projects). In the multi-repo
+    case, branch/commit info reflects the first child repo and ``repos``
+    lists every detected repo so the UI can offer a switcher.
+    """
+    repos = resolve_git_repos(path)
     git_dir = Path(path) / ".git"
-    if not git_dir.exists():
+
+    # Root is itself a git repo — original single-repo behavior.
+    if git_dir.exists():
+        branch_result = run_git_command(["branch", "--show-current"], path)
+        current_branch = branch_result.get("output") if branch_result["success"] else None
+        commit_result = run_git_command(["rev-parse", "HEAD"], path)
         return {
             "success": True,
             "data": {
-                "isGitRepo": False,
-                "hasCommits": False,
-                "currentBranch": None
+                "isGitRepo": True,
+                "hasCommits": commit_result["success"],
+                "currentBranch": current_branch,
+                "isMultiRepo": False,
+                "repos": repos,
             }
         }
 
-    # Get current branch
-    branch_result = run_git_command(["branch", "--show-current"], path)
-    current_branch = branch_result.get("output") if branch_result["success"] else None
+    # Root isn't a repo, but child repos exist — valid multi-repo project.
+    if repos:
+        first = repos[0]["path"]
+        branch_result = run_git_command(["branch", "--show-current"], first)
+        current_branch = branch_result.get("output") if branch_result["success"] else None
+        commit_result = run_git_command(["rev-parse", "HEAD"], first)
+        return {
+            "success": True,
+            "data": {
+                "isGitRepo": True,
+                "hasCommits": commit_result["success"],
+                "currentBranch": current_branch,
+                "isMultiRepo": True,
+                "repos": repos,
+            }
+        }
 
-    # Check for commits
-    commit_result = run_git_command(["rev-parse", "HEAD"], path)
-    has_commits = commit_result["success"]
-
+    # No git anywhere.
     return {
         "success": True,
         "data": {
-            "isGitRepo": True,
-            "hasCommits": has_commits,
-            "currentBranch": current_branch
+            "isGitRepo": False,
+            "hasCommits": False,
+            "currentBranch": None,
+            "isMultiRepo": False,
+            "repos": [],
         }
     }
 

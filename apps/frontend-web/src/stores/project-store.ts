@@ -1,8 +1,19 @@
 import { create } from 'zustand';
-import type { Project, ProjectSettings, AutoBuildVersionInfo, InitializationResult } from '../shared/types';
+import type { Project, ProjectSettings, AutoBuildVersionInfo, InitializationResult, GitRepoInfo } from '../shared/types';
 
 // localStorage keys for persisting project state (legacy - now using IPC)
 const LAST_SELECTED_PROJECT_KEY = 'lastSelectedProjectId';
+// Per-project active git repo (for multi-repo projects). Maps projectId -> repo path.
+const ACTIVE_REPO_KEY = 'activeRepoByProject';
+
+function loadActiveRepoMap(): Record<string, string> {
+  try {
+    const saved = localStorage.getItem(ACTIVE_REPO_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
 
 // Debounce timer for saving tab state
 let saveTabStateTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -18,6 +29,10 @@ interface ProjectState {
   openProjectIds: string[]; // Array of open project IDs
   activeProjectId: string | null; // Currently active tab
   tabOrder: string[]; // Order of tabs for drag and drop
+
+  // Multi-repo state: detected git repos and the active one per project
+  reposByProject: Record<string, GitRepoInfo[]>;
+  activeRepoByProject: Record<string, string>; // projectId -> repo path
 
   // Actions
   setProjects: (projects: Project[]) => void;
@@ -35,6 +50,11 @@ interface ProjectState {
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   restoreTabState: () => void;
   clearSwitchingState: () => void;
+
+  // Multi-repo actions
+  setProjectRepos: (projectId: string, repos: GitRepoInfo[]) => void;
+  setActiveRepo: (projectId: string, repoPath: string) => void;
+  getActiveRepoPath: (projectId: string) => string | undefined;
 
   // Selectors
   getSelectedProject: () => Project | undefined;
@@ -54,6 +74,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   openProjectIds: [],
   activeProjectId: null,
   tabOrder: [],
+
+  // Multi-repo state
+  reposByProject: {},
+  activeRepoByProject: loadActiveRepoMap(),
 
   setProjects: (projects) => set({ projects }),
 
@@ -189,6 +213,41 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   clearSwitchingState: () => set({ isSwitchingProject: false }),
+
+  // Multi-repo actions
+  setProjectRepos: (projectId, repos) =>
+    set((state) => {
+      const reposByProject = { ...state.reposByProject, [projectId]: repos };
+      // Default the active repo to the first detected repo if none chosen yet,
+      // or if the previously chosen one is no longer present.
+      const current = state.activeRepoByProject[projectId];
+      const stillValid = current && repos.some((r) => r.path === current);
+      let activeRepoByProject = state.activeRepoByProject;
+      if (!stillValid && repos.length > 0) {
+        activeRepoByProject = { ...activeRepoByProject, [projectId]: repos[0].path };
+        try {
+          localStorage.setItem(ACTIVE_REPO_KEY, JSON.stringify(activeRepoByProject));
+        } catch { /* ignore quota errors */ }
+      }
+      return { reposByProject, activeRepoByProject };
+    }),
+
+  setActiveRepo: (projectId, repoPath) =>
+    set((state) => {
+      const activeRepoByProject = { ...state.activeRepoByProject, [projectId]: repoPath };
+      try {
+        localStorage.setItem(ACTIVE_REPO_KEY, JSON.stringify(activeRepoByProject));
+      } catch { /* ignore quota errors */ }
+      return { activeRepoByProject };
+    }),
+
+  getActiveRepoPath: (projectId) => {
+    const state = get();
+    const repos = state.reposByProject[projectId];
+    // Single-repo (or unknown) projects: no override needed, callers use project.path.
+    if (!repos || repos.length <= 1) return undefined;
+    return state.activeRepoByProject[projectId] ?? repos[0]?.path;
+  },
 
   // Original selectors
   getSelectedProject: () => {
@@ -391,6 +450,37 @@ export async function cloneProject(
       return result.data;
     }
     throw new Error(result.error || 'Failed to clone project');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    store.setError(message);
+    throw error instanceof Error ? error : new Error(message);
+  }
+}
+
+/**
+ * Create a brand-new project from a natural-language prompt.
+ *
+ * Backend scaffolds the directory, runs git init, drops a README with the
+ * prompt, makes an initial commit, and registers the project. The returned
+ * Project carries `initialPrompt` so the caller can seed a Task Creation
+ * Wizard with the same text.
+ */
+export async function createProjectFromPrompt(
+  prompt: string,
+  name?: string,
+  parentDir?: string,
+): Promise<Project | null> {
+  const store = useProjectStore.getState();
+
+  try {
+    const result = await window.API.createProjectFromPrompt(prompt, name, parentDir);
+    if (result.success && result.data) {
+      store.addProject(result.data);
+      store.selectProject(result.data.id);
+      store.openProjectTab(result.data.id);
+      return result.data;
+    }
+    throw new Error(result.error || 'Failed to create project from prompt');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     store.setError(message);

@@ -11,7 +11,7 @@ import logging
 import re
 from pathlib import Path as FilePath
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel
 
 from ..services.insights_service import get_insights_service
@@ -97,6 +97,7 @@ class ChangelogGenerateRequest(BaseModel):
     taskIds: list[str] | None = None
     gitHistory: GitHistoryOptions | None = None
     branchDiff: BranchDiffOptions | None = None
+    repo: str | None = None  # selected child repo path for multi-repo projects
 
 
 class ChangelogSaveRequest(BaseModel):
@@ -116,6 +117,7 @@ class SuggestVersionCommitsRequest(BaseModel):
 class CommitsPreviewRequest(BaseModel):
     options: dict
     mode: str  # 'history' or 'branch-diff'
+    repo: str | None = None  # selected child repo path for multi-repo projects
 
 
 class SaveImageRequest(BaseModel):
@@ -197,6 +199,7 @@ async def load_task_specs(projectId: str = Path(...), request: LoadSpecsRequest 
 async def generate_changelog(projectId: str = Path(...), request: ChangelogGenerateRequest = ...):
     """Generate changelog using AI."""
     from ..services.changelog_service import get_changelog_service
+    from ..services.git_repos import resolve_repo_cwd
     from .projects import load_projects
 
     projects = load_projects()
@@ -204,6 +207,8 @@ async def generate_changelog(projectId: str = Path(...), request: ChangelogGener
         raise HTTPException(status_code=404, detail="Project not found")
 
     project_path = FilePath(projects[projectId]["path"])
+    # For multi-repo projects, git operations run in the selected child repo.
+    git_cwd = resolve_repo_cwd(projects[projectId]["path"], request.repo)
     service = get_changelog_service()
 
     # Check if already running
@@ -220,6 +225,7 @@ async def generate_changelog(projectId: str = Path(...), request: ChangelogGener
         "emojiLevel": request.emojiLevel,
         "customInstructions": request.customInstructions,
         "taskIds": request.taskIds,
+        "gitCwd": git_cwd,
     }
 
     # Add git history options if present
@@ -436,20 +442,22 @@ async def suggest_version_from_commits(projectId: str = Path(...), request: Sugg
 
 
 @router.get("/branches")
-async def get_changelog_branches(projectId: str = Path(...)):
+async def get_changelog_branches(projectId: str = Path(...), repo: str | None = Query(None)):
     """Get git branches for changelog diff.
 
     Returns GitBranchInfo objects with {name, isRemote, isCurrent} for frontend dropdown components.
+    For multi-repo projects, ``repo`` selects which child repo's branches to list.
     """
     import subprocess
 
+    from ..services.git_repos import resolve_repo_cwd
     from .projects import load_projects
 
     projects = load_projects()
     if projectId not in projects:
         return {"success": False, "error": f"Project {projectId} not found"}
 
-    project_path = projects[projectId]["path"]
+    project_path = resolve_repo_cwd(projects[projectId]["path"], repo)
 
     try:
         # Get current branch name
@@ -528,20 +536,22 @@ async def get_changelog_branches(projectId: str = Path(...)):
 
 
 @router.get("/tags")
-async def get_changelog_tags(projectId: str = Path(...)):
+async def get_changelog_tags(projectId: str = Path(...), repo: str | None = Query(None)):
     """Get git tags for changelog diff.
 
     Returns GitTagInfo objects with {name, date?, commit?} for frontend dropdown components.
+    For multi-repo projects, ``repo`` selects which child repo's tags to list.
     """
     import subprocess
 
+    from ..services.git_repos import resolve_repo_cwd
     from .projects import load_projects
 
     projects = load_projects()
     if projectId not in projects:
         return {"success": False, "error": f"Project {projectId} not found"}
 
-    project_path = projects[projectId]["path"]
+    project_path = resolve_repo_cwd(projects[projectId]["path"], repo)
 
     try:
         # Get all tags with their creation date and commit hash
@@ -595,13 +605,14 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
     """Get preview of commits for changelog."""
     import subprocess
 
+    from ..services.git_repos import resolve_repo_cwd
     from .projects import load_projects
 
     projects = load_projects()
     if projectId not in projects:
         return {"success": False, "error": f"Project {projectId} not found"}
 
-    project_path = projects[projectId]["path"]
+    project_path = resolve_repo_cwd(projects[projectId]["path"], request.repo)
     options = request.options
     mode = request.mode
 

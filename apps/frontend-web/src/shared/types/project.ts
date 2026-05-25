@@ -12,6 +12,8 @@ export interface Project {
   updatedAt: Date;
   /** Set when the backend created a new directory for this project */
   createdDirectory?: boolean;
+  /** Original prompt when the project was created via "From Prompt" mode */
+  initialPrompt?: string;
 }
 
 export interface ProjectSettings {
@@ -442,10 +444,18 @@ export interface InitializationResult {
   error?: string;
 }
 
+export interface GitRepoInfo {
+  name: string;
+  path: string;
+  isRoot: boolean;
+}
+
 export interface GitStatus {
   isGitRepo: boolean;
   hasCommits: boolean;
   currentBranch: string | null;
+  isMultiRepo?: boolean;
+  repos?: GitRepoInfo[];
   error?: string;
 }
 

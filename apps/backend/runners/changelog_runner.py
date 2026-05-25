@@ -379,7 +379,8 @@ def generate_changelog(
     format_type: str,
     audience: str,
     emoji_level: str | None,
-    custom_instructions: str | None
+    custom_instructions: str | None,
+    git_path: Path | None = None
 ) -> str:
     """
     Main generation logic.
@@ -409,11 +410,15 @@ def generate_changelog(
     if not project_path.exists():
         raise ValueError(f"Project path does not exist: {project_path}")
 
+    # Git history/diff runs in git_path (a child repo for multi-repo projects);
+    # task/spec data still loads from project_path.
+    git_path = git_path or project_path
+
     # Check if git repo
     if source_mode in ["git-history", "branch-diff"]:
-        git_dir = project_path / ".git"
+        git_dir = git_path / ".git"
         if not git_dir.exists():
-            raise ValueError(f"Not a git repository: {project_path}")
+            raise ValueError(f"Not a git repository: {git_path}")
 
     # Load data based on source mode
     emit_phase(2, f"LOADING {source_mode.upper()}")
@@ -431,7 +436,7 @@ def generate_changelog(
             raise ValueError("No git history options provided")
 
         data = load_git_commits(
-            project_path,
+            git_path,
             history_type=git_history.get("type", "recent"),
             count=git_history.get("count", 25),
             since_date=git_history.get("sinceDate"),
@@ -445,7 +450,7 @@ def generate_changelog(
             raise ValueError("No branch diff options provided")
 
         data = load_branch_diff_commits(
-            project_path,
+            git_path,
             base_branch=branch_diff.get("baseBranch", "main"),
             compare_branch=branch_diff.get("compareBranch", "HEAD")
         )
@@ -582,6 +587,8 @@ def main():
 
     # Required arguments
     parser.add_argument("--project", type=str, required=True, help="Project path")
+    parser.add_argument("--git-cwd", type=str, default=None,
+                        help="Directory to run git in (child repo for multi-repo projects); defaults to --project")
     parser.add_argument("--source-mode", type=str, required=True,
                         choices=["tasks", "git-history", "branch-diff"],
                         help="Source mode")
@@ -629,6 +636,7 @@ def main():
 
     try:
         project_path = Path(args.project).resolve()
+        git_path = Path(args.git_cwd).resolve() if args.git_cwd else project_path
 
         # Build source-specific options
         task_ids = None
@@ -673,7 +681,8 @@ def main():
             format_type=args.format,
             audience=args.audience,
             emoji_level=args.emoji_level,
-            custom_instructions=args.custom_instructions
+            custom_instructions=args.custom_instructions,
+            git_path=git_path
         )
 
     except Exception as e:

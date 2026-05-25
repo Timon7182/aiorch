@@ -1,4 +1,13 @@
-"""Meeting transcripts: file-based storage under PROJECTS_DATA_DIR/transcripts/."""
+"""Meeting transcripts: stored inside each project at
+`<project>/.magestic-ai/transcripts/` so graphify picks them up on its next
+`graphify extract` pass.
+
+History: this service originally wrote under `PROJECTS_DATA_DIR/transcripts/`
+(the web-server's own data dir). That kept pasted transcripts out of reach of
+graphify, which only scans the project tree. We now converge on the same
+directory used by the multipart audio/video ingest route in
+`routes/transcripts.py`.
+"""
 
 from __future__ import annotations
 
@@ -7,18 +16,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..config import get_settings
+from .project_resolve import resolve_project_dir
 
 
-def _root() -> Path:
-    root = Path(get_settings().PROJECTS_DATA_DIR) / "transcripts"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+def _project_transcripts_dir(project_slug: str) -> Path:
+    """Resolve slug → `<project>/.magestic-ai/transcripts/`, creating it if missing.
 
-
-def _project_dir(project_slug: str) -> Path:
-    safe = "".join(c for c in project_slug if c.isalnum() or c in "-_") or "default"
-    d = _root() / safe
+    Raises LookupError if the slug doesn't match a registered project. Callers
+    in `routes/extensions.py` translate that into an HTTP 404.
+    """
+    project_path = resolve_project_dir(project_slug)
+    if project_path is None:
+        raise LookupError(project_slug)
+    d = project_path / ".magestic-ai" / "transcripts"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -36,7 +46,8 @@ def store(
     ts = occurred_at or datetime.now(timezone.utc).isoformat()
     safe_title = "".join(c for c in title if c.isalnum() or c in "-_ ").strip().replace(" ", "_") or "untitled"
     filename = f"{ts[:10]}_{safe_title}_{digest[:8]}.md"
-    path = _project_dir(project) / filename
+    transcripts_dir = _project_transcripts_dir(project)
+    path = transcripts_dir / filename
 
     front_matter = (
         "---\n"
@@ -52,7 +63,8 @@ def store(
     return {
         "project": project,
         "title": title,
-        "path": str(path.relative_to(_root())),
+        "filename": filename,
+        "path": str(Path(".magestic-ai") / "transcripts" / filename),
         "content_hash": digest,
         "occurred_at": ts,
         "bytes": path.stat().st_size,
@@ -60,8 +72,12 @@ def store(
 
 
 def list_for(project: str) -> list[dict[str, Any]]:
+    try:
+        transcripts_dir = _project_transcripts_dir(project)
+    except LookupError:
+        return []
     out: list[dict[str, Any]] = []
-    for p in sorted(_project_dir(project).glob("*.md")):
+    for p in sorted(transcripts_dir.glob("*.md")):
         stat = p.stat()
         out.append(
             {
@@ -74,8 +90,9 @@ def list_for(project: str) -> list[dict[str, Any]]:
 
 
 def read(project: str, filename: str) -> str:
+    transcripts_dir = _project_transcripts_dir(project)
     safe = Path(filename).name
-    p = _project_dir(project) / safe
+    p = transcripts_dir / safe
     if not p.exists():
         raise FileNotFoundError(filename)
     return p.read_text(encoding="utf-8")

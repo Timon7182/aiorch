@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FolderOpen, Search, Loader2, GitBranch, Package, FileCode, CheckCircle, FileText, FolderPlus, Upload, X } from 'lucide-react';
+import { FolderOpen, Search, Loader2, GitBranch, Package, FileCode, CheckCircle, FileText, FolderPlus, Upload, X, Wand2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Textarea } from './ui/textarea';
 import { ScrollArea } from './ui/scroll-area';
 import {
   Dialog,
@@ -14,11 +15,11 @@ import {
   DialogTitle
 } from './ui/dialog';
 import { cn } from '../lib/utils';
-import { addProject, cloneProject } from '../stores/project-store';
+import { addProject, cloneProject, createProjectFromPrompt } from '../stores/project-store';
 import { getAuthHeaders } from '../lib/auth';
 import type { Project } from '../shared/types';
 
-type AddMode = 'discover' | 'custom' | 'clone';
+type AddMode = 'discover' | 'custom' | 'clone' | 'prompt';
 
 function deriveCloneName(url: string): string {
   let name = url.trim().replace(/\/+$/, '');
@@ -90,6 +91,8 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
   const [cloneUrl, setCloneUrl] = useState('');
   const [cloneName, setCloneName] = useState('');
   const cloneNameTouched = useRef(false);
+  const [promptText, setPromptText] = useState('');
+  const [promptName, setPromptName] = useState('');
   const [showClaudeReadyOnly, setShowClaudeReadyOnly] = useState(false);
   const [createdDirPath, setCreatedDirPath] = useState<string | null>(null);
 
@@ -152,6 +155,8 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
       setCloneUrl('');
       setCloneName('');
       cloneNameTouched.current = false;
+      setPromptText('');
+      setPromptName('');
       setShowClaudeReadyOnly(false);
       setError(null);
       setCreatedDirPath(null);
@@ -174,10 +179,35 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
     if (project.createdDirectory) {
       setCreatedDirPath(project.path);
     }
+    // Prompt-mode projects bypass the doc-upload step — App.tsx opens the
+    // Task Creation Wizard pre-filled with the prompt instead.
+    if (project.initialPrompt) {
+      onOpenChange(false);
+      return;
+    }
     setAddedProject(project);
   };
 
   const handleAddProject = async () => {
+    if (mode === 'prompt') {
+      const text = promptText.trim();
+      if (!text) {
+        setError('Please describe what you want built');
+        return;
+      }
+      setIsAdding(true);
+      setError(null);
+      try {
+        const project = await createProjectFromPrompt(text, promptName.trim() || undefined);
+        if (project) completeAdd(project);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to create project from prompt');
+      } finally {
+        setIsAdding(false);
+      }
+      return;
+    }
+
     if (mode === 'clone') {
       const url = cloneUrl.trim();
       if (!url) {
@@ -394,6 +424,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
               { id: 'discover', label: 'Discover', icon: Search },
               { id: 'custom', label: 'Custom path', icon: FolderOpen },
               { id: 'clone', label: 'Clone from Git URL', icon: GitBranch },
+              { id: 'prompt', label: 'From prompt', icon: Wand2 },
             ] as const).map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
@@ -554,6 +585,38 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
             </div>
           )}
 
+          {/* From prompt */}
+          {mode === 'prompt' && (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="prompt-text">What do you want to build?</Label>
+                <Textarea
+                  id="prompt-text"
+                  placeholder="e.g. A small FastAPI service that exposes a /summarize endpoint backed by Claude…"
+                  value={promptText}
+                  onChange={(e) => setPromptText(e.target.value)}
+                  rows={5}
+                  autoFocus
+                />
+                <p className="text-xs text-muted-foreground">
+                  A fresh git repo is created in the server&apos;s projects directory.
+                  Your prompt becomes the README and is pre-filled in the Task
+                  Creation Wizard so agents can start immediately.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="prompt-name">Folder name (optional)</Label>
+                <Input
+                  id="prompt-name"
+                  placeholder="auto-generated from prompt"
+                  value={promptName}
+                  onChange={(e) => setPromptName(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Directory created info */}
           {createdDirPath && (
             <div className="text-sm text-green-700 dark:text-green-400 bg-green-500/10 rounded-lg p-3 flex items-center gap-2">
@@ -581,12 +644,13 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
               isScanning ||
               (mode === 'discover' && !selectedProject) ||
               (mode === 'custom' && !customPath.trim()) ||
-              (mode === 'clone' && !cloneUrl.trim())
+              (mode === 'clone' && !cloneUrl.trim()) ||
+              (mode === 'prompt' && !promptText.trim())
             }
           >
             {isAdding
-              ? mode === 'clone' ? 'Cloning...' : 'Adding...'
-              : mode === 'clone' ? 'Clone & Add' : 'Add Project'}
+              ? mode === 'clone' ? 'Cloning...' : mode === 'prompt' ? 'Creating...' : 'Adding...'
+              : mode === 'clone' ? 'Clone & Add' : mode === 'prompt' ? 'Create & Start' : 'Add Project'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -35,6 +35,8 @@ interface UsageState {
   fetchProjectUsage: (projectId: string) => Promise<void>;
   fetchTaskUsage: (taskId: string) => Promise<void>;
   ingestUsageEvent: (taskId: string, event: UsageEvent) => void;
+  /** Live merge for non-task features (Hermes, Insights chat). */
+  ingestProjectUsageEvent: (projectId: string, event: UsageEvent) => void;
   clearProject: (projectId: string) => void;
 }
 
@@ -190,11 +192,18 @@ export const useUsageStore = create<UsageState>((set, get) => ({
               )
             : [...existingSummaries, nextSummary];
 
+        const projByFeature = bumpBucket(
+          existingProject.byFeature ?? {},
+          event.feature ?? 'agent',
+          event,
+        );
+
         nextProject = {
           ...existingProject,
           totals: projTotals,
           byPhase: projByPhase,
           byModel: projByModel,
+          byFeature: projByFeature,
           tasks: nextSummaries,
           tasksWithData: nextSummaries.filter((t) => t.hasData).length,
           taskCount: Math.max(existingProject.taskCount, nextSummaries.length),
@@ -206,6 +215,41 @@ export const useUsageStore = create<UsageState>((set, get) => ({
         projectUsage: nextProject
           ? { ...state.projectUsage, [projectId]: nextProject }
           : state.projectUsage,
+      };
+    });
+  },
+
+  ingestProjectUsageEvent: (projectId, event) => {
+    // Project-scoped usage (Hermes, Insights chat) — no taskId, so we only
+    // bump the project rollup, not any per-task entry. Skipped silently when
+    // the project hasn't been fetched yet (next fetch will pick it up).
+    set((state) => {
+      const existing = state.projectUsage[projectId];
+      if (!existing) return state;
+      const featureKey = event.feature ?? 'session';
+      return {
+        projectUsage: {
+          ...state.projectUsage,
+          [projectId]: {
+            ...existing,
+            totals: addTotals(existing.totals, { ...event, calls: 1 }),
+            byPhase: bumpBucket(
+              existing.byPhase,
+              event.phase ?? featureKey,
+              event,
+            ),
+            byModel: bumpBucket(
+              existing.byModel,
+              event.model ?? 'unknown',
+              event,
+            ),
+            byFeature: bumpBucket(
+              existing.byFeature ?? {},
+              featureKey,
+              event,
+            ),
+          },
+        },
       };
     });
   },
@@ -226,14 +270,21 @@ export const useUsageStore = create<UsageState>((set, get) => ({
  */
 export function initUsageWebSocketBridge(): () => void {
   const api = (window as Window & { API?: typeof window.API }).API;
+  // Subscribe to project:usage too — fire-and-forget, ignores absence.
+  const unsubProject = api?.onProjectUsage?.((projectId, usage) => {
+    useUsageStore.getState().ingestProjectUsageEvent(projectId, usage);
+  });
   if (!api?.onTaskUsage) {
     log.warn('window.API.onTaskUsage not available — usage live updates disabled');
-    return () => {};
+    return () => unsubProject?.();
   }
-  const unsubscribe = api.onTaskUsage((taskId, usage) => {
+  const unsubTask = api.onTaskUsage((taskId, usage) => {
     useUsageStore.getState().ingestUsageEvent(taskId, usage);
   });
-  return unsubscribe;
+  return () => {
+    unsubTask();
+    unsubProject?.();
+  };
 }
 
 /** Convenience selectors. */

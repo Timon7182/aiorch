@@ -111,6 +111,9 @@ export function Sidebar({
   const { t } = useTranslation(['navigation', 'dialogs', 'common']);
   const projects = useProjectStore((state) => state.projects);
   const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
+  const reposByProject = useProjectStore((state) => state.reposByProject);
+  const activeRepoByProject = useProjectStore((state) => state.activeRepoByProject);
+  const setActiveRepo = useProjectStore((state) => state.setActiveRepo);
   const settings = useSettingsStore((state) => state.settings);
   const logout = useAuthStore((state) => state.logout);
 
@@ -152,6 +155,12 @@ export function Sidebar({
   skippedInitRef.current = skippedInit;
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+
+  // Multi-repo switcher: only relevant when a project's root holds >1 git repo.
+  const projectRepos = selectedProjectId ? (reposByProject[selectedProjectId] ?? []) : [];
+  const isMultiRepo = projectRepos.length > 1;
+  const activeRepoPath = selectedProjectId ? activeRepoByProject[selectedProjectId] : undefined;
+  const activeRepo = projectRepos.find((r) => r.path === activeRepoPath) ?? projectRepos[0];
 
   // Load env config when project changes to check GitHub enabled state
   useEffect(() => {
@@ -195,10 +204,20 @@ export function Sidebar({
           const result = await window.API.checkGitStatus(project.path);
           if (result.success && result.data) {
             setGitStatus(result.data);
-            // Show git setup modal if project is not a git repo or has no commits
-            // BUT only if user hasn't skipped it for this project
-            // Use ref to avoid re-running effect when skippedGitSetup changes
-            if ((!result.data.isGitRepo || !result.data.hasCommits) && !skippedGitSetupRef.current.has(project.id)) {
+            // Record detected repos so the switcher can offer child repos for
+            // multi-repo projects (parent folder holding e.g. backend/ + frontend/).
+            if (result.data.repos) {
+              useProjectStore.getState().setProjectRepos(project.id, result.data.repos);
+            }
+            // Show git setup modal if project is not a git repo or has no commits.
+            // Skip for multi-repo projects (the repos live in child folders, so
+            // initializing git at the parent root would be wrong) and for
+            // projects the user has already dismissed.
+            if (
+              (!result.data.isGitRepo || !result.data.hasCommits) &&
+              !result.data.isMultiRepo &&
+              !skippedGitSetupRef.current.has(project.id)
+            ) {
               setShowGitSetupModal(true);
             }
           }
@@ -412,6 +431,58 @@ export function Sidebar({
                   </button>
                 </PopoverContent>
               </Popover>
+
+              {/* Repo switcher — only for projects whose root holds multiple git repos */}
+              {isMultiRepo && (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="mb-2 flex w-full items-center justify-between gap-2 rounded-lg border border-border/60 bg-accent/30 px-3 py-1.5 text-left hover:bg-accent/50 transition-colors"
+                      title={activeRepo?.path}
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <GitBranch className="h-3.5 w-3.5 shrink-0 text-primary" />
+                        <span className="truncate text-xs font-medium">
+                          {activeRepo?.name ?? 'Select repo'}
+                        </span>
+                      </div>
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-72 p-1" align="start" side="right">
+                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                      Repositories ({projectRepos.length})
+                    </div>
+                    <Separator className="my-1" />
+                    {projectRepos.map((repo) => {
+                      const isActive = repo.path === (activeRepo?.path);
+                      return (
+                        <button
+                          key={repo.path}
+                          type="button"
+                          onClick={() => selectedProjectId && setActiveRepo(selectedProjectId, repo.path)}
+                          className={cn(
+                            'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent/50',
+                            isActive && 'bg-accent'
+                          )}
+                        >
+                          <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+                            {isActive && <Check className="h-3.5 w-3.5" />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">{repo.name}</div>
+                            <div className="truncate text-[10px] text-muted-foreground/60" title={repo.path}>
+                              {repo.path}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </PopoverContent>
+                </Popover>
+              )}
+
               <nav className="space-y-1">
                 {visibleNavItems.map(renderNavItem)}
               </nav>

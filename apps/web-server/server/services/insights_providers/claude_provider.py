@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ...websockets.events import broadcast_event
+from ..usage_recorder import record_project_usage
 from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
 logger = logging.getLogger(__name__)
@@ -269,6 +270,31 @@ class ClaudeProvider(ProviderStrategy):
                                     "type": "text",
                                     "content": result,
                                 })
+                            # The CLI's `result` event carries the canonical
+                            # per-turn token totals + SDK-computed cost.
+                            # Record exactly once per send_message() call.
+                            cli_usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
+                            if cli_usage:
+                                cli_cost = data.get("total_cost_usd")
+                                cli_model = data.get("model") or (model_config.get("model") if model_config else model)
+                                record_project_usage(
+                                    project_path=project_path,
+                                    project_id=project_id,
+                                    feature="insights",
+                                    phase="chat",
+                                    model=cli_model,
+                                    input_tokens=int(cli_usage.get("input_tokens", 0) or 0),
+                                    output_tokens=int(cli_usage.get("output_tokens", 0) or 0),
+                                    cache_read_input_tokens=int(
+                                        cli_usage.get("cache_read_input_tokens", 0) or 0
+                                    ),
+                                    cache_creation_input_tokens=int(
+                                        cli_usage.get("cache_creation_input_tokens", 0) or 0
+                                    ),
+                                    cost_usd=(
+                                        float(cli_cost) if cli_cost is not None else None
+                                    ),
+                                )
 
                         continue
                     except json.JSONDecodeError:

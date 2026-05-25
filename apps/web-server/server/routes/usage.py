@@ -139,20 +139,53 @@ def _project_specs(project_id: str) -> tuple[Path, list[Path]]:
     return project_path, sorted(d for d in specs_dir.iterdir() if d.is_dir())
 
 
+def _load_project_session_usage(project_path: Path) -> dict[str, dict[str, Any]]:
+    """Load all project-level session usage files (Hermes, Insights chat).
+
+    Returns `{feature: usage_dict}`. Each usage_dict has the same shape as
+    a per-spec usage.json (totals/by_phase/by_model/events).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    usage_dir = project_path / ".magestic-ai" / "usage"
+    if not usage_dir.exists():
+        return out
+    for file in usage_dir.iterdir():
+        if not file.is_file() or file.suffix != ".json":
+            continue
+        feature = file.stem  # e.g. "hermes", "insights"
+        try:
+            data = json.loads(file.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(f"[usage] failed to read {file}: {exc}")
+            continue
+        data.setdefault("totals", _empty_totals())
+        data.setdefault("by_phase", {})
+        data.setdefault("by_model", {})
+        data.setdefault("events", [])
+        out[feature] = data
+    return out
+
+
 @router.get("/projects/{project_id}")
 async def get_project_usage(project_id: str) -> dict[str, Any]:
-    """Aggregate token usage across every task in a project."""
-    _project_path, spec_dirs = _project_specs(project_id)
+    """Aggregate token usage across every task + session feature in a project."""
+    project_path, spec_dirs = _project_specs(project_id)
 
     totals = _empty_totals()
     by_phase: dict[str, dict[str, Any]] = {}
     by_model: dict[str, dict[str, Any]] = {}
+    # New "by feature" axis: spec-runs vs. hermes vs. insights chat. The
+    # frontend uses this to break down what's burning tokens on each project.
+    by_feature: dict[str, dict[str, Any]] = {}
     tasks_summary: list[dict[str, Any]] = []
 
+    # --- Per-spec (agent task) usage ----------------------------------------
+    spec_feature_totals = _empty_totals()
     for spec_dir in spec_dirs:
         usage = _load_usage(spec_dir)
         if usage is not None:
             _accumulate(totals, usage["totals"])
+            _accumulate(spec_feature_totals, usage["totals"])
             for phase, phase_data in usage["by_phase"].items():
                 bucket = by_phase.setdefault(phase, _empty_totals())
                 _accumulate(bucket, phase_data)
@@ -160,12 +193,27 @@ async def get_project_usage(project_id: str) -> dict[str, Any]:
                 bucket = by_model.setdefault(model, _empty_totals())
                 _accumulate(bucket, model_data)
         tasks_summary.append(_summarize_task(project_id, spec_dir))
+    if spec_feature_totals["calls"] > 0:
+        by_feature["agent"] = spec_feature_totals
+
+    # --- Session usage (Hermes, Insights chat) ------------------------------
+    for feature, usage in _load_project_session_usage(project_path).items():
+        _accumulate(totals, usage["totals"])
+        feature_bucket = by_feature.setdefault(feature, _empty_totals())
+        _accumulate(feature_bucket, usage["totals"])
+        for phase, phase_data in usage["by_phase"].items():
+            bucket = by_phase.setdefault(phase, _empty_totals())
+            _accumulate(bucket, phase_data)
+        for model, model_data in usage["by_model"].items():
+            bucket = by_model.setdefault(model, _empty_totals())
+            _accumulate(bucket, model_data)
 
     return {
         "projectId": project_id,
         "totals": totals,
         "byPhase": by_phase,
         "byModel": by_model,
+        "byFeature": by_feature,
         "tasks": tasks_summary,
         "taskCount": len(tasks_summary),
         "tasksWithData": sum(1 for t in tasks_summary if t["hasData"]),
@@ -191,6 +239,11 @@ async def get_global_usage() -> dict[str, Any]:
                 if usage is not None:
                     _accumulate(proj_totals, usage["totals"])
                     _accumulate(totals, usage["totals"])
+        # Fold in Hermes/Insights chat usage so global stats match the
+        # per-project page.
+        for _feature, usage in _load_project_session_usage(project_path).items():
+            _accumulate(proj_totals, usage["totals"])
+            _accumulate(totals, usage["totals"])
         per_project.append({
             "projectId": project_id,
             "name": project_data.get("name") or Path(project_data["path"]).name,

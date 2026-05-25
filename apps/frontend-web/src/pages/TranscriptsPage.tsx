@@ -1,21 +1,41 @@
 /**
  * Meeting transcripts — upload paste/file, list, view.
  * Uses /api/ext/transcripts POST + /api/ext/transcripts/{project} GET.
+ *
+ * Also overlays graphify status from /api/projects/{id}/docs/status so the
+ * user can tell at a glance which transcripts are already in the knowledge
+ * graph and which ones need a fresh `graphify extract`.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileAudio, Upload, RefreshCw, Eye, Calendar, Users as UsersIcon } from 'lucide-react';
+import {
+  AlertTriangle,
+  Calendar,
+  CheckCircle2,
+  Eye,
+  FileAudio,
+  Network,
+  RefreshCw,
+  Upload,
+  Users as UsersIcon,
+} from 'lucide-react';
 
 import { getAuthHeaders } from '../lib/auth';
 import { useProjectStore } from '../stores/project-store';
 
 type TranscriptMeta = {
   filename: string;
-  title: string;
+  title?: string;
   occurred_at?: string | null;
   participants?: string[] | null;
   source?: string | null;
   size?: number;
+  modified?: string;
+};
+
+type DocsGraphStatus = {
+  has_graph: boolean;
+  last_graphify?: string | null;
 };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -48,6 +68,7 @@ export function TranscriptsPage() {
   const slug = useMemo(() => projectSlug(currentProject?.name, currentProject?.id), [currentProject]);
 
   const [list, setList] = useState<TranscriptMeta[]>([]);
+  const [docsStatus, setDocsStatus] = useState<DocsGraphStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<{ filename: string; content: string } | null>(null);
@@ -62,18 +83,25 @@ export function TranscriptsPage() {
   const refresh = useCallback(async () => {
     if (!currentProject) {
       setList([]);
+      setDocsStatus(null);
       return;
     }
     setLoading(true);
     setError(null);
-    try {
-      const data = await api<TranscriptMeta[]>(`/api/ext/transcripts/${encodeURIComponent(slug)}`);
-      setList(data);
-    } catch (e) {
-      setError(`Could not load transcripts: ${(e as Error).message}`);
-    } finally {
-      setLoading(false);
+    // Fetch transcripts and docs status in parallel. The status call is
+    // best-effort — if it fails we still render the list, just without
+    // graphify badges.
+    const [listRes, statusRes] = await Promise.allSettled([
+      api<TranscriptMeta[]>(`/api/ext/transcripts/${encodeURIComponent(slug)}`),
+      api<DocsGraphStatus>(`/api/projects/${encodeURIComponent(currentProject.id)}/docs/status`),
+    ]);
+    if (listRes.status === 'fulfilled') {
+      setList(listRes.value);
+    } else {
+      setError(`Could not load transcripts: ${(listRes.reason as Error).message}`);
     }
+    setDocsStatus(statusRes.status === 'fulfilled' ? statusRes.value : null);
+    setLoading(false);
   }, [currentProject, slug]);
 
   useEffect(() => {
@@ -128,6 +156,19 @@ export function TranscriptsPage() {
     }
   };
 
+  // A transcript is "pending" if it was written after the last graphify run
+  // (or if there's no graph yet at all). The backend writes `modified` in
+  // UTC and `last_graphify` in local-naive ISO — Date.parse handles both
+  // shapes; small skew is acceptable for a "stale?" hint.
+  const graphRunAt = docsStatus?.last_graphify ? Date.parse(docsStatus.last_graphify) : null;
+  const isPending = (t: TranscriptMeta): boolean => {
+    if (!docsStatus?.has_graph || graphRunAt === null || Number.isNaN(graphRunAt)) return true;
+    if (!t.modified) return false;
+    const modifiedAt = Date.parse(t.modified);
+    return !Number.isNaN(modifiedAt) && modifiedAt > graphRunAt;
+  };
+  const pendingCount = list.filter(isPending).length;
+
   if (!currentProject) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -158,6 +199,40 @@ export function TranscriptsPage() {
           <div className="rounded-lg bg-destructive/10 border border-destructive/50 text-destructive px-4 py-3 text-sm">
             {error}
           </div>
+        )}
+
+        {docsStatus && list.length > 0 && (
+          pendingCount > 0 ? (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 px-4 py-3 text-sm flex items-start gap-3">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <div className="font-medium">
+                  {pendingCount} transcript{pendingCount === 1 ? '' : 's'} not yet in the knowledge graph
+                </div>
+                <div className="text-xs mt-1 opacity-90">
+                  {docsStatus.has_graph && docsStatus.last_graphify ? (
+                    <>Graph last refreshed {new Date(docsStatus.last_graphify).toLocaleString()}. </>
+                  ) : (
+                    <>No graph yet. </>
+                  )}
+                  Run <code className="px-1 py-0.5 rounded bg-amber-500/20 font-mono">/graphify</code> in Claude Code,
+                  or <code className="px-1 py-0.5 rounded bg-amber-500/20 font-mono">graphify extract {currentProject.path}</code> from a shell, to include them.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 px-4 py-3 text-sm flex items-start gap-3">
+              <Network className="h-4 w-4 mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <div className="font-medium">All transcripts are in the knowledge graph</div>
+                {docsStatus.last_graphify && (
+                  <div className="text-xs mt-1 opacity-90">
+                    Last refreshed {new Date(docsStatus.last_graphify).toLocaleString()}.
+                  </div>
+                )}
+              </div>
+            </div>
+          )
         )}
 
         <section className="rounded-lg border border-border bg-card p-5">
@@ -248,7 +323,26 @@ export function TranscriptsPage() {
               <div key={t.filename} className="flex items-center gap-4 px-5 py-3">
                 <FileAudio className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate">{t.title || t.filename}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="font-medium text-sm truncate">{t.title || t.filename}</div>
+                    {docsStatus && (
+                      isPending(t) ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 px-2 py-0.5 text-[10px] font-medium"
+                          title="This transcript is not yet folded into graphify's knowledge graph"
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Pending
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 text-[10px] font-medium"
+                          title="This transcript is in graphify's knowledge graph"
+                        >
+                          <CheckCircle2 className="h-3 w-3" /> In graph
+                        </span>
+                      )
+                    )}
+                  </div>
                   <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
                     {t.occurred_at && (
                       <span className="inline-flex items-center gap-1">

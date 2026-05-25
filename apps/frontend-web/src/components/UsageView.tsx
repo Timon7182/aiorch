@@ -20,6 +20,7 @@ import {
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { ScrollArea } from './ui/scroll-area';
+import { ClaudeCliUsageCard } from './ClaudeCliUsageCard';
 import {
   formatCost,
   formatTokens,
@@ -54,6 +55,13 @@ const PHASE_LABEL_KEYS: Record<string, string> = {
   qa_review: 'tasks:usage.phases.qa',
   validation: 'tasks:usage.phases.qa',
   qa_fixing: 'tasks:usage.phases.qaFix',
+};
+
+const FEATURE_LABEL_KEYS: Record<string, string> = {
+  agent: 'tasks:usage.features.agent',
+  hermes: 'tasks:usage.features.hermes',
+  insights: 'tasks:usage.features.insights',
+  session: 'tasks:usage.features.session',
 };
 
 export function UsageView({ projectId }: UsageViewProps) {
@@ -125,6 +133,9 @@ export function UsageView({ projectId }: UsageViewProps) {
           </Button>
         </div>
 
+        {/* Claude CLI session/weekly limits (parity with `claude /usage`) */}
+        <ClaudeCliUsageCard />
+
         {/* Headline totals */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <HeadlineStat
@@ -165,6 +176,48 @@ export function UsageView({ projectId }: UsageViewProps) {
 
         {hasAny && (
           <>
+            {/* Per-feature breakdown — shows where tokens are spent
+                across agent runs vs Hermes vs Insights chat. */}
+            {usage && Object.keys(usage.byFeature ?? {}).length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm font-semibold">
+                    {t('tasks:usage.byFeature', 'By feature')}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x">
+                    {Object.entries(usage.byFeature).map(
+                      ([feature, featureTotals]) => {
+                        const featureTotal = totalTokens(featureTotals);
+                        const pct = total > 0 ? (featureTotal / total) * 100 : 0;
+                        return (
+                          <div key={feature} className="p-4 space-y-2">
+                            <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                              {t(FEATURE_LABEL_KEYS[feature] ?? '', feature)}
+                            </div>
+                            <div className="font-mono font-semibold tabular-nums">
+                              {formatTokens(featureTotal)}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {formatCost(featureTotals.cost_usd)} ·{' '}
+                              {pct.toFixed(0)}%
+                            </div>
+                            <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full bg-amber-500"
+                                style={{ width: `${Math.min(pct, 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      },
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {/* Per-phase breakdown */}
             <Card>
               <CardHeader>

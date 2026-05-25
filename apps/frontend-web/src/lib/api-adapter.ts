@@ -273,6 +273,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
   addProject: (projectPath: string) => post<Project>('/projects', { path: projectPath }),
   cloneProject: (url: string, name?: string, targetDir?: string) =>
     post<Project>('/projects/clone', { url, name, target_dir: targetDir }),
+  createProjectFromPrompt: (prompt: string, name?: string, parentDir?: string) =>
+    post<Project>('/projects/from-prompt', { prompt, name, parent_dir: parentDir }),
   removeProject: (projectId: string) => del(`/projects/${projectId}`),
   getProjects: () => get<Project[]>('/projects'),
   updateProjectSettings: (projectId: string, settings: Partial<ProjectSettings>) =>
@@ -354,7 +356,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
     post(`/tasks/${taskId}/worktree/create-pr`, options || {}),
   getForkInfo: (projectPath: string) =>
     get(`/github/fork-info?project_path=${encodeURIComponent(projectPath)}`),
-  listWorktrees: (projectId: string) => get(`/projects/${projectId}/worktrees`),
+  listWorktrees: (projectId: string, repo?: string) =>
+    get(`/projects/${projectId}/worktrees${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`),
   worktreeOpenInIDE: (worktreePath: string, ide: string, customPath?: string) =>
     post('/tasks/worktree/open-in-ide', { worktreePath, ide, customPath }),
   worktreeOpenInTerminal: (worktreePath: string, terminal: string, customPath?: string) =>
@@ -444,6 +447,12 @@ export const webAPI: API & { _isWebMode: boolean } = {
     // ResultMessage. Used by usage-store to update dashboard totals live.
     return registerCallback('task:usage', (payload: { taskId: string; usage: unknown }) => {
       callback(payload.taskId, payload.usage as never);
+    });
+  },
+  onProjectUsage: (callback) => {
+    // Project-scoped usage (Hermes / Insights chat) — not tied to any spec.
+    return registerCallback('project:usage', (payload: { projectId: string; usage: unknown }) => {
+      callback(payload.projectId, payload.usage as never);
     });
   },
 
@@ -738,10 +747,12 @@ export const webAPI: API & { _isWebMode: boolean } = {
     post(`/projects/${projectId}/changelog/suggest-version`, { taskIds }),
   suggestChangelogVersionFromCommits: (projectId: string, commits) =>
     post(`/projects/${projectId}/changelog/suggest-version-commits`, { commits }),
-  getChangelogBranches: (projectId: string) => get(`/projects/${projectId}/changelog/branches`),
-  getChangelogTags: (projectId: string) => get(`/projects/${projectId}/changelog/tags`),
-  getChangelogCommitsPreview: (projectId: string, options: GitHistoryOptions | BranchDiffOptions, mode) =>
-    post(`/projects/${projectId}/changelog/commits-preview`, { options, mode }),
+  getChangelogBranches: (projectId: string, repo?: string) =>
+    get(`/projects/${projectId}/changelog/branches${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`),
+  getChangelogTags: (projectId: string, repo?: string) =>
+    get(`/projects/${projectId}/changelog/tags${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`),
+  getChangelogCommitsPreview: (projectId: string, options: GitHistoryOptions | BranchDiffOptions, mode, repo?: string) =>
+    post(`/projects/${projectId}/changelog/commits-preview`, { options, mode, repo }),
   saveChangelogImage: (projectId: string, imageData: string, filename: string) =>
     post(`/projects/${projectId}/changelog/images`, { imageData, filename }),
   readLocalImage: (projectPath: string, relativePath: string) =>
@@ -850,6 +861,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
     get(`/git/main-branch?path=${encodeURIComponent(projectPath)}`),
   checkGitStatus: (projectPath: string) =>
     get(`/git/status?path=${encodeURIComponent(projectPath)}`),
+  getGitRepos: (projectPath: string) =>
+    get(`/git/repos?path=${encodeURIComponent(projectPath)}`),
   initializeGit: (projectPath: string) =>
     post('/git/init', { path: projectPath }),
 

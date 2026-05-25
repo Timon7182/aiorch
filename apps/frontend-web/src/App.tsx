@@ -103,6 +103,13 @@ function AuthenticatedApp() {
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [isAddProjectModalOpen, setIsAddProjectModalOpen] = useState(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+  // Seed for the next Task Creation Wizard open (e.g. after creating a project
+  // from a natural-language prompt). Cleared once consumed so it doesn't leak
+  // into subsequent opens.
+  const [taskWizardSeed, setTaskWizardSeed] = useState<{
+    title?: string;
+    description?: string;
+  } | null>(null);
 
   const selectedProject = projects.find((p) => p.id === (activeProjectId || selectedProjectId));
 
@@ -240,7 +247,17 @@ function AuthenticatedApp() {
 
   const handleProjectAdded = (project: Project, needsInit: boolean) => {
     console.log('[Web] Project added:', project.name, 'needs init:', needsInit);
-    // Optionally navigate to the project or show init dialog
+    // "From Prompt" mode hands us an initialPrompt — switch to the new project
+    // and open the Task Creation Wizard pre-filled so agents can take over.
+    if (project.initialPrompt) {
+      // setActiveProject must run first: the wizard targets
+      // (activeProjectId || selectedProjectId), and the store helper only set
+      // selectedProjectId. Without this the wizard would open against
+      // whichever project tab was active before.
+      setActiveProject(project.id);
+      setTaskWizardSeed({ description: project.initialPrompt });
+      setIsNewTaskDialogOpen(true);
+    }
   };
 
   // Handler for opening inbuilt terminal with specific working directory
@@ -404,7 +421,12 @@ function AuthenticatedApp() {
             <TaskCreationWizard
               projectId={(activeProjectId || selectedProjectId)!}
               open={isNewTaskDialogOpen}
-              onOpenChange={setIsNewTaskDialogOpen}
+              onOpenChange={(open) => {
+                setIsNewTaskDialogOpen(open);
+                if (!open) setTaskWizardSeed(null);
+              }}
+              initialTitle={taskWizardSeed?.title}
+              initialDescription={taskWizardSeed?.description}
             />
           )}
 
