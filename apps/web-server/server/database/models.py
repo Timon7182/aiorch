@@ -57,6 +57,14 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Approval gate: new self-registered users start "pending" and cannot see
+    # projects until an admin approves them ("active"). Defaults to "active" so
+    # existing rows (and the create_all default) are not retroactively locked
+    # out — see the ALTER migration in engine.init_db and register() which sets
+    # "pending" explicitly for new sign-ups.
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active"
+    )  # pending | active
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

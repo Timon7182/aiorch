@@ -28,6 +28,7 @@ import { ProjectSwitchLoadingModal } from './components/ProjectSwitchLoadingModa
 import { LoginPage } from './pages/LoginPage';
 import { EditorPage } from './pages/EditorPage';
 import { HermesPage } from './pages/HermesPage';
+import { PendingApprovalScreen } from './pages/PendingApprovalScreen';
 import { MembersPage } from './pages/MembersPage';
 import { TranscriptsPage } from './pages/TranscriptsPage';
 import { ViewStateProvider } from './contexts/ViewStateContext';
@@ -456,11 +457,17 @@ function AuthenticatedApp() {
 
 export default function App() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const userStatus = useAuthStore((state) => state.user?.status);
   const checkAuth = useAuthStore((state) => state.checkAuth);
 
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  // A registered-but-not-yet-approved account can authenticate but must not
+  // reach the workspace (the backend 403s its data anyway). Hold it on the
+  // waiting screen until an admin approves it.
+  const isPending = isAuthenticated && userStatus === 'pending';
 
   return (
     <Routes>
@@ -470,11 +477,27 @@ export default function App() {
       />
       <Route
         path="/hermes"
-        element={isAuthenticated ? <HermesPage /> : <Navigate to="/login" replace />}
+        element={
+          !isAuthenticated ? (
+            <Navigate to="/login" replace />
+          ) : isPending ? (
+            <PendingApprovalScreen />
+          ) : (
+            <HermesPage />
+          )
+        }
       />
       <Route
         path="/*"
-        element={isAuthenticated ? <AuthenticatedApp /> : <Navigate to="/login" replace />}
+        element={
+          !isAuthenticated ? (
+            <Navigate to="/login" replace />
+          ) : isPending ? (
+            <PendingApprovalScreen />
+          ) : (
+            <AuthenticatedApp />
+          )
+        }
       />
     </Routes>
   );

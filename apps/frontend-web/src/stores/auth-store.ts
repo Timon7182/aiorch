@@ -19,17 +19,30 @@ import {
   setRefreshToken,
 } from '../lib/auth';
 
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  // "pending" until an admin approves the account, then "active". The app
+  // shows the waiting screen instead of the workspace while pending.
+  status?: string;
+}
+
 interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
-  user: { id: string; email: string; name: string; role: string } | null;
+  user: AuthUser | null;
 
   login: (token: string) => Promise<boolean>;
   loginWithCredentials: (email: string, password: string) => Promise<boolean>;
   register: (email: string, name: string, password: string) => Promise<boolean>;
   logout: () => void;
   checkAuth: () => Promise<boolean>;
+  // Re-fetch the current user's profile (used by the pending screen to detect
+  // approval and by checkAuth to repopulate `user` after a page reload).
+  refreshUser: () => Promise<void>;
 }
 
 async function _tokenLogin(
@@ -84,7 +97,7 @@ async function _credentialAuth(
       return false;
     }
     const data = (await response.json()) as {
-      user: { id: string; email: string; name: string; role: string };
+      user: AuthUser;
       access_token: string;
       refresh_token?: string;
     };
@@ -134,6 +147,9 @@ export const useAuthStore = create<AuthState>()(
         // api-client.apiRequest already handles 401 → refresh → retry, so
         // route this probe through it. That way an expired-but-refreshable
         // session boots straight back in instead of bouncing to login.
+        // Probe /auth/me (not /settings) so we also repopulate `user` —
+        // including `status` — which the persist layer drops on reload. The
+        // pending gate in App.tsx depends on this being set after a refresh.
         const { get } = await import('../lib/api-client');
         const token = getAuthToken();
         if (!token) {
@@ -141,14 +157,26 @@ export const useAuthStore = create<AuthState>()(
           return false;
         }
         set({ isLoading: true });
-        const result = await get('/settings');
+        const result = await get('/auth/me');
         if (result.success) {
-          set({ isAuthenticated: true, isLoading: false });
+          set({
+            isAuthenticated: true,
+            isLoading: false,
+            user: result.data as AuthUser,
+          });
           return true;
         }
         // api-client cleared tokens on a failed refresh; mirror that here.
         set({ isAuthenticated: false, isLoading: false, user: null });
         return false;
+      },
+
+      refreshUser: async () => {
+        const { get } = await import('../lib/api-client');
+        const result = await get('/auth/me');
+        if (result.success) {
+          set({ user: result.data as AuthUser });
+        }
       },
     }),
     {

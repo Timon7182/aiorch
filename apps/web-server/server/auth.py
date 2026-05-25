@@ -66,13 +66,20 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         "/openapi.json",
         "/api/health",
         "/api/logs/frontend",  # Allow frontend error logs without auth
+        # Token-less auth endpoints. The rest of /api/auth/* (me,
+        # pending-users, users/{id}/approve|reject) require a valid JWT and so
+        # must go through normal authentication below — do NOT make the whole
+        # /api/auth/ prefix public or request.state.user would never be set.
+        "/api/auth/login",
+        "/api/auth/register",
+        "/api/auth/refresh",
+        "/api/auth/logout",
     }
 
     # Path prefixes that don't require authentication
     PUBLIC_PREFIXES = (
         "/assets/",
         "/static/",
-        "/api/auth/",  # Auth endpoints (register, login, refresh, logout)
         "/api/email/auth/",  # OAuth callbacks (redirect from Microsoft/Google)
     )
 

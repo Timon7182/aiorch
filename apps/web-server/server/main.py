@@ -11,7 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.staticfiles import StaticFiles
@@ -140,12 +140,33 @@ def create_app() -> FastAPI:
     # Notification routes (prefix defined in router: /api/notifications)
     app.include_router(notifications.router)
 
+    # Routers exposing project data require an *approved* (non-pending) account.
+    # A freshly self-registered user is "pending" and gets 403 here until an
+    # admin approves them — this is the gate that stops new sign-ups from
+    # seeing the shared workspace's projects.
+    require_active = [Depends(auth_routes.require_active_user)]
+
     # Include API routers
-    app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
-    app.include_router(tasks.router, prefix="/api/tasks", tags=["Tasks"])
+    app.include_router(
+        projects.router,
+        prefix="/api/projects",
+        tags=["Projects"],
+        dependencies=require_active,
+    )
+    app.include_router(
+        tasks.router,
+        prefix="/api/tasks",
+        tags=["Tasks"],
+        dependencies=require_active,
+    )
     app.include_router(usage.router, prefix="/api/usage", tags=["Usage"])
     # Execution routes also under /api/tasks for frontend compatibility
-    app.include_router(execution.router, prefix="/api/tasks", tags=["Task Execution"])
+    app.include_router(
+        execution.router,
+        prefix="/api/tasks",
+        tags=["Task Execution"],
+        dependencies=require_active,
+    )
     app.include_router(settings_routes.router, prefix="/api/settings", tags=["Settings"])
     app.include_router(cli_accounts_routes.router, prefix="/api/settings", tags=["CLI Accounts"])
     app.include_router(llm_endpoints_routes.router)
@@ -176,24 +197,49 @@ def create_app() -> FastAPI:
 
     # Project-extension routes (SSH targets, DB profiles, transcripts)
     from .routes import extensions as extensions_routes
-    app.include_router(extensions_routes.router, prefix="/api/ext", tags=["Extensions"])
+    app.include_router(
+        extensions_routes.router,
+        prefix="/api/ext",
+        tags=["Extensions"],
+        dependencies=require_active,
+    )
 
     # Hermes chat router (LLM dispatch + grounded chat)
     from .routes import hermes as hermes_routes
-    app.include_router(hermes_routes.router, prefix="/api/ext", tags=["Hermes"])
+    app.include_router(
+        hermes_routes.router,
+        prefix="/api/ext",
+        tags=["Hermes"],
+        dependencies=require_active,
+    )
 
     # Project-docs ingest (multi-file upload → docs_index_service)
     from .routes import project_ingest as project_ingest_routes
-    app.include_router(project_ingest_routes.router, prefix="/api/ext", tags=["Ingest"])
+    app.include_router(
+        project_ingest_routes.router,
+        prefix="/api/ext",
+        tags=["Ingest"],
+        dependencies=require_active,
+    )
 
     # Transcript ingest (audio/video/transcript upload → graphify refresh)
     from .routes import transcripts as transcripts_routes
-    app.include_router(transcripts_routes.router, prefix="/api/ext", tags=["Transcripts"])
+    app.include_router(
+        transcripts_routes.router,
+        prefix="/api/ext",
+        tags=["Transcripts"],
+        dependencies=require_active,
+    )
 
     # MkDocs-based per-project documentation: agent generates markdown,
     # service runs `mkdocs build`, viewer serves the static site.
     from .routes import docs as docs_routes
-    app.include_router(docs_routes.router, prefix="/api/projects", tags=["Docs"])
+    app.include_router(
+        docs_routes.router,
+        prefix="/api/projects",
+        tags=["Docs"],
+        dependencies=require_active,
+    )
 
     # Include WebSocket routers
     app.include_router(logs_ws.router, tags=["WebSocket"])

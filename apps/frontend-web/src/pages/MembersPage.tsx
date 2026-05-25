@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Trash2, UserPlus, RefreshCw, Building2 } from 'lucide-react';
+import { Trash2, UserPlus, RefreshCw, Building2, UserCheck, Check, X } from 'lucide-react';
 
 import { getAuthHeaders } from '../lib/auth';
 
@@ -25,6 +25,13 @@ type Member = {
   avatar_url: string | null;
   role: 'viewer' | 'member' | 'admin' | 'owner';
   joined_at: string;
+};
+
+type PendingUser = {
+  id: string;
+  email: string;
+  name: string;
+  created_at: string;
 };
 
 const ROLES: Member['role'][] = ['viewer', 'member', 'admin', 'owner'];
@@ -72,6 +79,11 @@ export function MembersPage() {
   const [inviteRole, setInviteRole] = useState<Member['role']>('member');
   const [inviting, setInviting] = useState(false);
 
+  // pending sign-ups (only loaded when the current user may approve)
+  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
+  const [canApprove, setCanApprove] = useState(false);
+  const [pendingBusy, setPendingBusy] = useState<string | null>(null);
+
   const selectedOrg = useMemo(
     () => orgs.find((o) => o.id === selectedOrgId) ?? null,
     [orgs, selectedOrgId],
@@ -106,6 +118,28 @@ export function MembersPage() {
     }
   }, [selectedOrgId]);
 
+  // Loads the approval queue. The endpoint 403s for non-approvers, which we
+  // treat as "hide the section" rather than an error.
+  const refreshPending = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/pending-users', {
+        headers: getAuthHeaders(),
+      });
+      if (res.status === 403) {
+        setCanApprove(false);
+        setPendingUsers([]);
+        return;
+      }
+      if (!res.ok) throw new Error(`${res.status}`);
+      const list = (await res.json()) as PendingUser[];
+      setCanApprove(true);
+      setPendingUsers(list);
+    } catch {
+      setCanApprove(false);
+      setPendingUsers([]);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshOrgs();
   }, [refreshOrgs]);
@@ -113,6 +147,37 @@ export function MembersPage() {
   useEffect(() => {
     void refreshMembers();
   }, [refreshMembers]);
+
+  useEffect(() => {
+    void refreshPending();
+  }, [refreshPending]);
+
+  async function handleApprove(u: PendingUser) {
+    setPendingBusy(u.id);
+    setError(null);
+    try {
+      await apiJson(`/api/auth/users/${u.id}/approve`, { method: 'POST' });
+      await refreshPending();
+    } catch (e) {
+      setError(`Approve failed: ${(e as Error).message}`);
+    } finally {
+      setPendingBusy(null);
+    }
+  }
+
+  async function handleReject(u: PendingUser) {
+    if (!confirm(`Reject ${u.email}? They will no longer be able to log in.`)) return;
+    setPendingBusy(u.id);
+    setError(null);
+    try {
+      await apiJson(`/api/auth/users/${u.id}/reject`, { method: 'POST' });
+      await refreshPending();
+    } catch (e) {
+      setError(`Reject failed: ${(e as Error).message}`);
+    } finally {
+      setPendingBusy(null);
+    }
+  }
 
   const canManage = selectedOrg && (selectedOrg.user_role === 'admin' || selectedOrg.user_role === 'owner');
   const isOwner = selectedOrg?.user_role === 'owner';
@@ -211,6 +276,7 @@ export function MembersPage() {
             onClick={() => {
               void refreshOrgs();
               void refreshMembers();
+              void refreshPending();
             }}
             className="p-2 rounded-md border border-border hover:bg-accent"
             title="Refresh"
@@ -225,6 +291,49 @@ export function MembersPage() {
           <div className="rounded-lg bg-destructive/10 border border-destructive/50 text-destructive px-4 py-3 text-sm">
             {error}
           </div>
+        )}
+
+        {canApprove && pendingUsers.length > 0 && (
+          <section className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-5">
+            <h2 className="font-semibold mb-1 flex items-center gap-2">
+              <UserCheck className="h-4 w-4" /> Pending sign-ups ({pendingUsers.length})
+            </h2>
+            <p className="text-xs text-muted-foreground mb-3">
+              These people registered and are waiting to be let in. Approving grants
+              access to the shared workspace; rejecting blocks the account.
+            </p>
+            <div className="divide-y divide-border">
+              {pendingUsers.map((u) => (
+                <div key={u.id} className="flex items-center gap-4 py-3">
+                  <div className="h-9 w-9 rounded-full bg-amber-500/20 text-amber-600 flex items-center justify-center text-sm font-semibold shrink-0">
+                    {(u.name || u.email).slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm truncate">{u.name || '(no name)'}</div>
+                    <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleApprove(u)}
+                    disabled={pendingBusy === u.id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    {pendingBusy === u.id ? 'Working…' : 'Approve'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleReject(u)}
+                    disabled={pendingBusy === u.id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-xs font-medium hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Reject
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
         )}
 
         {showCreate && (

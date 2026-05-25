@@ -77,6 +77,23 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Lightweight column migrations. create_all() above creates missing
+    # *tables* but never alters existing ones, so columns added after a DB was
+    # first created must be backfilled here. Keep each check idempotent.
+    async with engine.begin() as conn:
+        res = await conn.execute(text("PRAGMA table_info(users)"))
+        user_columns = {row[1] for row in res.fetchall()}
+        if "status" not in user_columns:
+            # DEFAULT 'active' so every pre-existing user keeps full access;
+            # only brand-new registrations are set to 'pending' by register().
+            await conn.execute(
+                text(
+                    "ALTER TABLE users ADD COLUMN status VARCHAR(20) "
+                    "NOT NULL DEFAULT 'active'"
+                )
+            )
+            logger.info("Migration: added users.status column (default 'active')")
+
     # Verify WAL mode is active
     async with engine.connect() as conn:
         result = await conn.execute(text("PRAGMA journal_mode"))
@@ -101,6 +118,7 @@ async def init_db() -> None:
                     password_hash="disabled",
                     role="admin",
                     is_active=True,
+                    status="active",
                 ))
                 await session.commit()
                 logger.info("Created default user for auth-disabled mode")

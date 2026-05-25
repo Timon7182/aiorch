@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -61,6 +61,7 @@ class UserResponse(BaseModel):
     avatar_url: str | None
     role: str
     is_active: bool
+    status: str  # "pending" | "active" — frontend gates access on this
     created_at: datetime
 
     class Config:
@@ -170,6 +171,51 @@ async def get_current_user(
     return user
 
 
+async def require_active_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Like ``get_current_user`` but rejects accounts awaiting approval.
+
+    Apply to every route that exposes project data so a freshly-registered
+    (``pending``) account cannot read anything until an admin approves it.
+    ``/auth/me`` deliberately uses ``get_current_user`` instead, so a pending
+    client can still load its own profile and render the waiting screen.
+    """
+    if current_user.status == "pending":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is awaiting administrator approval",
+        )
+    return current_user
+
+
+async def require_approver(
+    current_user: User = Depends(require_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Authorize a user permitted to approve/reject pending sign-ups.
+
+    Allowed when the user has the global ``admin`` role, or is an ``owner``/
+    ``admin`` of any organization. Builds on ``require_active_user`` so a
+    pending account (even one that owns its auto-created personal org) can
+    never approve others.
+    """
+    if current_user.role == "admin":
+        return current_user
+    result = await db.execute(
+        select(OrgMember).where(
+            OrgMember.user_id == current_user.id,
+            OrgMember.role.in_(["owner", "admin"]),
+        )
+    )
+    if result.first() is not None:
+        return current_user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Administrator privileges required",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -186,6 +232,12 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     Creates the user record, a default *Personal* organization, and adds
     the user as its owner.  Returns JWT access and refresh tokens.
+
+    Access gate: the very first account bootstraps as an active admin (so
+    there is someone who can approve others); every subsequent sign-up starts
+    in the ``pending`` status and cannot see any projects until an admin
+    approves it. Tokens are still issued so the client can poll ``/auth/me``
+    and render the "awaiting approval" screen.
     """
     # Check for existing user
     result = await db.execute(select(User).where(User.email == body.email))
@@ -195,12 +247,18 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
             detail="A user with this email already exists",
         )
 
+    user_count = (
+        await db.execute(select(func.count()).select_from(User))
+    ).scalar() or 0
+    is_first_user = user_count == 0
+
     # Create user
     user = User(
         email=body.email,
         name=body.name,
         password_hash=pwd_context.hash(body.password),
-        role="user",
+        role="admin" if is_first_user else "user",
+        status="active" if is_first_user else "pending",
     )
     db.add(user)
     await db.flush()  # Populate user.id before creating org
@@ -234,7 +292,9 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(user)
 
-    logger.info(f"New user registered: {user.email} (id={user.id})")
+    logger.info(
+        f"New user registered: {user.email} (id={user.id}, status={user.status})"
+    )
 
     return AuthResponse(
         user=UserResponse.model_validate(user),
@@ -355,3 +415,84 @@ async def logout():
 async def me(current_user: User = Depends(get_current_user)):
     """Return the profile of the currently authenticated user."""
     return UserResponse.model_validate(current_user)
+
+
+# ---------------------------------------------------------------------------
+# Member approval (admin only)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/pending-users",
+    response_model=list[UserResponse],
+    summary="List accounts awaiting approval (admin only)",
+)
+async def list_pending_users(
+    _approver: User = Depends(require_approver),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all sign-ups still awaiting approval, oldest first."""
+    result = await db.execute(
+        select(User)
+        .where(User.status == "pending", User.is_active.is_(True))
+        .order_by(User.created_at.asc())
+    )
+    return [UserResponse.model_validate(u) for u in result.scalars().all()]
+
+
+@router.post(
+    "/users/{user_id}/approve",
+    response_model=UserResponse,
+    summary="Approve a pending account (admin only)",
+)
+async def approve_user(
+    user_id: str,
+    approver: User = Depends(require_approver),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark a pending account active so it can access the shared workspace."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+    if user.status != "active" or not user.is_active:
+        user.status = "active"
+        user.is_active = True
+        await db.commit()
+        await db.refresh(user)
+        logger.info(f"User approved: {user.email} (by {approver.email})")
+    return UserResponse.model_validate(user)
+
+
+@router.post(
+    "/users/{user_id}/reject",
+    response_model=MessageResponse,
+    summary="Reject / revoke an account (admin only)",
+)
+async def reject_user(
+    user_id: str,
+    approver: User = Depends(require_approver),
+    db: AsyncSession = Depends(get_db),
+):
+    """Deactivate an account so it can no longer log in.
+
+    Soft reject (kept, not deleted) so the email stays reserved and the action
+    is reversible via approve.
+    """
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+    if user.id == approver.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot reject your own account",
+        )
+    user.is_active = False
+    await db.commit()
+    logger.info(f"User rejected: {user.email} (by {approver.email})")
+    return MessageResponse(message="User rejected")
