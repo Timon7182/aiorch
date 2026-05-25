@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -88,20 +88,22 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     if (r.success && r.data) setStatus(r.data);
   }, [projectId, activeRepoPath]);
 
+  // Selection lives independently of the tree fetch (see the selection effect
+  // below), so loadTree only fetches — it must NOT depend on selectedPath or
+  // it would refetch the whole tree on every file click.
   const loadTree = useCallback(async () => {
     const r = await get<{ files: DocFile[] }>(`/projects/${projectId}/docs/tree${repoSuffix(false)}`);
-    if (r.success && r.data) {
-      setFiles(r.data.files);
-      if (!selectedPath && r.data.files.length > 0) {
-        const homePage =
-          r.data.files.find((f) => f.path === 'index.md') ?? r.data.files[0];
-        setSelectedPath(homePage.path);
-      }
-    }
-  }, [projectId, selectedPath, activeRepoPath]);
+    if (r.success && r.data) setFiles(r.data.files);
+  }, [projectId, activeRepoPath]);
+
+  // Monotonic token so a slow/404 content response for a no-longer-selected
+  // file (e.g. the previous repo's file during a repo switch) can't clobber
+  // the content we've since loaded for the current selection.
+  const contentReqRef = useRef(0);
 
   const loadContent = useCallback(
     async (path: string) => {
+      const reqId = ++contentReqRef.current;
       // Graph report lives in graphify-out/, not docs/, so it has its
       // own endpoint. Same response shape, so we slot it into the same
       // markdown viewer.
@@ -110,6 +112,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
           ? `/projects/${projectId}/docs/graph-report${repoSuffix(false)}`
           : `/projects/${projectId}/docs/raw?path=${encodeURIComponent(path)}${repoSuffix(true)}`;
       const r = await get<RawDoc>(url);
+      if (reqId !== contentReqRef.current) return; // a newer load superseded us
       if (r.success && r.data) {
         setContent(r.data.content);
       } else {
@@ -127,6 +130,26 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   useEffect(() => {
     if (selectedPath) loadContent(selectedPath);
   }, [selectedPath, loadContent]);
+
+  // Keep the selection valid for the tree currently loaded. Runs on first load
+  // (auto-select the home page) and whenever the tree changes underneath us —
+  // notably after a repo switch (or the repo store hydrating), where the
+  // previously-selected file belongs to a different repo and would 404. The
+  // graph-report sentinel isn't a docs/ file, so it's exempt.
+  useEffect(() => {
+    if (selectedPath === GRAPH_REPORT_PATH) return;
+    if (files.length === 0) {
+      if (selectedPath) {
+        setSelectedPath(null);
+        setContent('');
+      }
+      return;
+    }
+    if (!selectedPath || !files.some((f) => f.path === selectedPath)) {
+      const home = files.find((f) => f.path === 'index.md') ?? files[0];
+      setSelectedPath(home.path);
+    }
+  }, [files, selectedPath]);
 
   // Poll while a generation is running; refresh tree once it finishes.
   useEffect(() => {
