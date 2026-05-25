@@ -231,7 +231,14 @@ class InsightsService:
 
     def list_sessions(self, project_path: Path) -> list[dict]:
         """List all sessions for a project."""
-        sessions_dir = self._get_sessions_dir(project_path)
+        try:
+            sessions_dir = self._get_sessions_dir(project_path)
+        except OSError as e:
+            # e.g. PermissionError creating .magestic-ai in a dir the server user
+            # can't write. Degrade to "no sessions" instead of a 500 that blanks
+            # the Insights view in the frontend.
+            logger.warning(f"[InsightsService] Cannot access sessions dir for {project_path}: {e}")
+            return []
         sessions = []
 
         for session_file in sessions_dir.glob("*.json"):
@@ -308,47 +315,52 @@ class InsightsService:
         model_config: dict | None = None,
     ) -> None:
         """Send a message and stream the response via the appropriate provider."""
-        # Get current session
-        session = self.get_current_session(project_path, project_id)
-
-        # Merge session config with message-level config (message takes precedence)
-        effective_config = dict(self.DEFAULT_MODEL_CONFIG)
-        if session.model_config:
-            effective_config.update({k: v for k, v in session.model_config.items() if v is not None})
-        if model_config:
-            effective_config.update({k: v for k, v in model_config.items() if v is not None})
-        model_config = effective_config
-
-        # Determine provider from model_config (default: claude)
-        provider_id = model_config.get("provider", "claude")
-        provider_model = model_config.get("model", "sonnet")
-
-        # Add user message
-        user_msg = InsightsMessage(
-            id=f"msg-{uuid.uuid4().hex[:8]}",
-            role="user",
-            content=message,
-            timestamp=datetime.now().isoformat(),
-        )
-        session.messages.append(user_msg)
-
-        # Auto-generate title from first message
-        if session.title == "New Session" and len(session.messages) == 1:
-            session.title = message[:50] + ("..." if len(message) > 50 else "")
-
-        self._save_session(project_path, session)
-
-        # Build conversation history for stateless providers
-        conversation_history = [
-            {"role": msg.role, "content": msg.content}
-            for msg in session.messages[:-1]  # Exclude current user message
-        ]
-
-        # Route to provider
-        provider = get_provider(provider_id)
-        logger.info(f"[InsightsService] Routing to provider: {provider_id} (model: {provider_model})")
-
+        # NOTE: session loading/saving is inside the try below on purpose. This
+        # coroutine runs as a fire-and-forget asyncio task (see start_message), so
+        # any exception raised here is otherwise silently dropped ("Task exception
+        # was never retrieved") and the frontend hangs forever with no error. e.g.
+        # a PermissionError creating .magestic-ai/insights must reach the client.
         try:
+            # Get current session
+            session = self.get_current_session(project_path, project_id)
+
+            # Merge session config with message-level config (message takes precedence)
+            effective_config = dict(self.DEFAULT_MODEL_CONFIG)
+            if session.model_config:
+                effective_config.update({k: v for k, v in session.model_config.items() if v is not None})
+            if model_config:
+                effective_config.update({k: v for k, v in model_config.items() if v is not None})
+            model_config = effective_config
+
+            # Determine provider from model_config (default: claude)
+            provider_id = model_config.get("provider", "claude")
+            provider_model = model_config.get("model", "sonnet")
+
+            # Add user message
+            user_msg = InsightsMessage(
+                id=f"msg-{uuid.uuid4().hex[:8]}",
+                role="user",
+                content=message,
+                timestamp=datetime.now().isoformat(),
+            )
+            session.messages.append(user_msg)
+
+            # Auto-generate title from first message
+            if session.title == "New Session" and len(session.messages) == 1:
+                session.title = message[:50] + ("..." if len(message) > 50 else "")
+
+            self._save_session(project_path, session)
+
+            # Build conversation history for stateless providers
+            conversation_history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in session.messages[:-1]  # Exclude current user message
+            ]
+
+            # Route to provider
+            provider = get_provider(provider_id)
+            logger.info(f"[InsightsService] Routing to provider: {provider_id} (model: {provider_model})")
+
             response_content = await provider.send_message(
                 project_path=project_path,
                 project_id=project_id,
