@@ -377,6 +377,44 @@ context = memory.get_context_for_session("Implementing feature X")
 memory.add_session_insight("Pattern: use React hooks for state")
 ```
 
+### Code Graph (CodeGraphContext)
+
+**CodeGraphContext (CGC)** is a second, complementary code-graph layer that runs
+alongside graphify. graphify is the docs/transcripts/cross-cutting layer; CGC is
+the precise code-symbol layer — it parses source with tree-sitter into an
+embedded graph DB and answers caller/callee, call-chain, dead-code, and
+complexity questions. The two run side by side; CGC does not replace graphify.
+
+**Agent integration (read-only):** the planner/coder/QA agents get CGC's MCP
+tools (`mcp__codegraph__find_code`, `analyze_code_relationships`,
+`find_dead_code`, `calculate_cyclomatic_complexity`,
+`find_most_complex_functions`, `execute_cypher_query`,
+`list_indexed_repositories`, `get_repository_stats`) wired into their sessions —
+but **only once the project has been indexed**. Wiring lives in
+`agents/tools_pkg/models.py` (`CODEGRAPH_TOOLS`, the `codegraph` server in the
+agent configs, and the gate in `get_required_mcp_servers`) and
+`core/client.py` (server spawn). The server is gated on a `.codegraphcontext/`
+folder existing at the project root, exactly like graphify is gated on
+`graphify-out/graph.json`. Set `CODEGRAPH_DISABLED=true` to force it off.
+
+**Install (isolated, NOT in the shared venv):** CGC hard-pins
+`protobuf<3.21`, which conflicts with `google-generativeai` in the backend venv.
+Since it's only ever run as a subprocess (CLI + stdio MCP server) and never
+imported, install it isolated and keep it on PATH:
+```bash
+pipx install codegraphcontext
+```
+`_resolve_codegraph_bin()` (in `core/client.py` and `docs_generator_service.py`)
+finds it via the venv scripts dir or PATH, so a pipx shim is picked up.
+
+**Indexing (manual trigger):** building/refreshing the graph is manual, mirroring
+graphify. Index a project before agents can use the tools:
+```bash
+codegraphcontext index <project-path>          # creates <project>/.codegraphcontext/
+```
+`docs_generator_service.refresh_codegraph(project_path)` is a callable shim for
+the same command if a future endpoint wants to trigger it from the web UI.
+
 ### BMad Method Integration
 
 **Status:** ✅ Complete (Branch: `bmad-method`, awaiting PR to `develop`)

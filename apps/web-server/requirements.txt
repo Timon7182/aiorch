@@ -59,3 +59,16 @@ pymdown-extensions>=10.0
 # on PyPI is an unrelated project. `[mcp]` extra ships the stdio MCP
 # server we wire into agent sessions.
 graphifyy[mcp]>=0.1.0
+
+# CodeGraphContext: per-project code-structure graph queried by the
+# coder/planner/QA agents (find_code, analyze_code_relationships,
+# find_dead_code, ...). The web server only needs the CLI for the manual
+# indexing shim — docs_generator_service.refresh_codegraph() runs
+# `codegraphcontext index <path>`. Embedded DB, tree-sitter parsing, no API key.
+#
+# NOT pip-installed here: codegraphcontext hard-pins `protobuf<3.21`, which
+# clashes with other deps in this venv. It's only ever exec'd as a subprocess
+# (never imported), so install it isolated and keep it on PATH:
+#     pipx install codegraphcontext
+# refresh_codegraph()/_resolve_codegraph_bin() locate it via the venv scripts
+# dir or PATH (pipx shim). The agent-facing MCP wiring lives in apps/backend.

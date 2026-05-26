@@ -25,3 +25,18 @@ tree-sitter>=0.21.0
 tree-sitter-python>=0.21.0
 tree-sitter-javascript>=0.21.0
 tree-sitter-typescript>=0.21.0
+
+# CodeGraphContext: per-project code-structure graph. Ships the stdio MCP
+# server (`codegraphcontext mcp start`) that core/client.py wires into
+# planner/coder/QA agent sessions once a project is indexed (gated on a
+# `.codegraphcontext/` folder existing). Embedded graph DB (kuzu) — no Docker,
+# no API key; indexing is via tree-sitter. Distinct from graphify
+# (docs/cross-cutting layer) — the two run side by side.
+#
+# NOT installed here: codegraphcontext hard-pins `protobuf<3.21,>=3.20`, which
+# clashes with google-generativeai's stack in this venv. We only ever exec it
+# out-of-process (CLI + stdio MCP server), never import it, so install it in
+# its OWN isolated environment and let it stay on PATH:
+#     pipx install codegraphcontext
+# core/client.py:_resolve_codegraph_bin() finds it via the venv scripts dir or
+# PATH (so pipx's shim is picked up). Set CODEGRAPH_DISABLED=true to force off.

@@ -16,6 +16,7 @@ for backwards compatibility.
 
 from .models import (
     AGENT_CONFIGS,
+    CODEGRAPH_TOOLS,
     CONTEXT7_TOOLS,
     GRAPHIFY_TOOLS,
     GRAPHITI_MCP_TOOLS,
@@ -99,6 +100,8 @@ def _get_mcp_tools_for_servers(servers: list[str]) -> list[str]:
             tools.extend(GRAPHITI_MCP_TOOLS)
         elif server == "graphify":
             tools.extend(GRAPHIFY_TOOLS)
+        elif server == "codegraph":
+            tools.extend(CODEGRAPH_TOOLS)
         elif server == "playwright":
             tools.extend(PLAYWRIGHT_TOOLS)
         # magestic-ai tools are already added via config["magestic_ai_tools"]

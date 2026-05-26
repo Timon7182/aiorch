@@ -92,7 +92,12 @@ class OpenAICompatProvider(ProviderStrategy):
         model: str | None,
         model_config: dict | None,
         conversation_history: list[dict] | None,
+        working_dir: Path | None = None,
     ) -> str:
+        # working_dir is accepted for interface parity; this provider is a plain
+        # chat endpoint with no filesystem tool access, so branch selection has
+        # no effect here.
+        _ = working_dir
         effective_model = model or (model_config or {}).get("model", "")
 
         messages = []

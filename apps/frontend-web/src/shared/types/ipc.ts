@@ -508,7 +508,7 @@ export interface API {
   // Insights operations
   getInsightsSession: (projectId: string) => Promise<IPCResult<InsightsSession | null>>;
   detectInsightsProviders: (projectId: string) => Promise<IPCResult<InsightsProviderInfo[]>>;
-  sendInsightsMessage: (projectId: string, message: string, modelConfig?: InsightsModelConfig) => void;
+  sendInsightsMessage: (projectId: string, message: string, modelConfig?: InsightsModelConfig, branch?: string) => void;
   stopInsightsMessage: (projectId: string) => Promise<IPCResult>;
   clearInsightsSession: (projectId: string) => Promise<IPCResult>;
   createTaskFromInsights: (

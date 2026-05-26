@@ -164,11 +164,16 @@ class OllamaProvider(ProviderStrategy):
         model: str | None,
         model_config: dict | None,
         conversation_history: list[dict] | None,
+        working_dir: Path | None = None,
     ) -> str:
         effective_model = model or (model_config or {}).get("model", "llama3.2:latest")
 
+        # Read/search tools operate in the branch worktree when one was
+        # selected; otherwise the project directory itself.
+        tool_root = working_dir or project_path
+
         # Build messages array with system context and conversation history
-        resolved_path = project_path.resolve()
+        resolved_path = tool_root.resolve()
         system_prompt = (
             f"You are a helpful coding assistant analyzing the project at: {resolved_path}\n"
             f"You have tools to read files, list directories, and search code in this project.\n"
@@ -281,7 +286,7 @@ class OllamaProvider(ProviderStrategy):
                             "tool": {"name": tool_name, "input": str(display_input)[:200]},
                         })
 
-                        result = execute_tool(tool_name, tool_args, project_path)
+                        result = execute_tool(tool_name, tool_args, tool_root)
 
                         await broadcast_event("insights:chunk", {
                             "projectId": project_id,

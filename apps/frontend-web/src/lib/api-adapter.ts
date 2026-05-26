@@ -779,8 +779,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
   // ========== Insights Operations ==========
   getInsightsSession: (projectId: string) => get(`/projects/${projectId}/insights`),
   detectInsightsProviders: (projectId: string) => get(`/projects/${projectId}/insights/providers`),
-  sendInsightsMessage: (projectId: string, message: string, modelConfig?: InsightsModelConfig) => {
-    post(`/projects/${projectId}/insights/message`, { message, modelConfig });
+  sendInsightsMessage: (projectId: string, message: string, modelConfig?: InsightsModelConfig, branch?: string) => {
+    post(`/projects/${projectId}/insights/message`, { message, modelConfig, branch });
   },
   stopInsightsMessage: (projectId: string) =>
     post(`/projects/${projectId}/insights/stop`),

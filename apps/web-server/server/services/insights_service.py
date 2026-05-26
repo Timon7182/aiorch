@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..websockets.events import broadcast_event
+from .branch_worktree import ensure_branch_worktree
 from .insights_providers import get_provider
 
 logger = logging.getLogger(__name__)
@@ -313,8 +314,15 @@ class InsightsService:
         project_id: str,
         message: str,
         model_config: dict | None = None,
+        branch: str | None = None,
     ) -> None:
-        """Send a message and stream the response via the appropriate provider."""
+        """Send a message and stream the response via the appropriate provider.
+
+        When ``branch`` names a branch other than the current checkout, the
+        provider runs against a read-only worktree of that branch so the chat
+        can answer using its contents without disturbing the user's working
+        tree. Sessions and usage still belong to the main project directory.
+        """
         # NOTE: session loading/saving is inside the try below on purpose. This
         # coroutine runs as a fire-and-forget asyncio task (see start_message), so
         # any exception raised here is otherwise silently dropped ("Task exception
@@ -357,6 +365,24 @@ class InsightsService:
                 for msg in session.messages[:-1]  # Exclude current user message
             ]
 
+            # Resolve a branch worktree if the user asked to ground the chat in
+            # a branch other than the current checkout. None => use project_path.
+            working_dir = None
+            if branch:
+                working_dir = await asyncio.to_thread(
+                    ensure_branch_worktree, project_path, branch
+                )
+                if working_dir:
+                    logger.info(
+                        f"[InsightsService] Chatting against branch {branch!r} "
+                        f"in worktree {working_dir}"
+                    )
+                else:
+                    logger.info(
+                        f"[InsightsService] Branch {branch!r} unavailable or "
+                        f"already current; using project directory"
+                    )
+
             # Route to provider
             provider = get_provider(provider_id)
             logger.info(f"[InsightsService] Routing to provider: {provider_id} (model: {provider_model})")
@@ -368,6 +394,7 @@ class InsightsService:
                 model=provider_model,
                 model_config=model_config,
                 conversation_history=conversation_history if provider_id != "claude" else None,
+                working_dir=working_dir,
             )
 
             # Persist the assistant response to disk
@@ -406,13 +433,14 @@ class InsightsService:
         project_id: str,
         message: str,
         model_config: dict | None = None,
+        branch: str | None = None,
     ) -> None:
         """Start send_message as a tracked background task."""
         # Cancel any existing running task for this project
         self.stop_message(project_id)
 
         task = asyncio.create_task(
-            self.send_message(project_path, project_id, message, model_config)
+            self.send_message(project_path, project_id, message, model_config, branch)
         )
         self._running_tasks[project_id] = task
 

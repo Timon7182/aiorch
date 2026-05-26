@@ -140,7 +140,11 @@ class ClaudeProvider(ProviderStrategy):
         model: str | None,
         model_config: dict | None,
         conversation_history: list[dict] | None,
+        working_dir: Path | None = None,
     ) -> str:
+        # Run the CLI in the branch worktree when one was selected; usage and
+        # token resolution below still key off the main project_path.
+        run_dir = working_dir or project_path
         claude_bin = self._resolve_claude_path()
         cmd = [
             claude_bin,
@@ -189,7 +193,7 @@ class ClaudeProvider(ProviderStrategy):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(project_path),
+                cwd=str(run_dir),
                 env=env,
                 limit=10 * 1024 * 1024,
             )

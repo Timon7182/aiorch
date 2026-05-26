@@ -35,7 +35,9 @@ from .models import (
     # Base tools
     BASE_READ_TOOLS,
     BASE_WRITE_TOOLS,
+    CODEGRAPH_TOOLS,
     CONTEXT7_TOOLS,
+    GRAPHIFY_TOOLS,
     GRAPHITI_MCP_TOOLS,
     # MCP tool lists
     MAGESTIC_AI_TOOLS,
@@ -75,6 +77,8 @@ __all__ = [
     "MAGESTIC_AI_TOOLS",
     "CONTEXT7_TOOLS",
     "GRAPHITI_MCP_TOOLS",
+    "GRAPHIFY_TOOLS",
+    "CODEGRAPH_TOOLS",
     "PLAYWRIGHT_TOOLS",
     # Magestic AI tool name constants
     "TOOL_UPDATE_SUBTASK_STATUS",

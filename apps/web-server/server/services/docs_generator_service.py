@@ -486,6 +486,73 @@ class DocsGeneratorService:
         except OSError:
             pass
 
+    async def refresh_codegraph(self, project_path: Path) -> None:
+        """Run `codegraphcontext index <path>` against the project (manual trigger).
+
+        Builds/refreshes the CodeGraphContext embedded graph DB under the
+        project's `.codegraphcontext/` folder. Once that folder exists, the
+        planner/coder/QA agents automatically get the CGC MCP tools
+        (find_code, analyze_code_relationships, find_dead_code, ...) wired into
+        their sessions — see core/client.py and agents/tools_pkg/models.py,
+        which gate the `codegraph` server on the folder's presence.
+
+        NOT called automatically (mirrors refresh_graph). The canonical manual
+        path is to SSH and run `codegraphcontext index <path>` yourself; this
+        method stays as a callable shim so a future endpoint can trigger it
+        from the web UI. CGC indexes via tree-sitter with no LLM, so it needs
+        no API key and runs fully offline.
+        """
+        bin_path = self._resolve_codegraph_bin()
+        if bin_path is None:
+            logger.info(
+                "[DocsGenerator] codegraphcontext CLI not installed; skipping "
+                "code-graph refresh. Ensure `codegraphcontext` is in requirements.txt."
+            )
+            return
+
+        env = os.environ.copy()
+
+        cmd = [bin_path, "index", str(project_path), "--force"]
+        logger.info(f"[DocsGenerator] Refreshing CodeGraphContext index: {' '.join(cmd)}")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(project_path),
+                env=env,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            logger.warning("[DocsGenerator] codegraphcontext index timed out after 10m")
+            return
+        except OSError as e:
+            logger.warning(f"[DocsGenerator] codegraphcontext spawn failed: {e}")
+            return
+
+        output = (stdout or b"").decode("utf-8", "replace")
+        if proc.returncode != 0:
+            logger.warning(
+                f"[DocsGenerator] codegraphcontext exited with code {proc.returncode}. "
+                f"Tail: {output[-1000:]}"
+            )
+            return
+
+        # Stamp the marker so the UI can show "code-graph as of <ts>".
+        try:
+            marker = project_path / ".magestic-ai" / ".docgen.json"
+            existing: dict = {}
+            if marker.exists():
+                try:
+                    existing = json.loads(marker.read_text())
+                except json.JSONDecodeError:
+                    pass
+            existing["last_codegraph"] = datetime.now().isoformat()
+            marker.write_text(json.dumps(existing, indent=2))
+        except OSError:
+            pass
+
     def _resolve_mkdocs_bin(self) -> str | None:
         """Find a usable `mkdocs` executable, preferring the venv."""
         # Same venv that runs the web server.
@@ -501,6 +568,15 @@ class DocsGeneratorService:
         if venv_bin.exists():
             return str(venv_bin)
         return shutil.which("graphify")
+
+    def _resolve_codegraph_bin(self) -> str | None:
+        """Find the `codegraphcontext` executable, preferring the web-server venv."""
+        scripts_dir = Path(sys.executable).parent
+        for name in ("codegraphcontext", "codegraphcontext.exe", "cgc", "cgc.exe"):
+            candidate = scripts_dir / name
+            if candidate.exists():
+                return str(candidate)
+        return shutil.which("codegraphcontext") or shutil.which("cgc")
 
 
 _singleton: DocsGeneratorService | None = None

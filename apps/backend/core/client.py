@@ -192,6 +192,7 @@ def invalidate_project_cache(project_dir: Path | None = None) -> None:
 
 
 from agents.tools_pkg import (
+    CODEGRAPH_TOOLS,
     CONTEXT7_TOOLS,
     GRAPHITI_MCP_TOOLS,
     MAGESTIC_AI_TOOLS,
@@ -483,6 +484,29 @@ def load_claude_md(project_dir: Path) -> str | None:
     return None
 
 
+def _resolve_codegraph_bin() -> str | None:
+    """Find the `codegraphcontext` CLI as an absolute path.
+
+    Prefers the scripts/bin dir of the running interpreter (the backend venv)
+    so the agent subprocess can exec it regardless of PATH, then falls back to
+    the `cgc` alias and a plain PATH lookup. Returns None if not installed.
+    """
+    import shutil
+    import sys
+
+    scripts_dir = Path(sys.executable).parent
+    for name in (
+        "codegraphcontext",
+        "codegraphcontext.exe",
+        "cgc",
+        "cgc.exe",
+    ):
+        candidate = scripts_dir / name
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("codegraphcontext") or shutil.which("cgc")
+
+
 def create_client(
     project_dir: Path,
     spec_dir: Path,
@@ -608,6 +632,8 @@ def create_client(
     graphiti_mcp_enabled = "graphiti" in required_servers
     # Same idea for graphify (per-project knowledge graph).
     graphify_mcp_enabled = "graphify" in required_servers
+    # And for codegraph (CodeGraphContext — per-project code-structure graph).
+    codegraph_mcp_enabled = "codegraph" in required_servers
 
     # Determine browser tools for permissions (already in allowed_tools_list)
     browser_tools_permissions = []
@@ -699,6 +725,11 @@ def create_client(
                     if graphiti_mcp_enabled
                     else []
                 ),
+                *(
+                    [f"{tool}(*)" for tool in CODEGRAPH_TOOLS]
+                    if codegraph_mcp_enabled
+                    else []
+                ),
                 *[f"{tool}(*)" for tool in browser_tools_permissions],
                 # Magestic AI MCP tools for build management
                 *(
@@ -745,6 +776,8 @@ def create_client(
         mcp_servers_list.append("graphiti-memory (knowledge graph)")
     if graphify_mcp_enabled:
         mcp_servers_list.append("graphify (project knowledge graph)")
+    if codegraph_mcp_enabled:
+        mcp_servers_list.append("codegraph (code-structure graph)")
     if "magestic-ai" in required_servers and magestic_ai_tools_enabled:
         mcp_servers_list.append(f"magestic-ai ({agent_type} tools)")
     if mcp_servers_list:
@@ -801,6 +834,26 @@ def create_client(
             "command": "python",
             "args": ["-m", "graphify.serve", str(graph_file)],
         }
+
+    # CodeGraphContext MCP server (stdio): exposes code-structure investigation
+    # tools (find_code / analyze_code_relationships / find_dead_code / ...) over
+    # the project's embedded graph DB under .codegraphcontext/. The dir-exists
+    # check already happened in get_required_mcp_servers. CGC resolves which
+    # repo to serve from its working directory, which the SDK inherits from
+    # `cwd` (set to project_dir below), so no path argument is needed.
+    if codegraph_mcp_enabled:
+        cgc_bin = _resolve_codegraph_bin()
+        if cgc_bin:
+            mcp_servers["codegraph"] = {
+                "command": cgc_bin,
+                "args": ["mcp", "start"],
+            }
+        else:
+            logger.warning(
+                "codegraph requested (project is indexed) but the "
+                "`codegraphcontext` CLI was not found on PATH or in the venv; "
+                "skipping. Install it with `pip install codegraphcontext`."
+            )
 
     # Add custom magestic-ai MCP server if required and available
     if "magestic-ai" in required_servers and magestic_ai_tools_enabled:

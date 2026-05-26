@@ -797,6 +797,9 @@ def _get_project_path(project_id: str) -> FilePath:
 class InsightsMessageRequest(BaseModel):
     message: str
     modelConfig: dict | None = None
+    # Optional branch to ground the chat in. When set (and not the current
+    # checkout) the chat reads from a read-only worktree of this branch.
+    branch: str | None = None
 
 
 @insights_router.get("/providers")
@@ -875,6 +878,7 @@ async def send_insights_message(projectId: str = Path(...), request: InsightsMes
         project_id=projectId,
         message=request.message,
         model_config=request.modelConfig,
+        branch=request.branch,
     )
 
     return {"success": True}

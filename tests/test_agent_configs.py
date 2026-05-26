@@ -195,6 +195,76 @@ class TestGetRequiredMcpServers:
             )
 
 
+class TestCodeGraphIntegration:
+    """Tests for the CodeGraphContext (codegraph) MCP server wiring.
+
+    codegraph mirrors graphify: it's listed in the build/QA agent configs but
+    only activates when the project has been indexed (a `.codegraphcontext/`
+    folder exists). The server is registered under the key "codegraph", so its
+    tools carry the mcp__codegraph__ prefix.
+    """
+
+    def test_codegraph_tools_have_correct_prefix(self):
+        """All CODEGRAPH_TOOLS should have the mcp__codegraph__ prefix."""
+        from agents.tools_pkg.models import CODEGRAPH_TOOLS
+
+        assert CODEGRAPH_TOOLS, "CODEGRAPH_TOOLS should not be empty"
+        for tool in CODEGRAPH_TOOLS:
+            assert tool.startswith("mcp__codegraph__"), (
+                f"Tool '{tool}' missing mcp__codegraph__ prefix"
+            )
+
+    def test_codegraph_listed_for_build_and_qa_agents(self):
+        """codegraph should be configured for planner/coder/qa agents."""
+        from agents.tools_pkg.models import AGENT_CONFIGS
+
+        for agent_type in ("planner", "coder", "qa_reviewer", "qa_fixer"):
+            assert "codegraph" in AGENT_CONFIGS[agent_type]["mcp_servers"], (
+                f"Agent '{agent_type}' should list codegraph"
+            )
+
+    def test_codegraph_disabled_without_index(self, tmp_path):
+        """codegraph is filtered out when the project has no .codegraphcontext/ folder."""
+        from agents.tools_pkg.models import get_required_mcp_servers
+
+        servers = get_required_mcp_servers("coder", project_dir=tmp_path)
+        assert "codegraph" not in servers
+
+    def test_codegraph_enabled_when_indexed(self, tmp_path):
+        """codegraph activates once the project has been indexed."""
+        from agents.tools_pkg.models import get_required_mcp_servers
+
+        (tmp_path / ".codegraphcontext").mkdir()
+        servers = get_required_mcp_servers("coder", project_dir=tmp_path)
+        assert "codegraph" in servers
+
+    def test_codegraph_disabled_via_env(self, tmp_path, monkeypatch):
+        """CODEGRAPH_DISABLED=true removes codegraph even when indexed."""
+        from agents.tools_pkg.models import get_required_mcp_servers
+
+        (tmp_path / ".codegraphcontext").mkdir()
+        monkeypatch.setenv("CODEGRAPH_DISABLED", "true")
+        servers = get_required_mcp_servers("coder", project_dir=tmp_path)
+        assert "codegraph" not in servers
+
+    def test_codegraph_kept_when_project_dir_missing(self):
+        """Without project_dir (e.g. permission introspection), codegraph stays."""
+        from agents.tools_pkg.models import get_required_mcp_servers
+
+        servers = get_required_mcp_servers("coder")
+        assert "codegraph" in servers
+
+    def test_indexed_project_exposes_codegraph_tools(self, tmp_path):
+        """get_allowed_tools should include CGC tools for an indexed project."""
+        from agents.tools_pkg.models import CODEGRAPH_TOOLS
+        from agents.tools_pkg.permissions import get_allowed_tools
+
+        (tmp_path / ".codegraphcontext").mkdir()
+        tools = get_allowed_tools("coder", project_dir=tmp_path)
+        for tool in CODEGRAPH_TOOLS:
+            assert tool in tools, f"Expected '{tool}' in coder's allowed tools"
+
+
 class TestGetDefaultThinkingLevel:
     """Tests for get_default_thinking_level() function."""
 

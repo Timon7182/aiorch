@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   MessageSquare,
   Send,
@@ -15,7 +15,8 @@ import {
   PanelLeftClose,
   PanelLeft,
   Square,
-  ListPlus
+  ListPlus,
+  GitBranch
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -41,6 +42,7 @@ import {
   setupInsightsListeners
 } from '../stores/insights-store';
 import { loadTasks } from '../stores/task-store';
+import { useProjectStore } from '../stores/project-store';
 import { useTranslation } from 'react-i18next';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
 import { CreateTaskFromChatDialog } from './CreateTaskFromChatDialog';
@@ -129,6 +131,18 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const [taskCreated, setTaskCreated] = useState<Set<string>>(new Set());
   const [showSidebar, setShowSidebar] = useState(true);
 
+  // Branch grounding: which branch the chat should read from. '' means the
+  // project's current working tree (no worktree); any other value makes the
+  // backend answer from a read-only worktree of that branch.
+  const projects = useProjectStore((state) => state.projects);
+  const projectPath = useMemo(
+    () => projects.find((p) => p.id === projectId)?.path ?? null,
+    [projects, projectId]
+  );
+  const [branches, setBranches] = useState<string[]>([]);
+  const [currentBranch, setCurrentBranch] = useState<string>('');
+  const [selectedBranch, setSelectedBranch] = useState<string>('');
+
   // Create Task from Chat state
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [isGeneratingTask, setIsGeneratingTask] = useState(false);
@@ -161,12 +175,47 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     setTaskCreated(new Set());
   }, [session?.id]);
 
+  // Load available branches + current branch so the user can ground the chat
+  // in a branch other than the one currently checked out.
+  useEffect(() => {
+    if (!projectPath) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [branchesResult, currentResult] = await Promise.all([
+          window.API.getGitBranches(projectPath),
+          window.API.getCurrentGitBranch(projectPath),
+        ]);
+        if (cancelled) return;
+        if (branchesResult.success && branchesResult.data) {
+          setBranches(branchesResult.data);
+        }
+        if (currentResult.success && currentResult.data) {
+          setCurrentBranch(currentResult.data);
+        }
+      } catch (err) {
+        console.error('Failed to load branches for chat:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath]);
+
+  // Reset branch choice back to the working tree when switching projects.
+  useEffect(() => {
+    setSelectedBranch('');
+  }, [projectId]);
+
   const handleSend = () => {
     const message = inputValue.trim();
     if (!message || status.phase === 'thinking' || status.phase === 'streaming') return;
 
     setInputValue('');
-    sendMessage(projectId, message, session?.modelConfig);
+    // Only pass a branch when it differs from the current checkout — otherwise
+    // the backend would needlessly build a worktree of the branch we're on.
+    const branch = selectedBranch && selectedBranch !== currentBranch ? selectedBranch : undefined;
+    sendMessage(projectId, message, session?.modelConfig, branch);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -462,6 +511,34 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
 
       {/* Input */}
       <div className="border-t border-border p-4">
+        {branches.length > 0 && (
+          <div className="mb-2 flex items-center gap-2">
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <select
+              value={selectedBranch}
+              onChange={(e) => setSelectedBranch(e.target.value)}
+              disabled={isLoading}
+              title="Read from a specific branch (a read-only worktree; your working tree is not touched)"
+              className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+            >
+              <option value="">
+                {currentBranch ? `Current branch (${currentBranch})` : 'Current working tree'}
+              </option>
+              {branches
+                .filter((b) => b !== currentBranch)
+                .map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+            </select>
+            {selectedBranch && selectedBranch !== currentBranch && (
+              <span className="text-xs text-muted-foreground">
+                reading from <code className="font-mono">{selectedBranch}</code> (read-only)
+              </span>
+            )}
+          </div>
+        )}
         <div className="flex gap-2">
           <Textarea
             ref={textareaRef}

@@ -58,7 +58,9 @@ class CodexProvider(ProviderStrategy):
         model: str | None,
         model_config: dict | None,
         conversation_history: list[dict] | None,
+        working_dir: Path | None = None,
     ) -> str:
+        run_dir = working_dir or project_path
         cmd = ["bash", "-l", "-c"]
 
         effective_model = model or (model_config or {}).get("model", "gpt-5.3-codex")
@@ -94,7 +96,7 @@ class CodexProvider(ProviderStrategy):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(project_path),
+                cwd=str(run_dir),
                 env=env,
                 limit=10 * 1024 * 1024,
             )

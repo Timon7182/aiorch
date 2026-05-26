@@ -83,6 +83,30 @@ GRAPHIFY_TOOLS = [
     "mcp__graphify__shortest_path",
 ]
 
+# CodeGraphContext (CGC) MCP tools for precise code-structure investigation
+# (when the project has been indexed — i.e. a `.codegraphcontext/` folder
+# exists, populated by `codegraphcontext index <path>` /
+# docs_generator_service.refresh_codegraph). CGC parses source with
+# tree-sitter into an embedded graph DB and answers caller/callee, call-chain,
+# dead-code and complexity questions.
+#
+# Distinct from graphify above: graphify is the docs/transcripts/cross-cutting
+# layer; CGC is the exact code-symbol layer. Both run side by side so agents
+# can pick the right tool. This is a READ-ONLY set on purpose — indexing is a
+# manual trigger, so the index/watch/delete tools are intentionally omitted.
+# Server is registered under the key "codegraph", hence the mcp__codegraph__
+# prefix.
+CODEGRAPH_TOOLS = [
+    "mcp__codegraph__find_code",
+    "mcp__codegraph__analyze_code_relationships",
+    "mcp__codegraph__find_dead_code",
+    "mcp__codegraph__calculate_cyclomatic_complexity",
+    "mcp__codegraph__find_most_complex_functions",
+    "mcp__codegraph__execute_cypher_query",
+    "mcp__codegraph__list_indexed_repositories",
+    "mcp__codegraph__get_repository_stats",
+]
+
 # =============================================================================
 # Browser Automation MCP Tools (QA agents only)
 # =============================================================================
@@ -171,7 +195,7 @@ AGENT_CONFIGS = {
     # ═══════════════════════════════════════════════════════════════════════
     "planner": {
         "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS + WEB_TOOLS,
-        "mcp_servers": ["context7", "graphiti", "graphify", "magestic-ai"],
+        "mcp_servers": ["context7", "graphiti", "graphify", "codegraph", "magestic-ai"],
         "magestic_ai_tools": [
             TOOL_GET_BUILD_PROGRESS,
             TOOL_GET_SESSION_CONTEXT,
@@ -181,7 +205,7 @@ AGENT_CONFIGS = {
     },
     "coder": {
         "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS + WEB_TOOLS,
-        "mcp_servers": ["context7", "graphiti", "graphify", "magestic-ai"],
+        "mcp_servers": ["context7", "graphiti", "graphify", "codegraph", "magestic-ai"],
         "magestic_ai_tools": [
             TOOL_UPDATE_SUBTASK_STATUS,
             TOOL_GET_BUILD_PROGRESS,
@@ -199,7 +223,7 @@ AGENT_CONFIGS = {
         # Read + Write/Edit (for QA reports and plan updates) + Bash (for tests)
         # Note: Reviewer writes to spec directory only (qa_report.md, implementation_plan.json)
         "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS + WEB_TOOLS,
-        "mcp_servers": ["context7", "graphiti", "graphify", "magestic-ai", "browser"],
+        "mcp_servers": ["context7", "graphiti", "graphify", "codegraph", "magestic-ai", "browser"],
         "magestic_ai_tools": [
             TOOL_GET_BUILD_PROGRESS,
             TOOL_UPDATE_QA_STATUS,
@@ -210,7 +234,7 @@ AGENT_CONFIGS = {
     },
     "qa_fixer": {
         "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS + WEB_TOOLS,
-        "mcp_servers": ["context7", "graphiti", "graphify", "magestic-ai", "browser"],
+        "mcp_servers": ["context7", "graphiti", "graphify", "codegraph", "magestic-ai", "browser"],
         "magestic_ai_tools": [
             TOOL_UPDATE_SUBTASK_STATUS,
             TOOL_GET_BUILD_PROGRESS,
@@ -352,6 +376,9 @@ def _map_mcp_server_name(
         "graphiti-memory": "graphiti",
         "graphiti": "graphiti",
         "graphify": "graphify",
+        "codegraph": "codegraph",
+        "codegraphcontext": "codegraph",
+        "cgc": "codegraph",
         "playwright": "playwright",
         "puppeteer": "playwright",  # backward compat: puppeteer maps to playwright
         "magestic-ai": "magestic-ai",
@@ -440,6 +467,23 @@ def get_required_mcp_servers(
             graph_file = _Path(str(project_dir)) / "graphify-out" / "graph.json"
             if not graph_file.is_file():
                 servers = [s for s in servers if s != "graphify"]
+
+    # Filter codegraph (CodeGraphContext) based on whether the project has been
+    # indexed. CGC stores its per-repo graph DB under a `.codegraphcontext/`
+    # folder created by `codegraphcontext index <path>` (manual trigger). Enable
+    # when (a) CODEGRAPH_DISABLED env is not truthy and (b) project_dir was
+    # passed AND that folder exists. Mirrors the graphify logic above: when
+    # project_dir is missing we keep it enabled so permission-introspection
+    # callers don't lose tools; client.py does a final existence check before
+    # spawning the server.
+    if "codegraph" in servers:
+        if str(os.environ.get("CODEGRAPH_DISABLED", "")).lower() == "true":
+            servers = [s for s in servers if s != "codegraph"]
+        elif project_dir is not None:
+            from pathlib import Path as _Path
+            cgc_dir = _Path(str(project_dir)) / ".codegraphcontext"
+            if not cgc_dir.is_dir():
+                servers = [s for s in servers if s != "codegraph"]
 
     # ========== Apply per-agent MCP overrides ==========
     # Format: AGENT_MCP_<agent_type>_ADD=server1,server2

@@ -262,7 +262,7 @@ export async function loadInsightsSession(projectId: string): Promise<void> {
   await loadInsightsSessions(projectId);
 }
 
-export function sendMessage(projectId: string, message: string, modelConfig?: InsightsModelConfig): void {
+export function sendMessage(projectId: string, message: string, modelConfig?: InsightsModelConfig, branch?: string): void {
   const store = useInsightsStore.getState();
   const session = store.session;
 
@@ -295,8 +295,8 @@ export function sendMessage(projectId: string, message: string, modelConfig?: In
     ...configToUse,
   };
 
-  // Send to main process
-  window.API.sendInsightsMessage(projectId, message, configWithProvider as InsightsModelConfig);
+  // Send to main process (branch grounds the chat in a read-only worktree)
+  window.API.sendInsightsMessage(projectId, message, configWithProvider as InsightsModelConfig, branch);
 }
 
 export async function stopMessage(projectId: string): Promise<void> {

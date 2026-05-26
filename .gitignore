@@ -63,6 +63,11 @@ lerna-debug.log*
 .auto-claude/
 .magestic-ai-security.json
 .magestic-ai-status
+
+# CodeGraphContext: per-project embedded code-graph DB + generated reports.
+# (.cgcignore is intentionally NOT ignored — it's user-authored, like .gitignore.)
+.codegraphcontext/
+CGC_REPORT*.md
 .claude_settings.json
 .update-metadata.json
 
