@@ -111,11 +111,17 @@ def cleanup_insights_worktrees(project_path: Path, keep: int = _MAX_INSIGHTS_WOR
 
 def _branch_exists(project_path: Path, branch: str) -> bool:
     # Match a local branch by its full ref so names like "feature/x" resolve
-    # exactly and we never accidentally pick up a tag or remote of the same name.
-    result = _run_git(
+    # exactly and we never accidentally pick up a tag of the same name.
+    if _run_git(
         ["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], project_path
-    )
-    return result.returncode == 0
+    ).returncode == 0:
+        return True
+    # Also accept a remote-tracking ref (e.g. "origin/dev"). get_git_branches
+    # surfaces remote-only branches, and `git worktree add --detach <ref>` can
+    # check them out, so the chat can ground in a branch that isn't local yet.
+    return _run_git(
+        ["rev-parse", "--verify", "--quiet", f"refs/remotes/{branch}"], project_path
+    ).returncode == 0
 
 
 def ensure_branch_worktree(project_path: Path, branch: str | None) -> Path | None:
