@@ -487,12 +487,21 @@ def load_claude_md(project_dir: Path) -> str | None:
 def _resolve_codegraph_bin() -> str | None:
     """Find the `codegraphcontext` CLI as an absolute path.
 
-    Prefers the scripts/bin dir of the running interpreter (the backend venv)
-    so the agent subprocess can exec it regardless of PATH, then falls back to
-    the `cgc` alias and a plain PATH lookup. Returns None if not installed.
+    Resolution order:
+      1. CODEGRAPH_BIN env var (explicit absolute path). Use this when CGC is
+         installed somewhere outside the venv/PATH — e.g. a dockerized deploy
+         where CGC lives in a persisted venv on a data volume so it survives
+         container redeploys (set CODEGRAPH_BIN in the container's env).
+      2. The scripts/bin dir of the running interpreter (the backend venv).
+      3. The `cgc` alias / a plain PATH lookup (e.g. a pipx shim).
+    Returns None if not installed.
     """
     import shutil
     import sys
+
+    explicit = os.environ.get("CODEGRAPH_BIN")
+    if explicit and Path(explicit).exists():
+        return explicit
 
     scripts_dir = Path(sys.executable).parent
     for name in (

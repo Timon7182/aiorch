@@ -405,7 +405,20 @@ imported, install it isolated and keep it on PATH:
 pipx install codegraphcontext
 ```
 `_resolve_codegraph_bin()` (in `core/client.py` and `docs_generator_service.py`)
-finds it via the venv scripts dir or PATH, so a pipx shim is picked up.
+resolves it in this order: `CODEGRAPH_BIN` env (explicit absolute path) → the
+venv scripts dir → PATH (so a pipx shim is picked up).
+
+**Dockerized deploy (the production setup):** a `docker exec … pip install`
+would be wiped on every redeploy. Instead, CGC is installed into a venv on a
+**persisted data volume** and pointed to via env:
+- Install once: `python3.12 -m venv /home/magesticai/.magestic-ai/tools/cgc-venv`
+  then `…/cgc-venv/bin/pip install codegraphcontext`. The `.magestic-ai` mount is
+  bind-mounted from the host (`/home/saya/magestic-data`), so the venv survives
+  container recreation.
+- Set `CODEGRAPH_BIN=/home/magesticai/.magestic-ai/tools/cgc-venv/bin/codegraphcontext`
+  in the container env (docker-compose) so the resolver finds it after redeploys.
+Project indexes (`<project>/.codegraphcontext/`) also persist because projects
+live on the `/home/saya/projects` bind mount.
 
 **Indexing (manual trigger):** building/refreshing the graph is manual, mirroring
 graphify. Index a project before agents can use the tools:

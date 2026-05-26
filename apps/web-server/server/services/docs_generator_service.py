@@ -570,7 +570,16 @@ class DocsGeneratorService:
         return shutil.which("graphify")
 
     def _resolve_codegraph_bin(self) -> str | None:
-        """Find the `codegraphcontext` executable, preferring the web-server venv."""
+        """Find the `codegraphcontext` executable.
+
+        Honors CODEGRAPH_BIN (explicit absolute path) first — used by the
+        dockerized deploy, where CGC lives in a persisted venv on a data volume
+        so it survives redeploys. Otherwise prefers the web-server venv, then a
+        PATH/`cgc` lookup.
+        """
+        explicit = os.environ.get("CODEGRAPH_BIN")
+        if explicit and Path(explicit).exists():
+            return explicit
         scripts_dir = Path(sys.executable).parent
         for name in ("codegraphcontext", "codegraphcontext.exe", "cgc", "cgc.exe"):
             candidate = scripts_dir / name
