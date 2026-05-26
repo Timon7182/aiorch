@@ -21,10 +21,17 @@ router = APIRouter()
 # ============================================
 
 def run_git_command(args: list[str], cwd: str) -> dict:
-    """Run a git command and return result."""
+    """Run a git command and return result.
+
+    Runs with `safe.directory=*` so git works on repos owned by a different uid
+    than the process. In the dockerized deploy the web server runs as root while
+    bind-mounted project repos are owned by the host user (uid 1001), and without
+    this git aborts every command with "detected dubious ownership" — which made
+    branch listing (and thus the chat's branch switcher) silently return nothing.
+    """
     try:
         result = subprocess.run(
-            ["git"] + args,
+            ["git", "-c", "safe.directory=*"] + args,
             capture_output=True,
             text=True,
             cwd=cwd,

@@ -315,6 +315,7 @@ class InsightsService:
         message: str,
         model_config: dict | None = None,
         branch: str | None = None,
+        repo_path: Path | None = None,
     ) -> None:
         """Send a message and stream the response via the appropriate provider.
 
@@ -322,7 +323,15 @@ class InsightsService:
         provider runs against a read-only worktree of that branch so the chat
         can answer using its contents without disturbing the user's working
         tree. Sessions and usage still belong to the main project directory.
+
+        ``repo_path`` scopes the *grounding* to a child repo of a multi-repo
+        project (e.g. ``cts/backend`` under the ``cts`` parent). When set, the
+        provider runs in that repo and the branch worktree is built from it,
+        while sessions/usage stay keyed to ``project_path`` (the parent) so chat
+        history is shared across repos. None => ground in ``project_path``.
         """
+        # Where to ground/cwd the provider. Sessions always use project_path.
+        ground_dir = repo_path or project_path
         # NOTE: session loading/saving is inside the try below on purpose. This
         # coroutine runs as a fire-and-forget asyncio task (see start_message), so
         # any exception raised here is otherwise silently dropped ("Task exception
@@ -366,11 +375,11 @@ class InsightsService:
             ]
 
             # Resolve a branch worktree if the user asked to ground the chat in
-            # a branch other than the current checkout. None => use project_path.
+            # a branch other than the current checkout. None => use ground_dir.
             working_dir = None
             if branch:
                 working_dir = await asyncio.to_thread(
-                    ensure_branch_worktree, project_path, branch
+                    ensure_branch_worktree, ground_dir, branch
                 )
                 if working_dir:
                     logger.info(
@@ -380,8 +389,12 @@ class InsightsService:
                 else:
                     logger.info(
                         f"[InsightsService] Branch {branch!r} unavailable or "
-                        f"already current; using project directory"
+                        f"already current; using {ground_dir}"
                     )
+            # No branch worktree, but a child repo was selected: ground the
+            # provider in that repo (its cwd) rather than the parent project.
+            if working_dir is None and ground_dir != project_path:
+                working_dir = ground_dir
 
             # Route to provider
             provider = get_provider(provider_id)
@@ -434,13 +447,16 @@ class InsightsService:
         message: str,
         model_config: dict | None = None,
         branch: str | None = None,
+        repo_path: Path | None = None,
     ) -> None:
         """Start send_message as a tracked background task."""
         # Cancel any existing running task for this project
         self.stop_message(project_id)
 
         task = asyncio.create_task(
-            self.send_message(project_path, project_id, message, model_config, branch)
+            self.send_message(
+                project_path, project_id, message, model_config, branch, repo_path
+            )
         )
         self._running_tasks[project_id] = task
 

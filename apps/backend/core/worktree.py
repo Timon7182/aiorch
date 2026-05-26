@@ -55,10 +55,25 @@ class WorktreeManager:
     a corresponding branch magestic-ai/{spec-name}.
     """
 
-    def __init__(self, project_dir: Path, base_branch: str | None = None):
+    def __init__(
+        self,
+        project_dir: Path,
+        base_branch: str | None = None,
+        worktrees_root: Path | None = None,
+    ):
+        # ``project_dir`` is the git repository worktrees are cut from. For
+        # multi-repo projects (a parent folder holding several repos) this is
+        # the chosen child repo, while ``worktrees_root`` stays the project
+        # root — so worktrees, and the web UI's file sync that reads them, keep
+        # their usual location under the project regardless of which repo is
+        # being built. When ``worktrees_root`` is omitted (the common
+        # single-repo case) it defaults to ``project_dir``, preserving the
+        # original layout exactly.
         self.project_dir = project_dir
         self.base_branch = base_branch or self._detect_base_branch()
-        self.worktrees_dir = project_dir / ".magestic-ai" / "worktrees" / "tasks"
+        self.worktrees_dir = (
+            (worktrees_root or project_dir) / ".magestic-ai" / "worktrees" / "tasks"
+        )
         self._merge_lock = asyncio.Lock()
 
     def _detect_base_branch(self) -> str:

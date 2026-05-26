@@ -112,6 +112,8 @@ class TaskMetadataConfig(TypedDict, total=False):
     model: str
     thinkingLevel: str
     fastMode: bool
+    baseBranch: str
+    repoPath: str
 
 
 Phase = Literal["spec", "planning", "coding", "qa", "qa_fixer"]

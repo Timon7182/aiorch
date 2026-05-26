@@ -1177,10 +1177,21 @@ async def create_project_task(project_id: str, task_data: TaskCreateRequest):
         # Copy model-related fields that phase_config.py expects
         # Also include 'mode' for Quick Mode prompt selection and 'requireReviewBeforeCoding' for approval gate
         # Also include selectedSkills so agent_service.py can inject skill context
-        model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills"]
+        # baseBranch/repoPath persisted here so the build honors the user's git
+        # choices even though the "Start" request doesn't re-send them.
+        model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "baseBranch", "repoPath"]
         for field in model_fields:
             if field in task_data.metadata:
                 task_metadata[field] = task_data.metadata[field]
+
+        # Validate repoPath against the project's actual git repos so a task can
+        # only target the project's parent folder or one of its child repos.
+        repo_path = task_metadata.get("repoPath")
+        if repo_path:
+            from ..services.git_repos import resolve_git_repos
+            allowed = {r["path"] for r in resolve_git_repos(str(project_path))}
+            if repo_path not in allowed:
+                task_metadata.pop("repoPath", None)
 
         if task_metadata:
             (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))

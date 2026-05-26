@@ -30,17 +30,20 @@ interface DocsStatus {
   has_docs: boolean;
   has_site: boolean;
   has_graph?: boolean;
+  has_codegraph?: boolean;
   last_run?: string;
   last_build?: string;
   last_build_ok?: boolean;
   last_graphify?: string;
+  last_codegraph?: string;
   head_sha?: string;
 }
 
-// Sentinel path used to signal "show the graphify report in the right
-// pane" instead of one of the docs/*.md files. Anything starting with
-// __ is reserved and won't collide with a real markdown filename.
+// Sentinel paths used to signal "show the graphify / CodeGraphContext report
+// in the right pane" instead of one of the docs/*.md files. Anything starting
+// with __ is reserved and won't collide with a real markdown filename.
 const GRAPH_REPORT_PATH = '__graph_report__';
+const CODEGRAPH_REPORT_PATH = '__codegraph_report__';
 
 interface DocFile {
   path: string;
@@ -107,10 +110,14 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       // Graph report lives in graphify-out/, not docs/, so it has its
       // own endpoint. Same response shape, so we slot it into the same
       // markdown viewer.
-      const url =
-        path === GRAPH_REPORT_PATH
-          ? `/projects/${projectId}/docs/graph-report${repoSuffix(false)}`
-          : `/projects/${projectId}/docs/raw?path=${encodeURIComponent(path)}${repoSuffix(true)}`;
+      let url: string;
+      if (path === GRAPH_REPORT_PATH) {
+        url = `/projects/${projectId}/docs/graph-report${repoSuffix(false)}`;
+      } else if (path === CODEGRAPH_REPORT_PATH) {
+        url = `/projects/${projectId}/docs/codegraph-report${repoSuffix(false)}`;
+      } else {
+        url = `/projects/${projectId}/docs/raw?path=${encodeURIComponent(path)}${repoSuffix(true)}`;
+      }
       const r = await get<RawDoc>(url);
       if (reqId !== contentReqRef.current) return; // a newer load superseded us
       if (r.success && r.data) {
@@ -137,7 +144,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   // previously-selected file belongs to a different repo and would 404. The
   // graph-report sentinel isn't a docs/ file, so it's exempt.
   useEffect(() => {
-    if (selectedPath === GRAPH_REPORT_PATH) return;
+    if (selectedPath === GRAPH_REPORT_PATH || selectedPath === CODEGRAPH_REPORT_PATH) return;
     if (files.length === 0) {
       if (selectedPath) {
         setSelectedPath(null);
@@ -364,6 +371,12 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
               {new Date(status.last_graphify).toLocaleString()}
             </div>
           )}
+          {status?.has_codegraph && status?.last_codegraph && (
+            <div>
+              <span className="font-medium">Code graph:</span>{' '}
+              {new Date(status.last_codegraph).toLocaleString()}
+            </div>
+          )}
         </div>
         {status?.has_graph && (
           <>
@@ -405,6 +418,29 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
                 <FileText className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">graph.json</span>
               </a>
+            </div>
+          </>
+        )}
+        {status?.has_codegraph && (
+          <>
+            <Separator />
+            <div className="px-3 py-2 space-y-1">
+              <div className="flex items-center gap-1 px-1 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Network className="h-3 w-3" />
+                Code graph (CGC)
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPath(CODEGRAPH_REPORT_PATH)}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/50',
+                  selectedPath === CODEGRAPH_REPORT_PATH && 'bg-accent',
+                )}
+                title="CodeGraphContext: god nodes, complexity hotspots, cross-module links, suggested queries"
+              >
+                <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">CGC_REPORT.md</span>
+              </button>
             </div>
           </>
         )}
@@ -455,7 +491,9 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
           <span>
             {selectedPath === GRAPH_REPORT_PATH
               ? 'GRAPH_REPORT.md (graphify)'
-              : selectedPath ?? '—'}
+              : selectedPath === CODEGRAPH_REPORT_PATH
+                ? 'CGC_REPORT.md (CodeGraphContext)'
+                : selectedPath ?? '—'}
           </span>
           {status?.has_site && (
             <a

@@ -233,6 +233,7 @@ export interface TaskMetadata {
 
   // Git/Worktree configuration
   baseBranch?: string;  // Override base branch for this task's worktree
+  repoPath?: string;    // Target git repo for multi-repo projects (absolute path)
 
   // Execution mode
   mode?: 'quick' | 'full';  // 'quick' uses simplified prompts (~70% fewer tokens), 'full' for comprehensive
@@ -508,4 +509,5 @@ export interface TaskStartOptions {
   workers?: number;
   model?: string;
   baseBranch?: string; // Override base branch for worktree creation
+  repoPath?: string; // Target git repo for multi-repo projects (absolute path)
 }

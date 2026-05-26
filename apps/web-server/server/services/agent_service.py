@@ -2424,6 +2424,7 @@ class AgentService:
         spec_id: str,
         auto_continue: bool = True,
         base_branch: str | None = None,
+        repo_path: str | None = None,
         mode: str | None = "full",
         force: bool = False,
         user_id: str = "",
@@ -2507,6 +2508,9 @@ class AgentService:
 
         if base_branch:
             cmd.extend(["--base-branch", base_branch])
+
+        if repo_path:
+            cmd.extend(["--repo-path", repo_path])
 
         # Skip QA for quick mode (simple tasks) - coder_quick.md validates inline
         if mode == "quick":

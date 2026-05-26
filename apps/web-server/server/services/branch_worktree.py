@@ -38,8 +38,12 @@ _MAX_INSIGHTS_WORKTREES = 5
 
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    # safe.directory=* so git works on repos owned by a different uid than the
+    # process (dockerized deploy: root process, host-owned bind-mounted repos).
+    # Without it git aborts with "detected dubious ownership" and the branch
+    # worktree silently fails to build.
     return subprocess.run(
-        ["git", *args],
+        ["git", "-c", "safe.directory=*", *args],
         cwd=str(cwd),
         capture_output=True,
         text=True,

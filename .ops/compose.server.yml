@@ -52,6 +52,9 @@ services:
       - GRAPHITI_ENABLED=${GRAPHITI_ENABLED:-false}
       - GRAPHITI_LLM_PROVIDER=${GRAPHITI_LLM_PROVIDER:-anthropic}
       - GRAPHITI_EMBEDDER_PROVIDER=${GRAPHITI_EMBEDDER_PROVIDER:-google}
+      # CodeGraphContext: code-structure graph for agents + docs panel. CGC lives
+      # in a venv on the persisted .magestic-ai volume; point the resolver at it.
+      - CODEGRAPH_BIN=/home/magesticai/.magestic-ai/tools/cgc-venv/bin/codegraphcontext
       # Git provider credentials. Add the ones you use to /home/saya/.aiorch-secrets.
       # gh CLI auto-detects GH_TOKEN; git uses them via the credential helper
       # configured at container entrypoint.

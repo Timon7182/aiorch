@@ -38,7 +38,7 @@ import { TaskClarificationWizard } from './TaskClarificationWizard';
 import { createTask, saveDraft, loadDraft, clearDraft, isDraftEmpty } from '../stores/task-store';
 import { useProjectStore } from '../stores/project-store';
 import { cn } from '../lib/utils';
-import type { Task, TaskCategory, TaskPriority, TaskComplexity, TaskImpact, TaskMetadata, ImageAttachment, TaskDraft, ModelType, ThinkingLevel, ReferencedFile, SelectedSkill } from '../shared/types';
+import type { Task, TaskCategory, TaskPriority, TaskComplexity, TaskImpact, TaskMetadata, ImageAttachment, TaskDraft, ModelType, ThinkingLevel, ReferencedFile, SelectedSkill, GitRepoInfo } from '../shared/types';
 import type { PhaseModelConfig, PhaseThinkingConfig } from '../shared/types/settings';
 import {
   TASK_CATEGORY_LABELS,
@@ -97,6 +97,11 @@ export function TaskCreationWizard({
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string>(PROJECT_DEFAULT_BRANCH);
   const [projectDefaultBranch, setProjectDefaultBranch] = useState<string>('');
+  // Multi-repo support: a project folder may hold several git repos (e.g. a
+  // parent with backend/ and frontend/). repos lists them; selectedRepo is the
+  // absolute path of the chosen one ('' means the project root is the repo).
+  const [repos, setRepos] = useState<GitRepoInfo[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<string>('');
 
   // Get project path from project store
   // Note: projectPath must be non-null for the Browse Files button to render.
@@ -208,21 +213,53 @@ export function TaskCreationWizard({
     }
   }, [open, projectId, settings.selectedAgentProfile, settings.customPhaseModels, settings.customPhaseThinking, selectedProfile.model, selectedProfile.thinkingLevel, initialTitle, initialDescription]);
 
-  // Fetch branches and project default branch when dialog opens
+  // Discover the project's git repos when the dialog opens.
   useEffect(() => {
     if (open && projectPath) {
-      fetchBranches();
-      fetchProjectDefaultBranch();
+      fetchRepos();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, projectPath]);
 
-  const fetchBranches = async () => {
+  // (Re)load branches and the default branch whenever the target repo changes.
+  // selectedRepo is set after fetchRepos resolves, so this also covers initial load.
+  useEffect(() => {
+    if (open && (selectedRepo || projectPath)) {
+      fetchBranches();
+      fetchProjectDefaultBranch();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, selectedRepo, projectPath]);
+
+  const fetchRepos = async () => {
     if (!projectPath) return;
+    try {
+      const result = await window.API.getGitRepos(projectPath);
+      if (result.success && result.data) {
+        setRepos(result.data);
+        // When the project root isn't itself the repo (a parent folder holding
+        // child repos), default the selection to the first child so branches
+        // load for a real repo instead of the empty parent.
+        const isRootRepo = result.data.length === 1 && result.data[0].isRoot;
+        if (result.data.length > 0 && !isRootRepo) {
+          setSelectedRepo(result.data[0].path);
+          // Surface the repo/branch picker up front for multi-repo projects so
+          // the choice is visible instead of hidden behind the collapsed toggle.
+          if (result.data.length > 1) setShowGitOptions(true);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch repos:', err);
+    }
+  };
+
+  const fetchBranches = async () => {
+    const repoPath = selectedRepo || projectPath;
+    if (!repoPath) return;
 
     setIsLoadingBranches(true);
     try {
-      const result = await window.API.getGitBranches(projectPath);
+      const result = await window.API.getGitBranches(repoPath);
       if (result.success && result.data) {
         setBranches(result.data);
       }
@@ -234,16 +271,22 @@ export function TaskCreationWizard({
   };
 
   const fetchProjectDefaultBranch = async () => {
-    if (!projectId) return;
+    const repoPath = selectedRepo || projectPath;
+    if (!repoPath) return;
 
     try {
-      // Get env config to check if there's a configured default branch
+      // For a specific child repo, detect that repo's own main branch.
+      if (selectedRepo) {
+        const detect = await window.API.detectMainBranch(selectedRepo);
+        setProjectDefaultBranch(detect.success && detect.data ? detect.data : '');
+        return;
+      }
+      // Single-repo project: prefer the configured default, else auto-detect.
       const result = await window.API.getProjectEnv(projectId);
       if (result.success && result.data?.defaultBranch) {
         setProjectDefaultBranch(result.data.defaultBranch);
-      } else if (projectPath) {
-        // Fall back to auto-detect
-        const detectResult = await window.API.detectMainBranch(projectPath);
+      } else {
+        const detectResult = await window.API.detectMainBranch(repoPath);
         if (detectResult.success && detectResult.data) {
           setProjectDefaultBranch(detectResult.data);
         }
@@ -670,6 +713,9 @@ export function TaskCreationWizard({
       if (requireReviewBeforeCoding) metadata.requireReviewBeforeCoding = true;
       // Only include baseBranch if it's not the project default placeholder
       if (baseBranch && baseBranch !== PROJECT_DEFAULT_BRANCH) metadata.baseBranch = baseBranch;
+      // For multi-repo projects, record which repo this task targets so the
+      // build creates its worktree from the right repository.
+      if (selectedRepo) metadata.repoPath = selectedRepo;
       // Execution mode: 'quick' uses simplified prompts (~70% fewer tokens)
       if (mode) metadata.mode = mode;
       // Skills: inject selected skills for AI context during execution
@@ -715,6 +761,8 @@ export function TaskCreationWizard({
     setSelectedSkills([]);
     setShowSkillsBrowser(false);
     setBaseBranch(PROJECT_DEFAULT_BRANCH);
+    setRepos([]);
+    setSelectedRepo('');
     setError(null);
     setShowAdvanced(false);
     setShowFileExplorer(false);
@@ -1214,6 +1262,36 @@ export function TaskCreationWizard({
           {/* Git Options */}
           {showGitOptions && (
             <div className="space-y-4 p-4 rounded-lg border border-border bg-muted/30">
+              {repos.length > 1 && (
+                <div className="space-y-2">
+                  <Label htmlFor="target-repo" className="text-sm font-medium text-foreground">
+                    Repository
+                  </Label>
+                  <Select
+                    value={selectedRepo}
+                    onValueChange={(value) => {
+                      setSelectedRepo(value);
+                      // Branches differ per repo — reset to the new repo's default.
+                      setBaseBranch(PROJECT_DEFAULT_BRANCH);
+                    }}
+                    disabled={isCreating}
+                  >
+                    <SelectTrigger id="target-repo" className="h-9">
+                      <SelectValue placeholder="Select repository" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {repos.map((repo) => (
+                        <SelectItem key={repo.path} value={repo.path}>
+                          {repo.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    This project contains multiple git repositories. Choose which one this task should change.
+                  </p>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="base-branch" className="text-sm font-medium text-foreground">
                   Base Branch (optional)

@@ -800,6 +800,10 @@ class InsightsMessageRequest(BaseModel):
     # Optional branch to ground the chat in. When set (and not the current
     # checkout) the chat reads from a read-only worktree of this branch.
     branch: str | None = None
+    # For multi-repo projects (a parent folder of child repos), the child repo
+    # path to scope grounding + branch worktree to. None => the project root.
+    # Chat history stays keyed to the project, shared across repos.
+    repo: str | None = None
 
 
 @insights_router.get("/providers")
@@ -872,6 +876,17 @@ async def send_insights_message(projectId: str = Path(...), request: InsightsMes
     project_path = _get_project_path(projectId)
     service = get_insights_service()
 
+    # For multi-repo projects, scope grounding/branch to the chosen child repo.
+    # resolve_repo_cwd validates `repo` against the project's detected repos, so
+    # a bogus path can't redirect the chat elsewhere. Sessions stay on
+    # project_path so history is shared across repos.
+    repo_path = None
+    if request.repo:
+        from ..services.git_repos import resolve_repo_cwd
+        resolved = resolve_repo_cwd(str(project_path), request.repo)
+        if resolved and FilePath(resolved).resolve() != project_path.resolve():
+            repo_path = FilePath(resolved)
+
     # Start message processing in background (non-blocking, tracked for cancellation)
     service.start_message(
         project_path=project_path,
@@ -879,6 +894,7 @@ async def send_insights_message(projectId: str = Path(...), request: InsightsMes
         message=request.message,
         model_config=request.modelConfig,
         branch=request.branch,
+        repo_path=repo_path,
     )
 
     return {"success": True}

@@ -204,10 +204,12 @@ async def docs_status(project_id: str, repo: str | None = None):
         "has_docs": docs_dir.is_dir(),
         "has_site": (site_dir / "index.html").exists(),
         "has_graph": (graphify_out / "graph.json").exists(),
+        "has_codegraph": (project_path / ".codegraphcontext").is_dir(),
         "last_run": meta.get("last_run"),
         "last_build": meta.get("last_build"),
         "last_build_ok": meta.get("last_build_ok"),
         "last_graphify": meta.get("last_graphify"),
+        "last_codegraph": meta.get("last_codegraph"),
         "head_sha": meta.get("head_sha"),
     }
 
@@ -268,6 +270,29 @@ async def docs_graph_report(project_id: str, repo: str | None = None):
         "path": "GRAPH_REPORT.md",
         "content": report.read_text(encoding="utf-8", errors="replace"),
     }
+
+
+@router.get("/{project_id}/docs/codegraph-report")
+async def docs_codegraph_report(
+    project_id: str, repo: str | None = None, refresh: bool = False
+):
+    """Return CodeGraphContext's CGC_REPORT.md (god nodes, complexity hotspots,
+    cross-module links, suggested queries) for the project's code graph.
+
+    Generated on demand from the repo's `.codegraphcontext/` graph and cached
+    in `.codegraphcontext/CGC_REPORT.md`. Mirrors /docs/graph-report's shape so
+    the frontend drops it straight into its markdown viewer. Pass refresh=true
+    to rebuild after re-indexing.
+    """
+    project_path = _resolve_docs_base(project_id, repo)
+    svc = get_docs_generator_service(_backend_path())
+    content = await svc.codegraph_report(project_path, refresh=refresh)
+    if content is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No code graph. Run `codegraphcontext index <path>` first.",
+        )
+    return {"path": "CGC_REPORT.md", "content": content}
 
 
 @router.get("/{project_id}/docs/graph/{path:path}")

@@ -33,6 +33,7 @@ class StartTaskRequest(BaseModel):
     workers: int | None = Field(None, description="Number of parallel workers")
     model: str | None = Field(None, description="Model override for execution")
     baseBranch: str | None = Field(None, description="Base branch for worktree creation")
+    repoPath: str | None = Field(None, description="Target git repo for multi-repo projects")
     mode: str | None = Field("full", description="Execution mode: 'quick' for simplified prompts, 'full' for comprehensive")
 
 
@@ -317,6 +318,8 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
         task_metadata["model"] = request.model
     if request.baseBranch:
         task_metadata["baseBranch"] = request.baseBranch
+    if request.repoPath:
+        task_metadata["repoPath"] = request.repoPath
 
     # Write updated task_metadata.json if we have any settings
     if task_metadata:
@@ -408,6 +411,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
             spec_id=spec_id,
             auto_continue=request.auto_continue,
             base_branch=request.baseBranch,
+            repo_path=request.repoPath,
             mode=effective_mode,
             force=force_execution,
             user_id=_user_id,

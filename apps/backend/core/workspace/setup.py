@@ -222,6 +222,7 @@ def setup_workspace(
     mode: WorkspaceMode,
     source_spec_dir: Path | None = None,
     base_branch: str | None = None,
+    repo_dir: Path | None = None,
 ) -> tuple[Path, WorktreeManager | None, Path | None]:
     """
     Set up the workspace based on user's choice.
@@ -229,11 +230,15 @@ def setup_workspace(
     Uses per-spec worktrees - each spec gets its own isolated worktree.
 
     Args:
-        project_dir: The project directory
+        project_dir: The project directory (where specs live; for a multi-repo
+            project this is the parent folder, which may not itself be a repo)
         spec_name: Name of the spec being built (e.g., "001-feature-name")
         mode: The workspace mode to use
         source_spec_dir: Optional source spec directory to copy to worktree
         base_branch: Base branch for worktree creation (default: current branch)
+        repo_dir: Git repository to build in. Defaults to ``project_dir``. For
+            multi-repo projects this is the chosen child repo, while worktrees
+            still live under ``project_dir`` (see WorktreeManager).
 
     Returns:
         Tuple of (working_directory, worktree_manager or None, localized_spec_dir or None)
@@ -243,25 +248,33 @@ def setup_workspace(
         - worktree_manager: Manager for the worktree
         - localized_spec_dir: Path to spec files INSIDE the worktree (accessible to AI)
     """
+    # The git repo to operate on. Equals project_dir for ordinary single-repo
+    # projects; a child repo when the caller selected one in a multi-repo project.
+    git_root = repo_dir or project_dir
+
     if mode == WorkspaceMode.DIRECT:
-        # Work directly in project - spec_dir stays as-is
-        return project_dir, None, source_spec_dir
+        # Work directly in the repo - spec_dir stays as-is
+        return git_root, None, source_spec_dir
 
     # Create isolated workspace using per-spec worktree
     print()
     print_status("Setting up separate workspace...", "progress")
 
     # Ensure timeline tracking hook is installed (once per session)
-    ensure_timeline_hook_installed(project_dir)
+    ensure_timeline_hook_installed(git_root)
 
-    manager = WorktreeManager(project_dir, base_branch=base_branch)
+    # Cut worktrees from git_root but keep them under project_dir so the worktree
+    # path (and the web UI's spec file sync) stays stable across repo choices.
+    manager = WorktreeManager(
+        git_root, base_branch=base_branch, worktrees_root=project_dir
+    )
     manager.setup()
 
     # Get or create worktree for THIS SPECIFIC SPEC
     worktree_info = manager.get_or_create_worktree(spec_name)
 
     # Copy .env files to worktree so user can run the project
-    copied_env_files = copy_env_files_to_worktree(project_dir, worktree_info.path)
+    copied_env_files = copy_env_files_to_worktree(git_root, worktree_info.path)
     if copied_env_files:
         print_status(
             f"Environment files copied: {', '.join(copied_env_files)}", "success"
@@ -280,7 +293,7 @@ def setup_workspace(
 
     # Initialize FileTimelineTracker for this task
     initialize_timeline_tracking(
-        project_dir=project_dir,
+        project_dir=git_root,
         spec_name=spec_name,
         worktree_path=worktree_info.path,
         source_spec_dir=localized_spec_dir or source_spec_dir,

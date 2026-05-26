@@ -553,6 +553,52 @@ class DocsGeneratorService:
         except OSError:
             pass
 
+    async def codegraph_report(self, repo_path: Path, *, refresh: bool = False) -> str | None:
+        """Return CodeGraphContext's CGC_REPORT.md for a repo, as markdown.
+
+        Generated on demand via `codegraphcontext report` into the repo's
+        `.codegraphcontext/CGC_REPORT.md` (keeping the repo root clean), then
+        read back. Cached after first generation; pass refresh=True to rebuild.
+
+        Returns None when the repo has no `.codegraphcontext/` graph yet (not
+        indexed) or the CLI is unavailable and no cached report exists. Mirrors
+        the graphify GRAPH_REPORT.md surface so the docs panel can reuse its
+        markdown viewer.
+        """
+        cgc_dir = repo_path / ".codegraphcontext"
+        if not cgc_dir.is_dir():
+            return None  # project hasn't been indexed by CGC
+
+        report_path = cgc_dir / "CGC_REPORT.md"
+        if report_path.is_file() and not refresh:
+            return report_path.read_text(encoding="utf-8", errors="replace")
+
+        bin_path = self._resolve_codegraph_bin()
+        if bin_path is None:
+            # Can't (re)generate; serve a stale report if we have one.
+            if report_path.is_file():
+                return report_path.read_text(encoding="utf-8", errors="replace")
+            return None
+
+        env = os.environ.copy()
+        cmd = [bin_path, "report", "--output", str(report_path)]
+        logger.info(f"[DocsGenerator] Generating CGC report: {' '.join(cmd)}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(repo_path),
+                env=env,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=120)
+        except (asyncio.TimeoutError, OSError) as e:
+            logger.warning(f"[DocsGenerator] codegraphcontext report failed: {e}")
+
+        if report_path.is_file():
+            return report_path.read_text(encoding="utf-8", errors="replace")
+        return None
+
     def _resolve_mkdocs_bin(self) -> str | None:
         """Find a usable `mkdocs` executable, preferring the venv."""
         # Same venv that runs the web server.

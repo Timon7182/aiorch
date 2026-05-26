@@ -12,8 +12,6 @@ import {
   Search,
   FileText,
   FolderSearch,
-  PanelLeftClose,
-  PanelLeft,
   Square,
   ListPlus,
   GitBranch
@@ -45,6 +43,7 @@ import { loadTasks } from '../stores/task-store';
 import { useProjectStore } from '../stores/project-store';
 import { useTranslation } from 'react-i18next';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
+import { RepoSwitcher } from './RepoSwitcher';
 import { CreateTaskFromChatDialog } from './CreateTaskFromChatDialog';
 import { InsightsModelSelector } from './InsightsModelSelector';
 import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider } from '../shared/types';
@@ -129,7 +128,6 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const [inputValue, setInputValue] = useState('');
   const [creatingTask, setCreatingTask] = useState<string | null>(null);
   const [taskCreated, setTaskCreated] = useState<Set<string>>(new Set());
-  const [showSidebar, setShowSidebar] = useState(true);
 
   // Branch grounding: which branch the chat should read from. '' means the
   // project's current working tree (no worktree); any other value makes the
@@ -139,6 +137,17 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     () => projects.find((p) => p.id === projectId)?.path ?? null,
     [projects, projectId]
   );
+  // Multi-repo projects are a parent folder of child repos (e.g. cts holds
+  // backend/ + frontend/). The chat scopes its branch list and grounding to the
+  // active child repo; single-repo projects use the project root. Repos are
+  // loaded into the store by the sidebar when a project is selected.
+  const reposByProject = useProjectStore((state) => state.reposByProject);
+  const activeRepoByProject = useProjectStore((state) => state.activeRepoByProject);
+  const repos = reposByProject[projectId] ?? [];
+  const isMultiRepo = repos.length > 1;
+  const activeRepoPath = isMultiRepo
+    ? (activeRepoByProject[projectId] ?? repos[0]?.path ?? null)
+    : projectPath;
   const [branches, setBranches] = useState<string[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string>('');
   const [selectedBranch, setSelectedBranch] = useState<string>('');
@@ -178,21 +187,21 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // Load available branches + current branch so the user can ground the chat
   // in a branch other than the one currently checked out.
   useEffect(() => {
-    if (!projectPath) return;
+    if (!activeRepoPath) {
+      setBranches([]);
+      setCurrentBranch('');
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
         const [branchesResult, currentResult] = await Promise.all([
-          window.API.getGitBranches(projectPath),
-          window.API.getCurrentGitBranch(projectPath),
+          window.API.getGitBranches(activeRepoPath),
+          window.API.getCurrentGitBranch(activeRepoPath),
         ]);
         if (cancelled) return;
-        if (branchesResult.success && branchesResult.data) {
-          setBranches(branchesResult.data);
-        }
-        if (currentResult.success && currentResult.data) {
-          setCurrentBranch(currentResult.data);
-        }
+        setBranches(branchesResult.success && branchesResult.data ? branchesResult.data : []);
+        setCurrentBranch(currentResult.success && currentResult.data ? currentResult.data : '');
       } catch (err) {
         console.error('Failed to load branches for chat:', err);
       }
@@ -200,12 +209,13 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     return () => {
       cancelled = true;
     };
-  }, [projectPath]);
+  }, [activeRepoPath]);
 
-  // Reset branch choice back to the working tree when switching projects.
+  // Reset branch choice back to the working tree when the project or active
+  // repo changes (each repo has its own branches).
   useEffect(() => {
     setSelectedBranch('');
-  }, [projectId]);
+  }, [activeRepoPath]);
 
   const handleSend = () => {
     const message = inputValue.trim();
@@ -215,7 +225,9 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     // Only pass a branch when it differs from the current checkout — otherwise
     // the backend would needlessly build a worktree of the branch we're on.
     const branch = selectedBranch && selectedBranch !== currentBranch ? selectedBranch : undefined;
-    sendMessage(projectId, message, session?.modelConfig, branch);
+    // For multi-repo projects, scope grounding to the active child repo.
+    const repo = isMultiRepo && activeRepoPath ? activeRepoPath : undefined;
+    sendMessage(projectId, message, session?.modelConfig, branch, repo);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -310,37 +322,23 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
 
   return (
     <div className="flex h-full">
-      {/* Chat History Sidebar */}
-      {showSidebar && (
-        <ChatHistorySidebar
-          sessions={sessions}
-          currentSessionId={session?.id || null}
-          isLoading={isLoadingSessions}
-          onNewSession={handleNewSession}
-          onSelectSession={handleSelectSession}
-          onDeleteSession={handleDeleteSession}
-          onRenameSession={handleRenameSession}
-        />
-      )}
+      {/* Chat History Sidebar — always visible (its own panel, distinct from
+          the app's left nav menu) so past conversations are never hidden. */}
+      <ChatHistorySidebar
+        sessions={sessions}
+        currentSessionId={session?.id || null}
+        isLoading={isLoadingSessions}
+        onNewSession={handleNewSession}
+        onSelectSession={handleSelectSession}
+        onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
+      />
 
       {/* Main Chat Area */}
       <div className="flex flex-1 flex-col">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
           <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => setShowSidebar(!showSidebar)}
-              title={showSidebar ? 'Hide sidebar' : 'Show sidebar'}
-            >
-              {showSidebar ? (
-                <PanelLeftClose className="h-4 w-4" />
-              ) : (
-                <PanelLeft className="h-4 w-4" />
-              )}
-            </Button>
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
               <Sparkles className="h-5 w-5 text-primary" />
             </div>
@@ -352,6 +350,9 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Repo picker — only renders for multi-repo projects (e.g. cts).
+                Scopes the branch list + chat grounding to the chosen repo. */}
+            <RepoSwitcher projectId={projectId} />
             <InsightsModelSelector
               projectId={projectId}
               currentConfig={session?.modelConfig}

@@ -231,6 +231,14 @@ Environment Variables:
         help="Base branch for creating worktrees (default: auto-detect or current branch)",
     )
 
+    # Target git repo for multi-repo projects (parent folder holding several repos)
+    parser.add_argument(
+        "--repo-path",
+        type=Path,
+        default=None,
+        help="Git repo to build in for multi-repo projects (default: project dir)",
+    )
+
     # Batch task management
     parser.add_argument(
         "--batch-create",
@@ -393,6 +401,17 @@ def main() -> None:
         )
         return
 
+    # Resolve base branch and target repo. The web UI persists the user's
+    # choices into task_metadata.json at task creation, but the "Start" button
+    # doesn't re-send them, so fall back to the spec metadata when not given on
+    # the CLI (mirrors how the model falls back to task_metadata.json).
+    from phase_config import load_task_metadata
+
+    task_meta = load_task_metadata(spec_dir) or {}
+    resolved_base_branch = args.base_branch or task_meta.get("baseBranch")
+    resolved_repo = args.repo_path or task_meta.get("repoPath")
+    resolved_repo_dir = Path(resolved_repo) if resolved_repo else None
+
     # Normal build flow
     handle_build_command(
         project_dir=project_dir,
@@ -405,7 +424,8 @@ def main() -> None:
         auto_continue=args.auto_continue,
         skip_qa=args.skip_qa,
         force_bypass_approval=args.force,
-        base_branch=args.base_branch,
+        base_branch=resolved_base_branch,
+        repo_dir=resolved_repo_dir,
     )
 
 
