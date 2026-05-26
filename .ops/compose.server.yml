@@ -31,12 +31,25 @@ services:
       - /home/saya/.claude/.credentials.json:/home/magesticai/.claude-seed.json:ro
     cap_add:
       - NET_ADMIN
+    # Loaded by ABSOLUTE path so secrets reach the container on ANY deploy
+    # method — including a bare `docker compose up` from any cwd that never
+    # sourced /home/saya/.aiorch-secrets (compose's auto-loaded `.env` is
+    # cwd-dependent and kept getting missed, which blanked GEMINI_API_KEY and
+    # broke Hermes). This file is `KEY=VAL` (no `export`); keep it in sync via
+    #   sed 's/^export //' /home/saya/.aiorch-secrets > /home/saya/.aiorch.env
+    # NOTE: vars also listed under `environment:` below are overridden by it,
+    # so only keys absent there (e.g. GEMINI_API_KEY) are sourced from here.
+    env_file:
+      - /home/saya/.aiorch.env
     environment:
       - APP_DEBUG=false
       - CONTAINER_LAN_FIREWALL=false
       - CONTAINER_GATEWAY=192.168.88.1
       - APP_CORS_ORIGINS=["http://192.168.88.55:3101","http://192.168.88.220:3101","http://localhost:3101"]
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # GEMINI_API_KEY intentionally NOT listed here — it comes from the
+      # absolute-path env_file above so it survives deploys that don't source
+      # secrets. Listing it here as ${GEMINI_API_KEY:-} would override that
+      # with an empty string. (It's a static key, safe to source from a file.)
       # Claude Code OAuth token (from host's /home/saya/.claude/.credentials.json,
       # exported via /home/saya/.aiorch-secrets). Authorizes against the user's
       # Anthropic subscription (Max), not API credits.
