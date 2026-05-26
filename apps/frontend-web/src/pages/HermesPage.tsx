@@ -17,6 +17,7 @@ function slugify(s: string): string {
 
 type ChatEvent =
   | { type: 'routing'; intent: string; model: string }
+  | { type: 'graph_context'; value: unknown }
   | { type: 'citations'; value: Array<{ file_path: string; heading: string; line_start: number; snippet: string }> }
   | { type: 'token'; value: string }
   | { type: 'error'; value: string }
@@ -294,7 +295,12 @@ function applyEvent(turn: ChatTurn, event: ChatEvent): ChatTurn {
       return { ...turn, text: turn.text + event.value };
     case 'error':
       return { ...turn, error: event.value };
+    case 'graph_context':
     case 'done':
+      return turn;
+    default:
+      // Never return undefined for an unrecognised event — doing so would
+      // null out the assistant turn and crash the page on render.
       return turn;
   }
 }
