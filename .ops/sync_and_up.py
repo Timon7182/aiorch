@@ -91,11 +91,15 @@ def main() -> int:
             print(f"[sync] {rel}  ({len(content)} bytes)")
 
         print("\n[build] running docker compose build (cached layers should be fast)")
+        # NOTE: do NOT pipe the build through `tail` — a pipeline's exit code is
+        # the last command's (tail, always 0), which masks build failures and
+        # lets us recreate the container on a stale image. Capture full output
+        # and tail it client-side so the real build exit code survives.
         res = r.run(
-            f"cd {REMOTE_REPO} && docker compose -p {COMPOSE_PROJECT} -f {REMOTE_COMPOSE} build 2>&1 | tail -50",
+            f"cd {REMOTE_REPO} && docker compose -p {COMPOSE_PROJECT} -f {REMOTE_COMPOSE} build 2>&1",
             timeout=900,
         )
-        _safe(res.stdout)
+        _safe("\n".join(res.stdout.splitlines()[-50:]))
         if res.exit_code != 0:
             raise RuntimeError(f"build failed (exit {res.exit_code})")
 

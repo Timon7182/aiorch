@@ -57,12 +57,37 @@ async def get_git_repos(path: str = Query(...)):
 
 @router.get("/branches")
 async def get_git_branches(path: str = Query(...)):
-    """Get all branches for a repository."""
-    result = run_git_command(["branch", "--format=%(refname:short)"], path)
-    if result["success"]:
-        branches = [b.strip() for b in result["output"].split("\n") if b.strip()]
-        return {"success": True, "data": branches}
-    return {"success": True, "data": []}
+    """Get branches for a repository.
+
+    Returns local branches plus remote-tracking branches (e.g. ``origin/foo``)
+    that have no local counterpart — so a task/worktree can be based off a
+    branch that only exists on the remote, not just locally checked-out ones.
+    Remote branches keep their ``<remote>/`` prefix so they stay git-resolvable
+    as a worktree base.
+    """
+    local_result = run_git_command(["branch", "--format=%(refname:short)"], path)
+    local = (
+        [b.strip() for b in local_result["output"].split("\n") if b.strip()]
+        if local_result["success"]
+        else []
+    )
+
+    # Surface remote-only branches. Skip the symbolic "<remote>/HEAD -> ..."
+    # entries, and drop remotes that already have a local branch of the same
+    # short name to avoid duplicates like "main" + "origin/main".
+    remote_result = run_git_command(["branch", "-r", "--format=%(refname:short)"], path)
+    local_names = set(local)
+    remote: list[str] = []
+    if remote_result["success"]:
+        for entry in remote_result["output"].split("\n"):
+            entry = entry.strip()
+            if not entry or entry.endswith("/HEAD") or "->" in entry:
+                continue
+            short = entry.split("/", 1)[1] if "/" in entry else entry
+            if short and short not in local_names:
+                remote.append(entry)
+
+    return {"success": True, "data": local + remote}
 
 
 @router.get("/current-branch")
