@@ -81,7 +81,10 @@ async def get_git_branches(path: str = Query(...)):
     if remote_result["success"]:
         for entry in remote_result["output"].split("\n"):
             entry = entry.strip()
-            if not entry or entry.endswith("/HEAD") or "->" in entry:
+            # Skip blanks, the "<remote>/HEAD -> ..." symref (which renders as
+            # just the bare remote name, e.g. "origin", under refname:short),
+            # and anything without a "remote/branch" shape.
+            if not entry or "/" not in entry or entry.endswith("/HEAD") or "->" in entry:
                 continue
             short = entry.split("/", 1)[1] if "/" in entry else entry
             if short and short not in local_names:

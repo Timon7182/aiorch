@@ -1,0 +1,9 @@
+# Shell scripts must keep LF line endings so they run on the Linux deploy
+# target. A CRLF shebang (`#!/bin/bash\r`) makes the kernel look for the
+# interpreter "/bin/bash\r", which doesn't exist, and the container
+# crash-loops with "exec docker-entrypoint.sh: no such file or directory".
+#
+# Needed because `git archive` (used by .ops/sync_and_up.py-style deploys)
+# applies core.autocrlf=true conversion on Windows checkouts, rewriting LF
+# blobs to CRLF in the produced tarball. `eol=lf` overrides that everywhere.
+*.sh text eol=lf
