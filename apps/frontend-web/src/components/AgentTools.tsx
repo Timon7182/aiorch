@@ -996,7 +996,7 @@ export function AgentTools() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="border-b border-border p-6">
+      <div className="border-b border-border p-4 md:p-6">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-lg bg-muted">
             <Server className="h-5 w-5 text-muted-foreground" />
@@ -1026,7 +1026,7 @@ export function AgentTools() {
 
       {/* Content */}
       <ScrollArea className="flex-1">
-        <div className="p-6 space-y-6">
+        <div className="p-4 md:p-6 space-y-6">
           {/* No project selected message */}
           {!selectedProject && (
             <div className="rounded-lg border border-border bg-card p-6 text-center">

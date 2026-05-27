@@ -14,7 +14,8 @@ import {
   FolderSearch,
   Square,
   ListPlus,
-  GitBranch
+  GitBranch,
+  PanelLeft
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -41,6 +42,7 @@ import {
 } from '../stores/insights-store';
 import { loadTasks } from '../stores/task-store';
 import { useProjectStore } from '../stores/project-store';
+import { useIsMobile } from '../hooks/use-media-query';
 import { useTranslation } from 'react-i18next';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
 import { RepoSwitcher } from './RepoSwitcher';
@@ -128,6 +130,10 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const [inputValue, setInputValue] = useState('');
   const [creatingTask, setCreatingTask] = useState<string | null>(null);
   const [taskCreated, setTaskCreated] = useState<Set<string>>(new Set());
+  // On mobile the chat-history panel is hidden behind a toggle so the
+  // conversation gets full width; on desktop it stays docked.
+  const isMobile = useIsMobile();
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Branch grounding: which branch the chat should read from. '' means the
   // project's current working tree (no worktree); any other value makes the
@@ -322,34 +328,71 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
 
   return (
     <div className="flex h-full">
-      {/* Chat History Sidebar — always visible (its own panel, distinct from
-          the app's left nav menu) so past conversations are never hidden. */}
-      <ChatHistorySidebar
-        sessions={sessions}
-        currentSessionId={session?.id || null}
-        isLoading={isLoadingSessions}
-        onNewSession={handleNewSession}
-        onSelectSession={handleSelectSession}
-        onDeleteSession={handleDeleteSession}
-        onRenameSession={handleRenameSession}
-      />
+      {/* Mobile backdrop for the history drawer */}
+      {isMobile && (
+        <div
+          className={cn(
+            'fixed inset-0 z-30 bg-black/60 backdrop-blur-sm transition-opacity duration-300 md:hidden',
+            historyOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
+          )}
+          onClick={() => setHistoryOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      {/* Chat History Sidebar — docked on desktop, slide-in drawer on mobile
+          so the conversation can use the full width on small screens. */}
+      <div
+        className={cn(
+          'shrink-0',
+          isMobile &&
+            'fixed inset-y-0 left-0 z-40 transition-transform duration-300 ease-in-out will-change-transform',
+          isMobile && (historyOpen ? 'translate-x-0' : '-translate-x-full')
+        )}
+      >
+        <ChatHistorySidebar
+          sessions={sessions}
+          currentSessionId={session?.id || null}
+          isLoading={isLoadingSessions}
+          onNewSession={() => {
+            handleNewSession();
+            if (isMobile) setHistoryOpen(false);
+          }}
+          onSelectSession={(id) => {
+            handleSelectSession(id);
+            if (isMobile) setHistoryOpen(false);
+          }}
+          onDeleteSession={handleDeleteSession}
+          onRenameSession={handleRenameSession}
+        />
+      </div>
 
       {/* Main Chat Area */}
-      <div className="flex flex-1 flex-col">
+      <div className="flex flex-1 flex-col min-w-0">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3 md:px-6 md:py-4">
+          <div className="flex items-center gap-2 md:gap-3 min-w-0">
+            {isMobile && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                onClick={() => setHistoryOpen(true)}
+                aria-label="Chat history"
+              >
+                <PanelLeft className="h-5 w-5" />
+              </Button>
+            )}
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
               <Sparkles className="h-5 w-5 text-primary" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="font-semibold text-foreground">Chat</h2>
-              <p className="text-sm text-muted-foreground">
+              <p className="hidden truncate text-sm text-muted-foreground sm:block">
                 Ask questions about your codebase
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {/* Repo picker — only renders for multi-repo projects (e.g. cts).
                 Scopes the branch list + chat grounding to the chosen repo. */}
             <RepoSwitcher projectId={projectId} />

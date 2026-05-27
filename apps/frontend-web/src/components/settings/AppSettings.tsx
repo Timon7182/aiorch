@@ -210,9 +210,9 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
         </FullScreenDialogHeader>
 
         <FullScreenDialogBody>
-          <div className="flex h-full">
-            {/* Navigation sidebar */}
-            <nav className="w-96 border-r border-border bg-muted/30 p-4">
+          <div className="flex h-full flex-col md:flex-row">
+            {/* Navigation sidebar — stacks on top (capped height) on mobile */}
+            <nav className="w-full md:w-96 shrink-0 border-b md:border-b-0 md:border-r border-border bg-muted/30 p-4 max-h-[38vh] md:max-h-none overflow-y-auto">
               <ScrollArea className="h-full">
                 <div className="space-y-6">
                   {/* APPLICATION Section */}
@@ -330,9 +330,9 @@ export function AppSettingsDialog({ open, onOpenChange, initialSection, initialP
             </nav>
 
             {/* Main content */}
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 min-w-0 overflow-hidden">
               <ScrollArea className="h-full">
-                <div className="p-8 max-w-4xl">
+                <div className="p-4 md:p-8 max-w-4xl">
                   {renderContent()}
                 </div>
               </ScrollArea>

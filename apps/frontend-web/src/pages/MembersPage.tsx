@@ -247,11 +247,11 @@ export function MembersPage() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      <header className="border-b border-border px-6 py-4 flex items-center gap-4">
-        <Building2 className="h-5 w-5" />
+      <header className="border-b border-border px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <Building2 className="h-5 w-5 shrink-0" />
         <h1 className="text-xl font-semibold">Members</h1>
-        <span className="text-xs text-muted-foreground">Organization access management</span>
-        <div className="ml-auto flex items-center gap-3 text-sm">
+        <span className="hidden text-xs text-muted-foreground sm:inline">Organization access management</span>
+        <div className="ml-auto flex items-center gap-2 sm:gap-3 text-sm">
           <select
             value={selectedOrgId ?? ''}
             onChange={(e) => setSelectedOrgId(e.target.value || null)}
@@ -286,7 +286,7 @@ export function MembersPage() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto p-6 space-y-6">
+      <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
         {error && (
           <div className="rounded-lg bg-destructive/10 border border-destructive/50 text-destructive px-4 py-3 text-sm">
             {error}

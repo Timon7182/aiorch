@@ -354,8 +354,8 @@ export function EditorPage({ projectPath }: EditorPageProps) {
 
   return (
     <div className="flex h-full">
-      {/* File tree sidebar */}
-      <div className="w-64 border-r border-border overflow-auto bg-card/50">
+      {/* File tree sidebar — narrows on small screens so the editor keeps room */}
+      <div className="w-40 sm:w-56 md:w-64 shrink-0 border-r border-border overflow-auto bg-card/50">
         <div className="p-2 border-b border-border">
           <h3 className="font-medium text-sm">Explorer</h3>
         </div>
@@ -363,7 +363,7 @@ export function EditorPage({ projectPath }: EditorPageProps) {
       </div>
 
       {/* Editor area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Tab bar */}
         {tabs.length > 0 && (
           <div className="flex border-b border-border bg-card/50 overflow-x-auto">

@@ -244,9 +244,9 @@ export function Worktrees({ projectId }: WorktreesProps) {
   }
 
   return (
-    <div className="flex h-full flex-col p-6">
+    <div className="flex h-full flex-col p-4 md:p-6">
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-4 md:mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
             <GitBranch className="h-6 w-6" />

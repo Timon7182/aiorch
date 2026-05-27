@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Eye, FileCode, ChevronDown, ChevronRight } from 'lucide-react';
+import { Eye, FileCode, ChevronDown, ChevronRight, Columns2, AlignJustify } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -13,7 +13,10 @@ import { Badge } from '../../ui/badge';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../ui/collapsible';
 import { cn } from '../../../lib/utils';
 import { DiffViewer } from './DiffViewer';
+import { SplitDiffViewer } from './SplitDiffViewer';
 import type { WorktreeDiff, WorktreeDiffFile } from '../../../shared/types';
+
+type DiffViewMode = 'split' | 'unified';
 
 interface DiffViewDialogProps {
   open: boolean;
@@ -27,11 +30,13 @@ interface DiffViewDialogProps {
 function FileEntry({
   file,
   isExpanded,
-  onToggle
+  onToggle,
+  viewMode
 }: {
   file: WorktreeDiffFile;
   isExpanded: boolean;
   onToggle: () => void;
+  viewMode: DiffViewMode;
 }) {
   const hasDiff = !!file.diff;
 
@@ -87,7 +92,11 @@ function FileEntry({
       </CollapsibleTrigger>
       {hasDiff && (
         <CollapsibleContent className="mt-1 ml-6">
-          <DiffViewer diff={file.diff!} showLineNumbers={false} />
+          {viewMode === 'split' ? (
+            <SplitDiffViewer diff={file.diff!} />
+          ) : (
+            <DiffViewer diff={file.diff!} showLineNumbers={false} />
+          )}
         </CollapsibleContent>
       )}
     </Collapsible>
@@ -104,6 +113,7 @@ export function DiffViewDialog({
   onOpenChange
 }: DiffViewDialogProps) {
   const [expandedFiles, setExpandedFiles] = useState<Set<number>>(new Set());
+  const [viewMode, setViewMode] = useState<DiffViewMode>('split');
 
   const toggleFile = (idx: number) => {
     setExpandedFiles(prev => {
@@ -134,21 +144,56 @@ export function DiffViewDialog({
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
+      <AlertDialogContent
+        className={cn(
+          'max-h-[85vh] overflow-hidden flex flex-col',
+          viewMode === 'split' ? 'max-w-6xl' : 'max-w-4xl'
+        )}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
             <Eye className="h-5 w-5 text-purple-400" />
             Changed Files
           </AlertDialogTitle>
-          <AlertDialogDescription className="flex items-center justify-between">
+          <AlertDialogDescription className="flex items-center justify-between gap-2">
             <span>{worktreeDiff?.summary || 'No changes found'}</span>
             {hasAnyDiff && (
-              <button
-                onClick={allExpanded ? collapseAll : expandAll}
-                className="text-xs text-primary hover:underline ml-2"
-              >
-                {allExpanded ? 'Collapse all' : 'Expand all'}
-              </button>
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
+                  <button
+                    onClick={() => setViewMode('split')}
+                    className={cn(
+                      'flex items-center gap-1 px-2 py-1 text-xs transition-colors',
+                      viewMode === 'split'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-secondary/50'
+                    )}
+                    title="Side-by-side view"
+                  >
+                    <Columns2 className="h-3.5 w-3.5" />
+                    Split
+                  </button>
+                  <button
+                    onClick={() => setViewMode('unified')}
+                    className={cn(
+                      'flex items-center gap-1 px-2 py-1 text-xs transition-colors',
+                      viewMode === 'unified'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-secondary/50'
+                    )}
+                    title="Unified (inline) view"
+                  >
+                    <AlignJustify className="h-3.5 w-3.5" />
+                    Unified
+                  </button>
+                </div>
+                <button
+                  onClick={allExpanded ? collapseAll : expandAll}
+                  className="text-xs text-primary hover:underline"
+                >
+                  {allExpanded ? 'Collapse all' : 'Expand all'}
+                </button>
+              </div>
             )}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -161,6 +206,7 @@ export function DiffViewDialog({
                   file={file}
                   isExpanded={expandedFiles.has(idx)}
                   onToggle={() => toggleFile(idx)}
+                  viewMode={viewMode}
                 />
               ))}
             </div>

@@ -201,14 +201,14 @@ export function HermesPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-background">
-      <header className="border-b border-border px-6 py-4 flex items-center gap-4">
-        <h1 className="text-xl font-semibold">Hermes</h1>
-        <span className="text-xs text-muted-foreground">
+    <div className="flex flex-col h-full bg-background">
+      <header className="border-b border-border px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <h1 className="text-lg md:text-xl font-semibold">Hermes</h1>
+        <span className="hidden text-xs text-muted-foreground sm:inline">
           LLM-routing chat with project grounding
         </span>
-        <div className="ml-auto flex items-center gap-3 text-sm">
-          <label className="text-muted-foreground">Project</label>
+        <div className="ml-auto flex items-center gap-2 sm:gap-3 text-sm">
+          <label className="hidden text-muted-foreground sm:inline">Project</label>
           <select
             value={selectedSlug ?? ''}
             onChange={(e) => setSelectedSlug(e.target.value || null)}
@@ -227,7 +227,7 @@ export function HermesPage() {
 
       <main
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-6 py-4 space-y-4"
+        className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-4"
       >
         {turns.length === 0 && (
           <div className="text-center text-muted-foreground mt-10">
@@ -245,8 +245,8 @@ export function HermesPage() {
         ))}
       </main>
 
-      <footer className="border-t border-border px-6 py-4">
-        <div className="flex gap-3">
+      <footer className="border-t border-border px-4 md:px-6 py-3 md:py-4">
+        <div className="flex gap-2 md:gap-3">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}

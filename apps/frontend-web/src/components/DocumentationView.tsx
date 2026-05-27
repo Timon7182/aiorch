@@ -250,8 +250,8 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
 
   return (
     <div className="flex h-full">
-      {/* Left rail: actions + file tree */}
-      <div className="flex w-72 shrink-0 flex-col border-r border-border bg-sidebar/40">
+      {/* Left rail: actions + file tree — narrows on small screens */}
+      <div className="flex w-48 sm:w-60 md:w-72 shrink-0 flex-col border-r border-border bg-sidebar/40">
         <div className="p-3 space-y-2">
           <RepoSwitcher projectId={projectId} className="w-full justify-between" />
           <Button
@@ -486,7 +486,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       </div>
 
       {/* Right: rendered markdown */}
-      <div className="flex flex-1 flex-col">
+      <div className="flex flex-1 flex-col min-w-0">
         <div className="border-b border-border px-6 py-3 text-xs text-muted-foreground flex items-center justify-between">
           <span>
             {selectedPath === GRAPH_REPORT_PATH

@@ -5,6 +5,7 @@ import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/toaster';
 import { Sidebar, type SidebarView } from './components/Sidebar';
 import { ProjectTabBar } from './components/ProjectTabBar';
+import { MobileTopBar } from './components/MobileTopBar';
 import { KanbanBoard } from './components/KanbanBoard';
 import { TerminalGrid } from './components/TerminalGrid';
 import { Worktrees } from './components/Worktrees';
@@ -37,6 +38,7 @@ import { useTaskStore, loadTasks } from './stores/task-store';
 import { useSettingsStore, loadSettings } from './stores/settings-store';
 import { useAuthStore } from './stores/auth-store';
 import { useIpcListeners } from './hooks/useIpc';
+import { useIsMobile } from './hooks/use-media-query';
 import { UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_DEFAULT } from './shared/constants';
 import type { Task, Project } from './shared/types';
 
@@ -100,6 +102,8 @@ function AuthenticatedApp() {
     [selectedTaskId, tasks]
   );
   const [activeView, setActiveView] = useState<SidebarView>('kanban');
+  const isMobile = useIsMobile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isNewTaskDialogOpen, setIsNewTaskDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [isAddProjectModalOpen, setIsAddProjectModalOpen] = useState(false);
@@ -238,6 +242,12 @@ function AuthenticatedApp() {
     root.setAttribute('data-ui-scale', clampedScale.toString());
   }, [settings.uiScale]);
 
+  // Close the mobile drawer when the viewport grows to desktop so a stale
+  // "open" state can't leave the overlay lingering after a resize/rotate.
+  useEffect(() => {
+    if (!isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
   const handleTaskClick = (task: Task) => {
     setSelectedTaskId(task.id);
   };
@@ -283,20 +293,34 @@ function AuthenticatedApp() {
     <ViewStateProvider>
       <TooltipProvider>
         <div className="flex h-screen bg-background">
-          {/* Sidebar */}
+          {/* Sidebar — static column on desktop, slide-in drawer on mobile */}
           <Sidebar
             onSettingsClick={() => setIsSettingsDialogOpen(true)}
             onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
             onOpenOnboarding={() => setIsOnboardingOpen(true)}
             activeView={activeView}
             onViewChange={setActiveView}
+            isMobile={isMobile}
+            mobileOpen={sidebarOpen}
+            onMobileClose={() => setSidebarOpen(false)}
           />
 
           {/* Main content */}
-          <div className="flex flex-1 flex-col overflow-hidden">
-            {/* Project Tab Bar - shows open projects */}
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            {/* Mobile header — hamburger + context + quick actions (md:hidden) */}
+            <MobileTopBar
+              onMenuClick={() => setSidebarOpen(true)}
+              onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
+              onSettingsClick={() => setIsSettingsDialogOpen(true)}
+              activeView={activeView}
+              projectName={selectedProject?.name}
+              canCreateTask={!!selectedProject?.autoBuildPath}
+            />
+
+            {/* Project Tab Bar - desktop only (mobile uses the header above) */}
             {openProjects.length > 0 && (
               <ProjectTabBar
+                className="hidden md:flex"
                 projects={openProjects}
                 activeProjectId={activeProjectId}
                 onProjectSelect={(projectId) => {

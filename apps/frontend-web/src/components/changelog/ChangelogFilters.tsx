@@ -80,8 +80,8 @@ export function ChangelogFilters({
   onLoadCommitsPreview
 }: ChangelogFiltersProps) {
   return (
-    <div className="w-80 shrink-0 border-r border-border overflow-y-auto">
-      <div className="p-6 space-y-6">
+    <div className="w-full md:w-80 shrink-0 border-b md:border-b-0 md:border-r border-border overflow-y-auto max-h-[45vh] md:max-h-none">
+      <div className="p-4 md:p-6 space-y-6">
         {/* Source Mode Selection */}
         <div className="space-y-3">
           <Label className="text-sm font-medium">Changelog Source</Label>

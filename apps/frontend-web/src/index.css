@@ -32,6 +32,8 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -78,6 +80,8 @@
   --border: 240 6% 85%;
   --input: 240 6% 85%;
   --ring: 211 76% 35%;
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 240 10% 4%;
   --radius: 0.5rem;
 
   color-scheme: light;
@@ -112,6 +116,8 @@
   --border: 240 5% 18%;
   --input: 240 5% 18%;
   --ring: 211 76% 50%;
+  --sidebar: 240 10% 7%;
+  --sidebar-foreground: 0 0% 95%;
 
   color-scheme: dark;
   color: hsl(var(--foreground));
@@ -123,19 +129,40 @@
    ============================================ */
 
 [data-theme="ocean"] {
-  --primary: 199 89% 40%;
+  /* Light Ocean — neutral surfaces with a faint cool tint and cyan accent */
+  --background: 205 40% 97%;
+  --secondary: 205 25% 91%;
+  --muted: 205 25% 91%;
+  --muted-foreground: 205 12% 40%;
+  --border: 205 20% 86%;
+  --input: 205 20% 86%;
+  --sidebar: 205 40% 99%;
+  --primary: 199 89% 42%;
   --primary-foreground: 0 0% 100%;
-  --accent: 199 89% 40%;
+  --accent: 199 89% 42%;
   --accent-foreground: 0 0% 100%;
-  --ring: 199 89% 40%;
+  --ring: 199 89% 42%;
 }
 [data-theme="ocean"].dark, .dark[data-theme="ocean"] {
-  --background: 204 80% 16%;
-  --card: 204 70% 12%;
-  --popover: 204 70% 14%;
-  --border: 204 50% 25%;
-  --primary: 199 89% 50%;
-  --accent: 199 89% 50%;
+  /* Dark Ocean — deep desaturated navy-teal; calmer than full-saturation teal */
+  --background: 205 42% 9%;
+  --foreground: 205 16% 96%;
+  --card: 205 38% 12%;
+  --card-foreground: 205 16% 96%;
+  --popover: 205 38% 13%;
+  --popover-foreground: 205 16% 96%;
+  --secondary: 205 30% 16%;
+  --secondary-foreground: 205 16% 96%;
+  --muted: 205 30% 16%;
+  --muted-foreground: 205 14% 66%;
+  --border: 205 28% 20%;
+  --input: 205 28% 20%;
+  --sidebar: 205 40% 11%;
+  --primary: 199 89% 48%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 199 89% 48%;
+  --accent-foreground: 0 0% 100%;
+  --ring: 199 89% 52%;
 }
 
 body {
@@ -149,23 +176,33 @@ body {
   height: 100vh;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling — theme-aware so it works in both light and dark modes */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3a3a3a;
+  background: hsl(var(--border));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a4a4a;
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
 }
 
 /* Terminal grid drag-and-drop styles */

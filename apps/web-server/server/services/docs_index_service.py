@@ -138,8 +138,51 @@ def reindex(project: str, root_dir: Path | str) -> dict[str, Any]:
         conn.close()
 
 
+# Filler words dropped from natural-language queries so a question doesn't
+# OR-match every doc on common terms. bm25 already down-ranks frequent tokens,
+# but pruning these keeps the top hits relevant for short per-project indexes.
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "is", "are", "be", "to", "of", "in", "on",
+    "for", "how", "does", "do", "what", "why", "when", "where", "which", "with",
+    "that", "this", "it", "as", "at", "by", "from", "into", "about", "between",
+    "two", "specific", "vs", "but", "not", "you", "your", "its", "their",
+}
+
+
+def _to_fts_query(raw: str) -> str:
+    """Turn arbitrary user text into a safe FTS5 MATCH expression.
+
+    SQLite FTS5 reads bare input as query syntax, so punctuation like ``/``,
+    ``-`` and ``:`` or capitalised tokens make it raise ``OperationalError``
+    (e.g. a colon is parsed as a column filter — ``no such column: DDP``).
+    We tokenize into unicode word tokens, drop filler/1-char tokens, quote each
+    (so the term is a literal, not an operator), and OR them so a
+    natural-language question retrieves sections matching any salient term.
+    Returns ``""`` when nothing usable remains.
+    """
+    tokens = re.findall(r"\w+", raw, flags=re.UNICODE)
+    terms: list[str] = []
+    seen: set[str] = set()
+    for t in tokens:
+        low = t.lower()
+        if len(t) < 2 or low in _STOPWORDS or low in seen:
+            continue
+        seen.add(low)
+        terms.append(t)
+        if len(terms) >= 24:
+            break
+    if not terms:
+        # Query was only stopwords/short tokens — fall back to any non-trivial
+        # token so we still search rather than silently returning nothing.
+        terms = [t for t in tokens if len(t) >= 2][:24]
+    return " OR ".join('"' + t.replace('"', "") + '"' for t in terms)
+
+
 def search(project: str, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
     if not query.strip():
+        return []
+    match = _to_fts_query(query)
+    if not match:
         return []
     conn = _connect(project)
     try:
@@ -152,7 +195,7 @@ def search(project: str, query: str, *, limit: int = 20) -> list[dict[str, Any]]
             ORDER BY score
             LIMIT ?
             """,
-            (query, int(limit)),
+            (match, int(limit)),
         )
         return [dict(row) for row in cur]
     finally:

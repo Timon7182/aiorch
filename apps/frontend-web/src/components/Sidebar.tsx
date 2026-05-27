@@ -24,7 +24,8 @@ import {
   ChevronDown,
   Check,
   Library,
-  Coins
+  Coins,
+  X
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
@@ -69,6 +70,12 @@ interface SidebarProps {
   onOpenOnboarding?: () => void;
   activeView?: SidebarView;
   onViewChange?: (view: SidebarView) => void;
+  /** When true the sidebar renders as a slide-in overlay drawer (mobile). */
+  isMobile?: boolean;
+  /** Whether the mobile drawer is currently open. */
+  mobileOpen?: boolean;
+  /** Called to dismiss the mobile drawer (backdrop tap, nav selection, close button). */
+  onMobileClose?: () => void;
 }
 
 interface NavItem {
@@ -106,7 +113,10 @@ export function Sidebar({
   onNewTaskClick,
   onOpenOnboarding,
   activeView = 'kanban',
-  onViewChange
+  onViewChange,
+  isMobile = false,
+  mobileOpen = false,
+  onMobileClose
 }: SidebarProps) {
   const { t } = useTranslation(['navigation', 'dialogs', 'common']);
   const projects = useProjectStore((state) => state.projects);
@@ -314,6 +324,9 @@ export function Sidebar({
 
   const handleNavClick = (view: SidebarView) => {
     onViewChange?.(view);
+    // Auto-dismiss the drawer after a selection on mobile so the chosen
+    // view is immediately visible instead of hidden behind the overlay.
+    if (isMobile) onMobileClose?.();
   };
 
   const renderNavItem = (item: NavItem) => {
@@ -341,11 +354,39 @@ export function Sidebar({
 
   return (
     <TooltipProvider>
-      <div className="flex h-full w-64 flex-col bg-sidebar border-r border-border">
+      {/* Mobile backdrop — dims the page behind the drawer and closes it on tap */}
+      {isMobile && (
+        <div
+          className={cn(
+            'fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-300 md:hidden',
+            mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
+          )}
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+      )}
+      <div
+        className={cn(
+          'flex h-full w-64 flex-col border-r border-border bg-sidebar',
+          isMobile &&
+            'fixed inset-y-0 left-0 z-50 shadow-2xl transition-transform duration-300 ease-in-out will-change-transform',
+          isMobile && (mobileOpen ? 'translate-x-0' : '-translate-x-full')
+        )}
+      >
         {/* Header with drag area - extra top padding for macOS traffic lights */}
         <div className="electron-drag flex h-14 items-center gap-2.5 px-4 pt-6">
           <img src="/logo.png" alt="MagesticAI" className="electron-no-drag h-7 w-7 rounded" />
           <span className="electron-no-drag text-lg font-bold" style={{ color: '#61CE70' }}>Magestic<span style={{ color: '#FFFFFF' }}>AI</span></span>
+          {isMobile && (
+            <button
+              type="button"
+              onClick={onMobileClose}
+              aria-label="Close menu"
+              className="electron-no-drag ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
         </div>
 
         <Separator className="mt-2" />

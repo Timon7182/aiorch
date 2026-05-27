@@ -482,7 +482,7 @@ export function KanbanBoard({ tasks, onTaskClick, onNewTaskClick, onRefresh, isR
     <div className="flex h-full flex-col">
       {/* Kanban header with refresh button */}
       {onRefresh && (
-        <div className="flex items-center justify-end px-6 pt-4 pb-2">
+        <div className="flex items-center justify-end px-4 md:px-6 pt-4 pb-2">
           <Button
             variant="ghost"
             size="sm"
@@ -497,7 +497,7 @@ export function KanbanBoard({ tasks, onTaskClick, onNewTaskClick, onRefresh, isR
       )}
       {/* Project-level token usage summary */}
       {projectId && (
-        <div className="px-6 pb-3">
+        <div className="px-4 md:px-6 pb-3">
           <ProjectUsageCard
             projectId={projectId}
             onOpenDetails={onOpenUsage}
@@ -512,7 +512,7 @@ export function KanbanBoard({ tasks, onTaskClick, onNewTaskClick, onRefresh, isR
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex flex-1 gap-3 overflow-x-auto p-4">
+        <div className="flex flex-1 gap-3 overflow-x-auto p-3 md:p-4">
           {TASK_STATUS_COLUMNS.map((status) => (
             <DroppableColumn
               key={status}

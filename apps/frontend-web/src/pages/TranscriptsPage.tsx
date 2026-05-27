@@ -179,10 +179,10 @@ export function TranscriptsPage() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      <header className="border-b border-border px-6 py-4 flex items-center gap-4">
-        <FileAudio className="h-5 w-5" />
-        <h1 className="text-xl font-semibold">Meeting Transcripts</h1>
-        <span className="text-xs text-muted-foreground">
+      <header className="border-b border-border px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <FileAudio className="h-5 w-5 shrink-0" />
+        <h1 className="text-lg md:text-xl font-semibold">Meeting Transcripts</h1>
+        <span className="hidden text-xs text-muted-foreground sm:inline">
           {currentProject.name} — indexed for Hermes citations
         </span>
         <button
@@ -194,7 +194,7 @@ export function TranscriptsPage() {
         </button>
       </header>
 
-      <main className="flex-1 overflow-y-auto p-6 space-y-6">
+      <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
         {error && (
           <div className="rounded-lg bg-destructive/10 border border-destructive/50 text-destructive px-4 py-3 text-sm">
             {error}
