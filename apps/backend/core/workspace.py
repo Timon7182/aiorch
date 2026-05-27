@@ -192,7 +192,7 @@ def merge_existing_build(
         else None
     )
 
-    spec_branch = f"magestic-ai/{spec_name}"
+    spec_branch = f"feature/{spec_name}"
 
     # Don't merge a branch into itself
     if current_branch == spec_branch:
@@ -545,7 +545,7 @@ def _check_git_conflicts(project_dir: Path, spec_name: str) -> dict:
     """
     import re
 
-    spec_branch = f"magestic-ai/{spec_name}"
+    spec_branch = f"feature/{spec_name}"
     result = {
         "has_conflicts": False,
         "conflicting_files": [],
@@ -707,7 +707,7 @@ def _resolve_git_conflicts_with_ai(
 
     conflicting_files = git_conflicts.get("conflicting_files", [])
     base_branch = git_conflicts.get("base_branch", "main")
-    spec_branch = git_conflicts.get("spec_branch", f"magestic-ai/{spec_name}")
+    spec_branch = git_conflicts.get("spec_branch", f"feature/{spec_name}")
 
     debug_detailed(
         MODULE,

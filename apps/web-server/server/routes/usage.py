@@ -40,9 +40,8 @@ def _empty_totals() -> dict[str, Any]:
     }
 
 
-def _load_usage(spec_dir: Path) -> dict[str, Any] | None:
-    """Load a spec's usage.json. Returns None if no usage has been recorded."""
-    usage_file = spec_dir / USAGE_FILENAME
+def _read_usage_file(usage_file: Path) -> dict[str, Any] | None:
+    """Parse a single usage.json file, normalising its shape. None if absent."""
     if not usage_file.exists():
         return None
     try:
@@ -55,6 +54,56 @@ def _load_usage(spec_dir: Path) -> dict[str, Any] | None:
     data.setdefault("by_phase", {})
     data.setdefault("by_model", {})
     data.setdefault("events", [])
+    return data
+
+
+def _worktree_usage_file(spec_dir: Path) -> Path | None:
+    """Resolve the worktree copy of usage.json for a main spec dir.
+
+    The agent always writes usage.json into the *worktree* spec dir during a
+    build. Web-initiated runs sync it back to the main spec dir, but CLI runs
+    (and any sync that hasn't fired yet, or that failed) leave it only in the
+    worktree — which is why per-task usage can read as zero. We derive the
+    worktree path so reads work regardless of how the build was launched.
+
+    Layout: ``<project>/.magestic-ai/specs/<id>`` (main) maps to
+    ``<project>/.magestic-ai/worktrees/tasks/<id>/.magestic-ai/specs/<id>``.
+    """
+    try:
+        spec_id = spec_dir.name
+        project_root = spec_dir.parents[2]
+    except IndexError:
+        return None
+    return (
+        project_root
+        / ".magestic-ai"
+        / "worktrees"
+        / "tasks"
+        / spec_id
+        / ".magestic-ai"
+        / "specs"
+        / spec_id
+        / USAGE_FILENAME
+    )
+
+
+def _load_usage(spec_dir: Path) -> dict[str, Any] | None:
+    """Load a spec's usage.json, falling back to the worktree copy.
+
+    Prefers the synced main-spec file; if it's missing or has recorded no
+    calls yet, transparently reads the worktree copy so the dashboard and
+    per-task tab still show real numbers. Returns None when neither exists.
+    """
+    data = _read_usage_file(spec_dir / USAGE_FILENAME)
+    if data is not None and data["totals"].get("calls", 0) > 0:
+        return data
+
+    worktree_file = _worktree_usage_file(spec_dir)
+    if worktree_file is not None:
+        worktree_data = _read_usage_file(worktree_file)
+        if worktree_data is not None and worktree_data["totals"].get("calls", 0) > 0:
+            return worktree_data
+
     return data
 
 

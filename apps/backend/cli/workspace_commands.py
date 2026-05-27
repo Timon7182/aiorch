@@ -375,7 +375,7 @@ def _check_git_merge_conflicts(project_dir: Path, spec_name: str) -> dict:
 
     debug(MODULE, "Checking for git-level merge conflicts (non-destructive)...")
 
-    spec_branch = f"magestic-ai/{spec_name}"
+    spec_branch = f"feature/{spec_name}"
     result = {
         "has_conflicts": False,
         "conflicting_files": [],

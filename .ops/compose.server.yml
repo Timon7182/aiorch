@@ -68,6 +68,11 @@ services:
       # CodeGraphContext: code-structure graph for agents + docs panel. CGC lives
       # in a venv on the persisted .magestic-ai volume; point the resolver at it.
       - CODEGRAPH_BIN=/home/magesticai/.magestic-ai/tools/cgc-venv/bin/codegraphcontext
+      # Skills knowledge base: the SkillsService default path (<root>/skills) is
+      # inside the image (gitignored, wiped on redeploy). Point it at the persisted
+      # .magestic-ai volume so installed skills survive deploys and show in the
+      # skills browser / per-task skill selection.
+      - APP_SKILLS_PATH=/home/magesticai/.magestic-ai/skills
       # Git provider credentials. Add the ones you use to /home/saya/.aiorch-secrets.
       # gh CLI auto-detects GH_TOKEN; git uses them via the credential helper
       # configured at container entrypoint.

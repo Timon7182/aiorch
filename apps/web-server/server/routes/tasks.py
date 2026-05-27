@@ -111,6 +111,9 @@ class TaskMetadata(BaseModel):
     phaseThinking: dict | None = None
     # Git options
     baseBranch: str | None = None
+    # Custom branch name for this task's worktree (e.g. "hotfix/32_task").
+    # When unset, the worktree branch defaults to "feature/{spec_name}".
+    customBranchName: str | None = None
     # Archive info
     archivedAt: str | None = None
     archivedInVersion: str | None = None
@@ -163,6 +166,8 @@ class TaskMetadataUpdate(BaseModel):
     phaseThinking: dict | None = None  # {"spec": "medium", "planning": "high", ...}
     # Git options
     baseBranch: str | None = None
+    # Custom branch name for this task's worktree (e.g. "hotfix/32_task").
+    customBranchName: str | None = None
     # Execution mode: 'quick' uses simplified prompts (~70% fewer tokens)
     mode: str | None = None  # 'quick' or 'full'
     # Image attachments (can be null to clear)
@@ -594,7 +599,15 @@ def load_spec_metadata(spec_dir: Path) -> dict:
     worktree_marker = spec_dir / ".worktree_path"
     if worktree_marker.exists():
         metadata["worktree_path"] = worktree_marker.read_text().strip()
-        metadata["branch_name"] = f"magestic-ai/{spec_dir.name}"
+        # Reflect a custom branch name if the task set one at creation;
+        # otherwise fall back to the default feature/{spec} namespace.
+        custom_branch = None
+        try:
+            req = json.loads((spec_dir / "requirements.json").read_text())
+            custom_branch = (req.get("metadata") or {}).get("customBranchName")
+        except (OSError, json.JSONDecodeError):
+            pass
+        metadata["branch_name"] = custom_branch or f"feature/{spec_dir.name}"
 
     # Load task metadata from requirements.json
     requirements_file = spec_dir / "requirements.json"
@@ -1037,7 +1050,7 @@ async def create_task(task: TaskCreate):
 
             # Sync task_metadata.json for phase_config.py to read model/thinking settings
             # Also include selectedSkills so agent_service.py can inject skill context
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills"]
+            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills", "customBranchName"]
             task_metadata = {field: metadata_dict[field] for field in model_fields if field in metadata_dict}
             if task_metadata:
                 (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))
@@ -3504,7 +3517,7 @@ async def get_worktree_status(task_id: str):
         )
         worktree_branch = result.stdout.strip()
     except subprocess.CalledProcessError:
-        worktree_branch = f"magestic-ai/{spec_id}"
+        worktree_branch = f"feature/{spec_id}"
 
     # Get base branch from main project
     try:
@@ -3651,7 +3664,7 @@ async def get_worktree_diff(task_id: str):
         )
         worktree_branch = result.stdout.strip()
     except subprocess.CalledProcessError:
-        worktree_branch = f"magestic-ai/{spec_id}"
+        worktree_branch = f"feature/{spec_id}"
 
     # Get base branch from main project
     try:
@@ -3846,7 +3859,7 @@ async def discard_worktree(task_id: str):
 
     try:
         # Get the branch name before removing worktree
-        branch_name = f"magestic-ai/{spec_id}"
+        branch_name = f"feature/{spec_id}"
 
         # Remove worktree using git command
         result = subprocess.run(

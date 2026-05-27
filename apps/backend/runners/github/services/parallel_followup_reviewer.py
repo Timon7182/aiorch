@@ -129,11 +129,19 @@ class ParallelFollowupReviewer:
             )
 
     def _load_prompt(self, filename: str) -> str:
-        """Load a prompt file from the prompts/github directory."""
-        prompt_file = (
-            Path(__file__).parent.parent.parent.parent / "prompts" / "github" / filename
-        )
-        if prompt_file.exists():
+        """Load a github prompt file (per-project override or bundled default)."""
+        try:
+            from prompts_pkg.prompt_resolver import resolve_prompt_file
+
+            prompt_file = resolve_prompt_file(f"github/{filename}")
+        except ImportError:
+            prompt_file = (
+                Path(__file__).parent.parent.parent.parent
+                / "prompts"
+                / "github"
+                / filename
+            )
+        if prompt_file.is_file():
             return prompt_file.read_text(encoding="utf-8")
         logger.warning(f"Prompt file not found: {prompt_file}")
         return ""

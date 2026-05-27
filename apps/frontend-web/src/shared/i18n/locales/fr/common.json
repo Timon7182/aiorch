@@ -244,7 +244,16 @@
       "custom": "Personnalisé...",
       "detecting": "Détection des fournisseurs...",
       "noProviders": "Aucun fournisseur disponible",
-      "via": "via {{provider}}"
+      "via": "via {{provider}}",
+      "codeSearch": {
+        "label": "Recherche de code",
+        "auto": "Auto",
+        "autoDesc": "CodeGraph si indexé, sinon fichiers",
+        "cgc": "CodeGraph",
+        "cgcDesc": "Interroger le graphe de code indexé (Claude uniquement)",
+        "files": "Fichiers",
+        "filesDesc": "Read / Grep / Glob simples"
+      }
     },
     "createTask": {
       "button": "Créer une tâche",

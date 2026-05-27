@@ -16,6 +16,7 @@ configure_safe_encoding()
 from core.client import create_client
 from debug import debug, debug_detailed, debug_error, debug_section, debug_success
 from phase_config import get_provider_extra_kwargs, infer_provider_from_model
+from prompts_pkg.prompt_resolver import resolve_prompt_file
 from providers.factory import get_provider
 from security.tool_input_validator import get_safe_tool_input
 from task_logger import (
@@ -78,27 +79,27 @@ class AgentRunner:
             interactive=interactive,
         )
 
-        prompts_dir = Path(__file__).parent.parent.parent / "prompts"
-
+        # Resolve through the prompt resolver so per-project overrides
+        # (MAGESTIC_PROMPT_OVERRIDE_DIR) take precedence over bundled defaults.
         # Quick Mode: Use simplified prompts (~70% fewer tokens)
         if os.environ.get("QUICK_MODE") == "true":
             # Try to load quick version of prompt (e.g., spec_writer_quick.md)
             quick_prompt_file = prompt_file.replace(".md", "_quick.md")
-            quick_prompt_path = prompts_dir / quick_prompt_file
-            if quick_prompt_path.exists():
+            quick_prompt_path = resolve_prompt_file(quick_prompt_file)
+            if quick_prompt_path.is_file():
                 prompt_path = quick_prompt_path
                 debug(
                     "agent_runner",
                     f"Quick Mode: Using simplified prompt {quick_prompt_file}",
                 )
             else:
-                prompt_path = prompts_dir / prompt_file
+                prompt_path = resolve_prompt_file(prompt_file)
                 debug(
                     "agent_runner",
                     f"Quick Mode: No quick prompt found, using {prompt_file}",
                 )
         else:
-            prompt_path = prompts_dir / prompt_file
+            prompt_path = resolve_prompt_file(prompt_file)
 
         if not prompt_path.exists():
             debug_error("agent_runner", f"Prompt file not found: {prompt_path}")

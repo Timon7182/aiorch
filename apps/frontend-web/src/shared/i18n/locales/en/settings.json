@@ -260,6 +260,32 @@
       "integrationTitle": "Memory",
       "integrationDescription": "Configure persistent cross-session memory for agents",
       "syncDescription": "Configure persistent memory"
+    },
+    "agentPrompts": {
+      "title": "Agent Prompts",
+      "description": "Customize agent system prompts for this project"
+    }
+  },
+  "agentPrompts": {
+    "searchPlaceholder": "Search prompts…",
+    "customized": "Customized",
+    "selectPrompt": "Select a prompt to view or edit",
+    "save": "Save",
+    "reset": "Reset to default",
+    "viewDefault": "View default",
+    "hideDefault": "Back to editing",
+    "coderNote": "Note: the per-subtask coder instructions are generated in code, not from this file. Editing coder.md only changes the session-level coder prompt.",
+    "categories": {
+      "build": "Build",
+      "spec": "Spec creation",
+      "qa": "QA",
+      "ideation": "Ideation",
+      "roadmap": "Roadmap",
+      "github": "GitHub",
+      "docs": "Documentation",
+      "analysis": "Analysis",
+      "mcp_tools": "MCP tool snippets",
+      "other": "Other"
     }
   },
   "agentProfile": {

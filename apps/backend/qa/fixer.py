@@ -22,6 +22,8 @@ from task_logger import (
     get_task_logger,
 )
 
+from prompts_pkg.prompt_resolver import resolve_prompt_file
+
 from .criteria import get_qa_signoff_status
 
 # Configuration
@@ -34,8 +36,8 @@ QA_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 def load_qa_fixer_prompt() -> str:
-    """Load the QA fixer agent prompt."""
-    prompt_file = QA_PROMPTS_DIR / "qa_fixer.md"
+    """Load the QA fixer agent prompt (per-project override or bundled default)."""
+    prompt_file = resolve_prompt_file("qa_fixer.md")
     if not prompt_file.exists():
         raise FileNotFoundError(f"QA fixer prompt not found: {prompt_file}")
     return prompt_file.read_text()

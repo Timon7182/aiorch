@@ -23,11 +23,27 @@ class PromptManager:
         Initialize PromptManager.
 
         Args:
-            prompts_dir: Optional directory containing custom prompt files
+            prompts_dir: Optional directory containing custom prompt files. When
+                provided, it is honored directly (explicit override). When not,
+                prompts resolve through the prompt resolver so per-project
+                overrides (MAGESTIC_PROMPT_OVERRIDE_DIR) take precedence over the
+                bundled prompts/github/ defaults.
         """
+        self._explicit_dir = prompts_dir
         self.prompts_dir = prompts_dir or (
             Path(__file__).parent.parent.parent.parent / "prompts" / "github"
         )
+
+    def _resolve(self, filename: str) -> Path:
+        """Resolve a github prompt file, honoring explicit dir then overrides."""
+        if self._explicit_dir is not None:
+            return self._explicit_dir / filename
+        try:
+            from prompts_pkg.prompt_resolver import resolve_prompt_file
+
+            return resolve_prompt_file(f"github/{filename}")
+        except ImportError:
+            return self.prompts_dir / filename
 
     def get_review_pass_prompt(self, review_pass: ReviewPass) -> str:
         """Get the specialized prompt for each review pass."""
@@ -296,8 +312,8 @@ Output JSON array:
 
     def get_pr_review_prompt(self) -> str:
         """Get the main PR review prompt."""
-        prompt_file = self.prompts_dir / "pr_reviewer.md"
-        if prompt_file.exists():
+        prompt_file = self._resolve("pr_reviewer.md")
+        if prompt_file.is_file():
             return prompt_file.read_text(encoding="utf-8")
         return self._get_default_pr_review_prompt()
 
@@ -336,8 +352,8 @@ Be specific and actionable. Focus on significant issues, not nitpicks.
 
     def get_followup_review_prompt(self) -> str:
         """Get the follow-up PR review prompt."""
-        prompt_file = self.prompts_dir / "pr_followup.md"
-        if prompt_file.exists():
+        prompt_file = self._resolve("pr_followup.md")
+        if prompt_file.is_file():
             return prompt_file.read_text(encoding="utf-8")
         return self._get_default_followup_review_prompt()
 
@@ -378,8 +394,8 @@ Output JSON:
 
     def get_triage_prompt(self) -> str:
         """Get the issue triage prompt."""
-        prompt_file = self.prompts_dir / "issue_triager.md"
-        if prompt_file.exists():
+        prompt_file = self._resolve("issue_triager.md")
+        if prompt_file.is_file():
             return prompt_file.read_text(encoding="utf-8")
         return self._get_default_triage_prompt()
 

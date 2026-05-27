@@ -27,6 +27,19 @@ CLAUDE_MODELS = [
     ProviderModel(id="haiku", label="Claude Haiku 4.5"),
 ]
 
+# System-prompt nudge appended when the CodeGraph backend is active so the model
+# reaches for the graph tools instead of grepping the tree by hand.
+CODEGRAPH_SYSTEM_PROMPT = (
+    "This project is indexed in CodeGraph and you have its MCP tools available: "
+    "mcp__codegraph__find_code, mcp__codegraph__analyze_code_relationships, "
+    "mcp__codegraph__find_dead_code, mcp__codegraph__calculate_cyclomatic_complexity, "
+    "mcp__codegraph__find_most_complex_functions, mcp__codegraph__execute_cypher_query, "
+    "mcp__codegraph__list_indexed_repositories, mcp__codegraph__get_repository_stats. "
+    "Prefer these tools over raw Grep/Glob for questions about where code is defined, "
+    "what calls what, call chains, symbol relationships, dead code, or complexity. "
+    "Fall back to Read/Grep/Glob only for plain-text search or reading file contents."
+)
+
 
 class ClaudeProvider(ProviderStrategy):
     """Provider that shells out to the Claude Code CLI."""
@@ -129,6 +142,61 @@ class ClaudeProvider(ProviderStrategy):
         )
 
     # ------------------------------------------------------------------
+    # CodeGraph (CGC) backend — inject the codegraph stdio MCP server so
+    # Claude can answer structural questions via the indexed graph.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_codegraph_bin() -> str | None:
+        """Find the `codegraphcontext` CLI as an absolute path.
+
+        Mirrors core.client._resolve_codegraph_bin so the web-server process
+        doesn't have to import the backend package:
+          1. CODEGRAPH_BIN env var (explicit absolute path).
+          2. The scripts/bin dir of the running interpreter.
+          3. A plain PATH lookup (e.g. a pipx shim).
+        """
+        import sys
+
+        explicit = os.environ.get("CODEGRAPH_BIN")
+        if explicit and Path(explicit).exists():
+            return explicit
+
+        scripts_dir = Path(sys.executable).parent
+        for name in ("codegraphcontext", "codegraphcontext.exe", "cgc", "cgc.exe"):
+            candidate = scripts_dir / name
+            if candidate.exists():
+                return str(candidate)
+        return shutil.which("codegraphcontext") or shutil.which("cgc")
+
+    def _codegraph_available(self, run_dir: Path) -> bool:
+        """CGC is usable only when enabled, indexed, and the CLI is installed."""
+        if str(os.environ.get("CODEGRAPH_DISABLED", "")).lower() == "true":
+            return False
+        if not (run_dir / ".codegraphcontext").is_dir():
+            return False
+        return self._resolve_codegraph_bin() is not None
+
+    def _resolve_code_search_mode(self, code_search: str | None, run_dir: Path) -> str:
+        """Resolve the requested backend to a concrete one.
+
+        'cgc'/'files' are honored as-is; 'auto' (the default) prefers CodeGraph
+        when the project is indexed, otherwise falls back to plain file tools.
+        """
+        if code_search in ("cgc", "files"):
+            return code_search
+        return "cgc" if self._codegraph_available(run_dir) else "files"
+
+    def _build_codegraph_mcp_config(self, run_dir: Path) -> dict | None:
+        """Build the inline --mcp-config payload for the codegraph stdio server."""
+        if not self._codegraph_available(run_dir):
+            return None
+        cgc_bin = self._resolve_codegraph_bin()
+        if not cgc_bin:
+            return None
+        return {"mcpServers": {"codegraph": {"command": cgc_bin, "args": ["mcp", "start"]}}}
+
+    # ------------------------------------------------------------------
     # Message sending (extracted from InsightsService.send_message)
     # ------------------------------------------------------------------
 
@@ -166,6 +234,29 @@ class ClaudeProvider(ProviderStrategy):
                     cmd.extend(["--effort", effort])
         elif model:
             cmd.extend(["--model", model])
+
+        # Code-search backend: optionally inject the CodeGraph MCP server so the
+        # model navigates the indexed graph instead of grepping raw files.
+        code_search = (model_config or {}).get("codeSearch") or "auto"
+        search_mode = self._resolve_code_search_mode(code_search, run_dir)
+        if search_mode == "cgc":
+            cgc_config = self._build_codegraph_mcp_config(run_dir)
+            if cgc_config:
+                # NOTE: --allowedTools is variadic, so it must be followed by
+                # another flag (here --append-system-prompt) — never by the
+                # trailing positional message, which it would otherwise swallow.
+                cmd.extend([
+                    "--mcp-config", json.dumps(cgc_config),
+                    "--strict-mcp-config",
+                    "--allowedTools", "mcp__codegraph__*", "Read", "Glob", "Grep",
+                    "--append-system-prompt", CODEGRAPH_SYSTEM_PROMPT,
+                ])
+                logger.info("[ClaudeProvider] CodeGraph MCP enabled for this turn")
+            else:
+                logger.info(
+                    "[ClaudeProvider] CodeGraph requested but unavailable "
+                    "(not indexed / disabled / CLI missing); using file tools"
+                )
 
         cmd.append(message)
 

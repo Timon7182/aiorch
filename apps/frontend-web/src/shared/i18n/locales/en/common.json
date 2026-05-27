@@ -244,7 +244,16 @@
       "custom": "Custom...",
       "detecting": "Detecting providers...",
       "noProviders": "No providers available",
-      "via": "via {{provider}}"
+      "via": "via {{provider}}",
+      "codeSearch": {
+        "label": "Code search",
+        "auto": "Auto",
+        "autoDesc": "CodeGraph when indexed, else files",
+        "cgc": "CodeGraph",
+        "cgcDesc": "Query the indexed code graph (Claude only)",
+        "files": "Files",
+        "filesDesc": "Plain Read / Grep / Glob"
+      }
     },
     "createTask": {
       "button": "Create Task",

@@ -1376,7 +1376,7 @@ async def create_worktree(projectId: str, request: CreateWorktreeRequest):
         }
 
     # Build git worktree add command
-    worktree_branch = f"magestic-ai/tasks/{name}" if request.createBranch else None
+    worktree_branch = f"feature/{name}" if request.createBranch else None
 
     if request.createBranch:
         # Check if branch already exists

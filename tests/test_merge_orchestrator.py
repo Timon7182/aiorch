@@ -128,7 +128,7 @@ class TestSingleTaskMerge:
         orchestrator.evolution_tracker.capture_baselines("task-001", files, intent="Add new function")
 
         # Create a task branch with actual git changes (the merge pipeline uses git diff main...HEAD)
-        subprocess.run(["git", "checkout", "-b", "magestic-ai/task-001"], cwd=temp_project, capture_output=True)
+        subprocess.run(["git", "checkout", "-b", "feature/task-001"], cwd=temp_project, capture_output=True)
         utils_file = temp_project / "src" / "utils.py"
         utils_file.write_text(SAMPLE_PYTHON_WITH_NEW_FUNCTION)
         subprocess.run(["git", "add", "."], cwd=temp_project, capture_output=True)

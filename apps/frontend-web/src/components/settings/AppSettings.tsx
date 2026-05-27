@@ -13,7 +13,8 @@ import {
   Database,
   Sparkles,
   Globe,
-  Bug
+  Bug,
+  FileText
 } from 'lucide-react';
 
 import {
@@ -68,7 +69,8 @@ const appNavItemsConfig: NavItemConfig<AppSection>[] = [
 const projectNavItemsConfig: NavItemConfig<ProjectSettingsSection>[] = [
   { id: 'general', icon: Settings2 },
   { id: 'github', icon: Github },
-  { id: 'memory', icon: Database }
+  { id: 'memory', icon: Database },
+  { id: 'agentPrompts', icon: FileText }
 ];
 
 /**

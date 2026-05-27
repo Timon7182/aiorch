@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from client import create_client
 from phase_config import get_thinking_budget, resolve_model_id
+from prompts_pkg.prompt_resolver import resolve_prompt_file
 from ui import print_status
 
 # Ideation types
@@ -74,7 +75,7 @@ class IdeationGenerator:
         additional_context: str = "",
     ) -> tuple[bool, str]:
         """Run an agent with the given prompt."""
-        prompt_path = self.prompts_dir / prompt_file
+        prompt_path = resolve_prompt_file(prompt_file)
 
         if not prompt_path.exists():
             return False, f"Prompt not found: {prompt_path}"

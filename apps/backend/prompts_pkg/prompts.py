@@ -17,9 +17,12 @@ from .project_context import (
     get_mcp_tools_for_project,
     load_project_index,
 )
+from .prompt_resolver import resolve_prompt_file
 
-# Directory containing prompt files
-# prompts/ is a sibling directory of prompts_pkg/, so go up one level first
+# Directory containing the bundled (default) prompt files.
+# prompts/ is a sibling directory of prompts_pkg/, so go up one level first.
+# NOTE: per-project overrides are resolved via resolve_prompt_file(); this
+# constant remains the bundled-default root for any direct references.
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
@@ -36,13 +39,13 @@ def get_planner_prompt(spec_dir: Path) -> str:
     """
     # Quick Mode: Use simplified prompt (~70% fewer tokens)
     if os.environ.get("QUICK_MODE") == "true":
-        quick_prompt_file = PROMPTS_DIR / "planner_quick.md"
-        if quick_prompt_file.exists():
+        quick_prompt_file = resolve_prompt_file("planner_quick.md")
+        if quick_prompt_file.is_file():
             prompt_file = quick_prompt_file
         else:
-            prompt_file = PROMPTS_DIR / "planner.md"
+            prompt_file = resolve_prompt_file("planner.md")
     else:
-        prompt_file = PROMPTS_DIR / "planner.md"
+        prompt_file = resolve_prompt_file("planner.md")
 
     if not prompt_file.exists():
         raise FileNotFoundError(
@@ -87,13 +90,13 @@ def get_coding_prompt(spec_dir: Path) -> str:
     """
     # Quick Mode: Use simplified prompt (~70% fewer tokens)
     if os.environ.get("QUICK_MODE") == "true":
-        quick_prompt_file = PROMPTS_DIR / "coder_quick.md"
-        if quick_prompt_file.exists():
+        quick_prompt_file = resolve_prompt_file("coder_quick.md")
+        if quick_prompt_file.is_file():
             prompt_file = quick_prompt_file
         else:
-            prompt_file = PROMPTS_DIR / "coder.md"
+            prompt_file = resolve_prompt_file("coder.md")
     else:
-        prompt_file = PROMPTS_DIR / "coder.md"
+        prompt_file = resolve_prompt_file("coder.md")
 
     if not prompt_file.exists():
         raise FileNotFoundError(
@@ -221,7 +224,7 @@ def get_followup_planner_prompt(spec_dir: Path) -> str:
     Returns:
         The follow-up planner prompt content with paths injected
     """
-    prompt_file = PROMPTS_DIR / "followup_planner.md"
+    prompt_file = resolve_prompt_file("followup_planner.md")
 
     if not prompt_file.exists():
         raise FileNotFoundError(
@@ -308,7 +311,7 @@ def _load_prompt_file(filename: str) -> str:
     Raises:
         FileNotFoundError: If prompt file doesn't exist
     """
-    prompt_file = PROMPTS_DIR / filename
+    prompt_file = resolve_prompt_file(filename)
     if not prompt_file.exists():
         raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
     return prompt_file.read_text()
@@ -336,8 +339,8 @@ def get_qa_reviewer_prompt(spec_dir: Path, project_dir: Path) -> str:
     # Quick Mode: Use simplified prompt (~70% fewer tokens)
     # Note: Quick mode uses simplified prompt without MCP tool injection
     if os.environ.get("QUICK_MODE") == "true":
-        quick_prompt_file = PROMPTS_DIR / "qa_reviewer_quick.md"
-        if quick_prompt_file.exists():
+        quick_prompt_file = resolve_prompt_file("qa_reviewer_quick.md")
+        if quick_prompt_file.is_file():
             base_prompt = quick_prompt_file.read_text()
             # Add basic spec context and return (skip MCP tool injection for speed)
             spec_context = f"""## SPEC LOCATION

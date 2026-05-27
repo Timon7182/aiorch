@@ -2216,6 +2216,50 @@ class AgentService:
         except OSError as e:
             logger.error(f"[AgentService] Failed to write skill_context.md: {e}")
 
+    async def _materialize_prompt_overrides(
+        self, task_id: str, project_path: Path
+    ) -> str | None:
+        """Write this project's prompt overrides to disk before an agent run.
+
+        Returns the override directory (to set as MAGESTIC_PROMPT_OVERRIDE_DIR)
+        or None if there is nothing to do / on failure. Never raises — prompt
+        customization must not block a build.
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        # task_id is "project_id:spec_id"; the project_id keys the overrides.
+        project_id = task_id.split(":", 1)[0] if ":" in task_id else None
+        if not project_id:
+            return None
+
+        try:
+            from ..database.engine import async_session_factory
+            from ..services import agent_prompt_service as prompt_svc
+
+            async with async_session_factory() as session:
+                overrides = await prompt_svc.get_override_map(project_id, session)
+                # The directory is always set so the backend resolver looks here;
+                # materialize_overrides also prunes any reset prompts.
+                override_dir = await prompt_svc.materialize_overrides(
+                    project_id, project_path, session
+                )
+            if overrides:
+                logger.info(
+                    "[AgentService] Using %d custom prompt(s) for task %s",
+                    len(overrides),
+                    task_id,
+                )
+            return str(override_dir)
+        except Exception as exc:  # noqa: BLE001 - never block the build
+            logger.warning(
+                "[AgentService] Could not materialize prompt overrides for %s: %s",
+                task_id,
+                exc,
+            )
+            return None
+
     async def start_spec_creation(
         self,
         task_id: str,
@@ -2300,6 +2344,12 @@ class AgentService:
         # Run Claude in non-interactive mode - bypass permission prompts
         env["CLAUDE_CODE_ENTRYPOINT"] = "cli"  # Signal non-interactive mode
         env["CI"] = "true"  # Many CLI tools use this to detect non-interactive mode
+
+        # Per-project agent prompt overrides: materialize to disk and point the
+        # backend resolver at them (no-op when the project has no overrides).
+        override_dir = await self._materialize_prompt_overrides(task_id, project_path)
+        if override_dir:
+            env["MAGESTIC_PROMPT_OVERRIDE_DIR"] = override_dir
 
         # Quick Mode for simple tasks (safety net if simple task reaches spec creation)
         if complexity == "simple":
@@ -2524,6 +2574,12 @@ class AgentService:
         # Run Claude in non-interactive mode - bypass permission prompts
         env["CLAUDE_CODE_ENTRYPOINT"] = "cli"  # Signal non-interactive mode
         env["CI"] = "true"  # Many CLI tools use this to detect non-interactive mode
+
+        # Per-project agent prompt overrides: materialize to disk and point the
+        # backend resolver at them (no-op when the project has no overrides).
+        override_dir = await self._materialize_prompt_overrides(task_id, project_path)
+        if override_dir:
+            env["MAGESTIC_PROMPT_OVERRIDE_DIR"] = override_dir
 
         # Quick Mode: Use simplified prompts (~70% fewer tokens)
         if mode == "quick":

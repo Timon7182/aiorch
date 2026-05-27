@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from debug import debug, debug_detailed, debug_error, debug_success
+from prompts_pkg.prompt_resolver import resolve_prompt_file
 
 
 class ScriptExecutor:
@@ -88,7 +89,7 @@ class AgentExecutor:
         additional_context: str = "",
     ) -> tuple[bool, str]:
         """Run an agent with the given prompt."""
-        prompt_path = self.prompts_dir / prompt_file
+        prompt_path = resolve_prompt_file(prompt_file)
 
         debug_detailed(
             "roadmap_executor",

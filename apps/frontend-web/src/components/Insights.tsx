@@ -16,7 +16,8 @@ import {
   Square,
   ListPlus,
   GitBranch,
-  PanelLeft
+  PanelLeft,
+  Network
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -808,6 +809,7 @@ function ToolUsageHistory({ tools }: ToolUsageHistoryProps) {
   }, {} as Record<string, number>);
 
   const getToolIcon = (toolName: string) => {
+    if (toolName.startsWith('mcp__codegraph__')) return Network;
     switch (toolName) {
       case 'Read':
         return FileText;
@@ -821,6 +823,7 @@ function ToolUsageHistory({ tools }: ToolUsageHistoryProps) {
   };
 
   const getToolColor = (toolName: string) => {
+    if (toolName.startsWith('mcp__codegraph__')) return 'text-purple-500';
     switch (toolName) {
       case 'Read':
         return 'text-blue-500';
@@ -888,6 +891,13 @@ interface ToolIndicatorProps {
 function ToolIndicator({ name, input }: ToolIndicatorProps) {
   // Get friendly name and icon for each tool
   const getToolInfo = (toolName: string) => {
+    if (toolName.startsWith('mcp__codegraph__')) {
+      return {
+        icon: Network,
+        label: 'Querying code graph',
+        color: 'text-purple-500 bg-purple-500/10'
+      };
+    }
     switch (toolName) {
       case 'Read':
         return {

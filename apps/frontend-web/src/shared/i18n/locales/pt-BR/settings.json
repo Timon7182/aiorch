@@ -260,6 +260,32 @@
       "integrationTitle": "Memória",
       "integrationDescription": "Configure memória persistente entre sessões para agentes",
       "syncDescription": "Configurar memória persistente"
+    },
+    "agentPrompts": {
+      "title": "Prompts do Agente",
+      "description": "Personalize os prompts de sistema dos agentes para este projeto"
+    }
+  },
+  "agentPrompts": {
+    "searchPlaceholder": "Buscar prompts…",
+    "customized": "Personalizado",
+    "selectPrompt": "Selecione um prompt para visualizar ou editar",
+    "save": "Salvar",
+    "reset": "Restaurar padrão",
+    "viewDefault": "Ver padrão",
+    "hideDefault": "Voltar à edição",
+    "coderNote": "Observação: as instruções de subtarefa do programador são geradas em código, não a partir deste arquivo. Editar coder.md altera apenas o prompt do programador no nível da sessão.",
+    "categories": {
+      "build": "Construção",
+      "spec": "Criação de spec",
+      "qa": "QA",
+      "ideation": "Ideação",
+      "roadmap": "Roteiro",
+      "github": "GitHub",
+      "docs": "Documentação",
+      "analysis": "Análise",
+      "mcp_tools": "Trechos de ferramentas MCP",
+      "other": "Outro"
     }
   },
   "agentProfile": {

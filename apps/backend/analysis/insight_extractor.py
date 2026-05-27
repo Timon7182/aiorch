@@ -275,9 +275,17 @@ def _get_attempt_history(recovery_manager: Any, subtask_id: str) -> list[dict]:
 
 def _build_extraction_prompt(inputs: dict) -> str:
     """Build the prompt for insight extraction."""
-    prompt_file = Path(__file__).parent / "prompts" / "insight_extractor.md"
+    # Resolve through the prompt resolver so per-project overrides
+    # (MAGESTIC_PROMPT_OVERRIDE_DIR) take precedence. The bundled default lives
+    # under analysis/prompts/, which the resolver special-cases for this key.
+    try:
+        from prompts_pkg.prompt_resolver import resolve_prompt_file
 
-    if prompt_file.exists():
+        prompt_file = resolve_prompt_file("analysis/insight_extractor.md")
+    except ImportError:
+        prompt_file = Path(__file__).parent / "prompts" / "insight_extractor.md"
+
+    if prompt_file.is_file():
         base_prompt = prompt_file.read_text()
     else:
         # Fallback if prompt file missing

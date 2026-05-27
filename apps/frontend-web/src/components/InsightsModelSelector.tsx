@@ -11,7 +11,7 @@ import {
   DropdownMenuLabel
 } from './ui/dropdown-menu';
 import { PROVIDER_INFO } from '../shared/constants';
-import type { InsightsModelConfig, InsightsProvider } from '../shared/types';
+import type { InsightsModelConfig, InsightsProvider, CodeSearchBackend } from '../shared/types';
 import { CustomModelModal } from './CustomModelModal';
 import { useInsightsStore, loadInsightsProviders } from '../stores/insights-store';
 
@@ -55,6 +55,20 @@ export function InsightsModelSelector({
     onConfigChange(config);
     setShowCustomModal(false);
   }, [onConfigChange]);
+
+  // Switch the code-search backend while preserving the current provider/model.
+  const handleSelectCodeSearch = useCallback((codeSearch: CodeSearchBackend) => {
+    const base: InsightsModelConfig = currentConfig ?? {
+      provider: 'claude',
+      profileId: 'custom',
+      model: 'sonnet',
+      thinkingLevel: 'medium',
+    };
+    onConfigChange({ ...base, codeSearch });
+  }, [onConfigChange, currentConfig]);
+
+  const currentCodeSearch: CodeSearchBackend = currentConfig?.codeSearch ?? 'auto';
+  const codeSearchOptions: CodeSearchBackend[] = ['auto', 'cgc', 'files'];
 
   // Build display text
   const getDisplayText = () => {
@@ -131,6 +145,32 @@ export function InsightsModelSelector({
               ))}
             </>
           )}
+
+          {/* Code search backend */}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>
+            {t('common:insights.modelSelector.codeSearch.label', 'Code search')}
+          </DropdownMenuLabel>
+          {codeSearchOptions.map((opt) => {
+            const isSelected = currentCodeSearch === opt;
+            return (
+              <DropdownMenuItem
+                key={opt}
+                onClick={() => handleSelectCodeSearch(opt)}
+                className="flex cursor-pointer items-center gap-2 pl-4"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm">
+                    {t(`common:insights.modelSelector.codeSearch.${opt}`, opt)}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {t(`common:insights.modelSelector.codeSearch.${opt}Desc`, '')}
+                  </div>
+                </div>
+                {isSelected && <Check className="h-4 w-4 shrink-0 text-primary" />}
+              </DropdownMenuItem>
+            );
+          })}
 
           {/* Custom */}
           <DropdownMenuSeparator />

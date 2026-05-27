@@ -5,7 +5,7 @@ Git Worktree Manager - Per-Spec Architecture
 
 Each spec gets its own worktree:
 - Worktree path: .magestic-ai/worktrees/tasks/{spec-name}/
-- Branch name: magestic-ai/{spec-name}
+- Branch name: feature/{spec-name}
 
 This allows:
 1. Multiple specs to be worked on simultaneously
@@ -15,6 +15,7 @@ This allows:
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -52,7 +53,7 @@ class WorktreeManager:
     Manages per-spec Git worktrees.
 
     Each spec gets its own worktree in .magestic-ai/worktrees/tasks/{spec-name}/ with
-    a corresponding branch magestic-ai/{spec-name}.
+    a corresponding branch feature/{spec-name}.
     """
 
     def __init__(
@@ -71,9 +72,11 @@ class WorktreeManager:
         # original layout exactly.
         self.project_dir = project_dir
         self.base_branch = base_branch or self._detect_base_branch()
-        self.worktrees_dir = (
-            (worktrees_root or project_dir) / ".magestic-ai" / "worktrees" / "tasks"
-        )
+        data_root = (worktrees_root or project_dir) / ".magestic-ai"
+        self.worktrees_dir = data_root / "worktrees" / "tasks"
+        # Spec metadata lives alongside the worktrees; we read it to honor a
+        # user-supplied custom branch name set at task creation time.
+        self.specs_dir = data_root / "specs"
         self._merge_lock = asyncio.Lock()
 
     def _detect_base_branch(self) -> str:
@@ -235,8 +238,68 @@ class WorktreeManager:
         return self.worktrees_dir / spec_name
 
     def get_branch_name(self, spec_name: str) -> str:
-        """Get the branch name for a spec."""
-        return f"magestic-ai/{spec_name}"
+        """Get the branch name for a spec.
+
+        Honors a custom branch name set on the task at creation time
+        (``customBranchName`` in the spec's metadata, e.g. ``hotfix/32_task``).
+        Falls back to the default ``feature/{spec_name}`` namespace when no
+        valid custom name is set.
+        """
+        custom = self._read_custom_branch_name(spec_name)
+        return custom or f"feature/{spec_name}"
+
+    def _read_custom_branch_name(self, spec_name: str) -> str | None:
+        """Read a user-supplied custom branch name from the spec's metadata.
+
+        Checks ``task_metadata.json`` first (the canonical runtime metadata),
+        then ``requirements.json["metadata"]`` as a fallback. Returns a
+        sanitized, git-valid branch name, or ``None`` when unset/invalid.
+        """
+        spec_dir = self.specs_dir / spec_name
+        sources: list[tuple[Path, str | None]] = [
+            (spec_dir / "task_metadata.json", None),
+            (spec_dir / "requirements.json", "metadata"),
+        ]
+        for path, sub_key in sources:
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if sub_key:
+                data = data.get(sub_key, {}) if isinstance(data, dict) else {}
+            raw = data.get("customBranchName") if isinstance(data, dict) else None
+            if raw:
+                sanitized = self._sanitize_branch_name(str(raw))
+                if sanitized:
+                    return sanitized
+        return None
+
+    @staticmethod
+    def _sanitize_branch_name(raw: str) -> str | None:
+        """Coerce a user string into a valid git branch name, or ``None``.
+
+        Trims, turns whitespace into hyphens, strips characters git forbids in
+        ref names, and rejects names git would refuse. Keeps user-chosen
+        prefixes like ``hotfix/`` intact.
+        """
+        name = raw.strip()
+        if not name:
+            return None
+        # Whitespace -> hyphen
+        name = re.sub(r"\s+", "-", name)
+        # Drop characters git disallows in ref names (space ~ ^ : ? * [ \ DEL + control chars)
+        name = re.sub(r"[~^:?*\[\\\x00-\x1f\x7f]", "", name)
+        # Collapse repeated slashes; trim leading/trailing slashes and dots
+        name = re.sub(r"/{2,}", "/", name).strip("/.")
+        # Reject sequences git forbids outright
+        if not name or ".." in name or "@{" in name or name.endswith(".lock"):
+            return None
+        # Reject any path component that starts with a dot (e.g. ".git", "foo/.bar")
+        if any(part.startswith(".") or part == "" for part in name.split("/")):
+            return None
+        return name
 
     def worktree_exists(self, spec_name: str) -> bool:
         """Check if a worktree exists for a spec."""
@@ -277,19 +340,19 @@ class WorktreeManager:
 
     def _check_branch_namespace_conflict(self) -> str | None:
         """
-        Check if a branch named 'magestic-ai' exists, which would block creating
-        branches in the 'magestic-ai/*' namespace.
+        Check if a branch named 'feature' exists, which would block creating
+        branches in the 'feature/*' namespace.
 
         Git stores branch refs as files under .git/refs/heads/, so a branch named
-        'magestic-ai' creates a file that prevents creating the 'magestic-ai/'
-        directory needed for 'magestic-ai/{spec-name}' branches.
+        'feature' creates a file that prevents creating the 'feature/'
+        directory needed for 'feature/{spec-name}' branches.
 
         Returns:
             The conflicting branch name if found, None otherwise.
         """
-        result = self._run_git(["rev-parse", "--verify", "magestic-ai"])
+        result = self._run_git(["rev-parse", "--verify", "feature"])
         if result.returncode == 0:
-            return "magestic-ai"
+            return "feature"
         return None
 
     def _get_worktree_stats(self, spec_name: str) -> dict:
@@ -347,14 +410,14 @@ class WorktreeManager:
         worktree_path = self.get_worktree_path(spec_name)
         branch_name = self.get_branch_name(spec_name)
 
-        # Check for branch namespace conflict (e.g., 'magestic-ai' blocking 'magestic-ai/*')
+        # Check for branch namespace conflict (e.g., 'feature' blocking 'feature/*')
         conflicting_branch = self._check_branch_namespace_conflict()
         if conflicting_branch:
             raise WorktreeError(
                 f"Branch '{conflicting_branch}' exists and blocks creating '{branch_name}'.\n"
                 f"\n"
-                f"Git branch names work like file paths - a branch named 'magestic-ai' prevents\n"
-                f"creating branches under 'magestic-ai/' (like 'magestic-ai/{spec_name}').\n"
+                f"Git branch names work like file paths - a branch named 'feature' prevents\n"
+                f"creating branches under 'feature/' (like 'feature/{spec_name}').\n"
                 f"\n"
                 f"Fix: Rename the conflicting branch:\n"
                 f"  git branch -m {conflicting_branch} {conflicting_branch}-backup"
@@ -523,7 +586,7 @@ class WorktreeManager:
             # --no-commit stages the merge but doesn't create the commit
             merge_args.append("--no-commit")
         else:
-            merge_args.extend(["-m", f"magestic-ai: Merge {info.branch}"])
+            merge_args.extend(["-m", f"Merge {info.branch}"])
 
         result = self._run_git(merge_args)
 
@@ -600,8 +663,8 @@ class WorktreeManager:
         return worktrees
 
     def list_all_spec_branches(self) -> list[str]:
-        """List all magestic-ai branches (even if worktree removed)."""
-        result = self._run_git(["branch", "--list", "magestic-ai/*"])
+        """List all feature branches (even if worktree removed)."""
+        result = self._run_git(["branch", "--list", "feature/*"])
         if result.returncode != 0:
             return []
 

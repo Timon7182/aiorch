@@ -34,6 +34,20 @@ logger = logging.getLogger(__name__)
 _map_category = map_category
 
 
+def _github_prompt_path(filename: str) -> Path:
+    """Resolve a github prompt file, honoring per-project overrides.
+
+    Routes through the prompt resolver (MAGESTIC_PROMPT_OVERRIDE_DIR) when
+    available, falling back to the bundled prompts/github/ directory.
+    """
+    try:
+        from prompts_pkg.prompt_resolver import resolve_prompt_file
+
+        return resolve_prompt_file(f"github/{filename}")
+    except ImportError:
+        return Path(__file__).parent.parent.parent.parent / "prompts" / "github" / filename
+
+
 @dataclass
 class TestResult:
     """Result from test execution."""
@@ -99,13 +113,8 @@ async def spawn_security_review(
         focused_patches = _build_focused_patches(files, pr_context)
 
         # Load security agent prompt
-        prompt_file = (
-            Path(__file__).parent.parent.parent.parent
-            / "prompts"
-            / "github"
-            / "pr_security_agent.md"
-        )
-        if prompt_file.exists():
+        prompt_file = _github_prompt_path("pr_security_agent.md")
+        if prompt_file.is_file():
             base_prompt = prompt_file.read_text(encoding="utf-8")
         else:
             logger.warning("Security agent prompt not found, using fallback")
@@ -185,13 +194,8 @@ async def spawn_quality_review(
         focused_patches = _build_focused_patches(files, pr_context)
 
         # Load quality agent prompt
-        prompt_file = (
-            Path(__file__).parent.parent.parent.parent
-            / "prompts"
-            / "github"
-            / "pr_quality_agent.md"
-        )
-        if prompt_file.exists():
+        prompt_file = _github_prompt_path("pr_quality_agent.md")
+        if prompt_file.is_file():
             base_prompt = prompt_file.read_text(encoding="utf-8")
         else:
             logger.warning("Quality agent prompt not found, using fallback")

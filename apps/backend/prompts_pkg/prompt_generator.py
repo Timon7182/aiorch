@@ -15,6 +15,8 @@ This approach:
 import json
 from pathlib import Path
 
+from .prompt_resolver import resolve_prompt_file
+
 
 def get_relative_spec_path(spec_dir: Path, project_dir: Path) -> str:
     """
@@ -210,7 +212,7 @@ Verify:""")
 5. **Commit your changes:**
    ```bash
    git add . ':!.magestic-ai'
-   git commit -m "magestic-ai: {subtask_id} - {description[:50]}"
+   git commit -m "{description[:72]}"
    ```
 6. **Update the plan** - set this subtask's status to "completed" in implementation_plan.json
 
@@ -245,11 +247,13 @@ def generate_planner_prompt(spec_dir: Path, project_dir: Path | None = None) -> 
     Returns:
         Planner prompt string
     """
-    # Load the full planner prompt from file
-    prompts_dir = Path(__file__).parent / "prompts"
-    planner_file = prompts_dir / "planner.md"
+    # Load the full planner prompt (per-project override or bundled default).
+    # NOTE: previously this read from prompts_pkg/prompts/planner.md, which does
+    # not exist, so it always fell back to the one-line default. Routing through
+    # resolve_prompt_file fixes that and honors per-project overrides.
+    planner_file = resolve_prompt_file("planner.md")
 
-    if planner_file.exists():
+    if planner_file.is_file():
         prompt = planner_file.read_text()
     else:
         prompt = (

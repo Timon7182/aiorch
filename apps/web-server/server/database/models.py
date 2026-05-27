@@ -405,6 +405,57 @@ class LLMEndpoint(Base):
 
 
 # ---------------------------------------------------------------------------
+# Agent Prompt Overrides (per-project custom agent prompts)
+# ---------------------------------------------------------------------------
+
+
+class AgentPrompt(Base):
+    """A per-project override of a bundled agent prompt.
+
+    Sparse by design: a row exists only for a prompt a project has actually
+    customized. Unedited prompts have no row and fall back to the bundled
+    default at runtime. "Reset to default" deletes the row.
+
+    ``project_id`` is stored as a plain (indexed) string rather than a foreign
+    key because the canonical project registry is ``projects.json`` on disk, not
+    the ``projects`` DB table.
+
+    ``prompt_key`` is the prompt's path relative to the bundled prompts root,
+    e.g. ``"planner.md"``, ``"qa_reviewer.md"``, ``"github/pr_reviewer.md"``.
+    """
+
+    __tablename__ = "agent_prompts"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "prompt_key", name="uq_agent_prompts_project_key"
+        ),
+        Index("ix_agent_prompts_project_id", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=_generate_uuid
+    )
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    prompt_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<AgentPrompt project_id={self.project_id!r} "
+            f"prompt_key={self.prompt_key!r}>"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Audit Logs
 # ---------------------------------------------------------------------------
 

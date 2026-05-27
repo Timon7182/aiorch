@@ -36,6 +36,20 @@ except (ImportError, ValueError, SystemError):
     from services.response_parsers import ResponseParser
 
 
+def _github_prompt_path(filename: str) -> Path:
+    """Resolve a github prompt file, honoring per-project overrides.
+
+    Routes through the prompt resolver (MAGESTIC_PROMPT_OVERRIDE_DIR) when
+    available, falling back to the bundled prompts/github/ directory.
+    """
+    try:
+        from prompts_pkg.prompt_resolver import resolve_prompt_file
+
+        return resolve_prompt_file(f"github/{filename}")
+    except ImportError:
+        return Path(__file__).parent.parent.parent.parent / "prompts" / "github" / filename
+
+
 # Define a local ProgressCallback to avoid circular import
 @dataclass
 class ProgressCallback:
@@ -466,13 +480,8 @@ class PRReviewEngine:
         from core.client import create_client
 
         # Load the structural prompt file
-        prompt_file = (
-            Path(__file__).parent.parent.parent.parent
-            / "prompts"
-            / "github"
-            / "pr_structural.md"
-        )
-        if prompt_file.exists():
+        prompt_file = _github_prompt_path("pr_structural.md")
+        if prompt_file.is_file():
             prompt = prompt_file.read_text(encoding="utf-8")
         else:
             prompt = self.prompt_manager.get_review_pass_prompt(ReviewPass.STRUCTURAL)
@@ -517,13 +526,8 @@ class PRReviewEngine:
             return "[]"
 
         # Load the AI triage prompt file
-        prompt_file = (
-            Path(__file__).parent.parent.parent.parent
-            / "prompts"
-            / "github"
-            / "pr_ai_triage.md"
-        )
-        if prompt_file.exists():
+        prompt_file = _github_prompt_path("pr_ai_triage.md")
+        if prompt_file.is_file():
             prompt = prompt_file.read_text(encoding="utf-8")
         else:
             prompt = self.prompt_manager.get_review_pass_prompt(

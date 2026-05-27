@@ -292,6 +292,7 @@ export function sendMessage(projectId: string, message: string, modelConfig?: In
     provider: 'claude' as const,
     model: DEFAULT_FEATURE_MODELS.insights,
     thinkingLevel: DEFAULT_FEATURE_THINKING.insights,
+    codeSearch: 'auto' as const,
     ...configToUse,
   };
 

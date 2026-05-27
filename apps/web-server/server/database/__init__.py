@@ -7,6 +7,7 @@ backed by SQLite (aiosqlite) with WAL mode for concurrent access.
 
 from .engine import get_db, init_db
 from .models import (
+    AgentPrompt,
     ApiKey,
     AuditLog,
     Base,
@@ -34,4 +35,5 @@ __all__ = [
     "AuditLog",
     "EmailAccount",
     "LLMEndpoint",
+    "AgentPrompt",
 ]

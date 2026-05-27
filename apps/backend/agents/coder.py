@@ -528,7 +528,7 @@ async def run_autonomous_agent(
             bold(f"{icon(Icons.SUCCESS)} NEXT STEPS"),
             "",
             "All subtasks completed!",
-            "  1. Review the magestic-ai/* branch",
+            "  1. Review the feature/* branch",
             "  2. Run manual tests",
             "  3. Merge to main",
         ]

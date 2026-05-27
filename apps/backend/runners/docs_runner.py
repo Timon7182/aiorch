@@ -40,19 +40,21 @@ if sys.platform == "win32":
                 pass
 
 
-PROMPT_PATH = _BACKEND_DIR / "prompts" / "doc_generator.md"
-
-
 async def _run(project_dir: Path, model: str) -> int:
-    if not PROMPT_PATH.exists():
-        print(f"[docs] prompt missing at {PROMPT_PATH}", file=sys.stderr)
+    # Resolve through the prompt resolver so per-project overrides
+    # (MAGESTIC_PROMPT_OVERRIDE_DIR) take precedence over the bundled default.
+    from prompts_pkg.prompt_resolver import resolve_prompt_file
+
+    prompt_path = resolve_prompt_file("doc_generator.md")
+    if not prompt_path.is_file():
+        print(f"[docs] prompt missing at {prompt_path}", file=sys.stderr)
         return 2
 
     if not project_dir.is_dir():
         print(f"[docs] project_dir not a directory: {project_dir}", file=sys.stderr)
         return 2
 
-    prompt_text = PROMPT_PATH.read_text(encoding="utf-8")
+    prompt_text = prompt_path.read_text(encoding="utf-8")
 
     # Lazy-import so the path manipulation above is in effect first.
     from core.client import create_client

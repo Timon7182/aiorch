@@ -14,12 +14,19 @@ import type { ThinkingLevel } from './settings';
 export type InsightsProvider = 'claude' | 'codex' | 'gemini' | 'ollama'
   | 'lmstudio' | 'localai' | 'vllm' | 'jan' | 'openai_compat';
 
+// Code-search backend used to ground the assistant's answers.
+//   'auto'  → CodeGraph when the project is indexed, else plain file tools
+//   'cgc'   → force CodeGraph MCP tools (only takes effect for Claude)
+//   'files' → raw Read/Grep/Glob only
+export type CodeSearchBackend = 'auto' | 'cgc' | 'files';
+
 // Model configuration for insights sessions
 export interface InsightsModelConfig {
   provider: InsightsProvider;    // LLM provider (default: 'claude')
   profileId: string;             // 'complex' | 'balanced' | 'quick' | 'custom'
   model: string;                 // Model ID (e.g. 'opus', 'llama3:8b', 'gpt-4o')
   thinkingLevel?: ThinkingLevel; // Only applicable for Claude
+  codeSearch?: CodeSearchBackend; // Code navigation backend (default: 'auto')
 }
 
 // Provider info returned from detection endpoint

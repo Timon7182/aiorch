@@ -260,6 +260,32 @@
       "integrationTitle": "Mémoire",
       "integrationDescription": "Configurer la mémoire persistante inter-sessions pour les agents",
       "syncDescription": "Configurer la mémoire persistante"
+    },
+    "agentPrompts": {
+      "title": "Prompts d'agent",
+      "description": "Personnaliser les prompts système des agents pour ce projet"
+    }
+  },
+  "agentPrompts": {
+    "searchPlaceholder": "Rechercher des prompts…",
+    "customized": "Personnalisé",
+    "selectPrompt": "Sélectionnez un prompt à afficher ou modifier",
+    "save": "Enregistrer",
+    "reset": "Réinitialiser",
+    "viewDefault": "Voir par défaut",
+    "hideDefault": "Retour à l'édition",
+    "coderNote": "Remarque : les instructions de sous-tâche du codeur sont générées par le code, pas à partir de ce fichier. Modifier coder.md ne change que le prompt du codeur au niveau de la session.",
+    "categories": {
+      "build": "Construction",
+      "spec": "Création de spec",
+      "qa": "QA",
+      "ideation": "Idéation",
+      "roadmap": "Feuille de route",
+      "github": "GitHub",
+      "docs": "Documentation",
+      "analysis": "Analyse",
+      "mcp_tools": "Extraits d'outils MCP",
+      "other": "Autre"
     }
   },
   "agentProfile": {

@@ -97,6 +97,9 @@ export function TaskCreationWizard({
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string>(PROJECT_DEFAULT_BRANCH);
   const [projectDefaultBranch, setProjectDefaultBranch] = useState<string>('');
+  // Optional custom name for the task's worktree branch (e.g. "hotfix/32_task").
+  // Empty means the backend default of "feature/{spec}".
+  const [customBranchName, setCustomBranchName] = useState<string>('');
   // Multi-repo support: a project folder may hold several git repos (e.g. a
   // parent with backend/ and frontend/). repos lists them; selectedRepo is the
   // absolute path of the chosen one ('' means the project root is the repo).
@@ -713,6 +716,8 @@ export function TaskCreationWizard({
       if (requireReviewBeforeCoding) metadata.requireReviewBeforeCoding = true;
       // Only include baseBranch if it's not the project default placeholder
       if (baseBranch && baseBranch !== PROJECT_DEFAULT_BRANCH) metadata.baseBranch = baseBranch;
+      // Optional custom worktree branch name (e.g. "hotfix/32_task").
+      if (customBranchName.trim()) metadata.customBranchName = customBranchName.trim();
       // For multi-repo projects, record which repo this task targets so the
       // build creates its worktree from the right repository.
       if (selectedRepo) metadata.repoPath = selectedRepo;
@@ -761,6 +766,7 @@ export function TaskCreationWizard({
     setSelectedSkills([]);
     setShowSkillsBrowser(false);
     setBaseBranch(PROJECT_DEFAULT_BRANCH);
+    setCustomBranchName('');
     setRepos([]);
     setSelectedRepo('');
     setError(null);
@@ -1317,6 +1323,25 @@ export function TaskCreationWizard({
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   Override the branch this task&apos;s worktree will be created from. Leave empty to use the project&apos;s configured default branch.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="custom-branch-name" className="text-sm font-medium text-foreground">
+                  Branch Name (optional)
+                </Label>
+                <Input
+                  id="custom-branch-name"
+                  value={customBranchName}
+                  onChange={(e) => setCustomBranchName(e.target.value)}
+                  placeholder="hotfix/32_task"
+                  disabled={isCreating}
+                  className="h-9 font-mono"
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Name the branch created for this task (e.g. <code>hotfix/32_task</code>). Leave empty to use the default <code>feature/&lt;task&gt;</code>.
                 </p>
               </div>
             </div>
