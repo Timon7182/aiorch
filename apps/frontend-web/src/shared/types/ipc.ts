@@ -97,7 +97,8 @@ import type {
   InsightsChatStatus,
   InsightsStreamChunk,
   InsightsModelConfig,
-  InsightsProviderInfo
+  InsightsProviderInfo,
+  CodeSearchAvailability
 } from './insights';
 import type {
   GitHubRepository,
@@ -509,6 +510,7 @@ export interface API {
   getInsightsSession: (projectId: string) => Promise<IPCResult<InsightsSession | null>>;
   detectInsightsProviders: (projectId: string) => Promise<IPCResult<InsightsProviderInfo[]>>;
   sendInsightsMessage: (projectId: string, message: string, modelConfig?: InsightsModelConfig, branch?: string, repo?: string) => void;
+  getInsightsCodeSearchAvailability: (projectId: string, branch?: string, repo?: string) => Promise<IPCResult<CodeSearchAvailability>>;
   stopInsightsMessage: (projectId: string) => Promise<IPCResult>;
   clearInsightsSession: (projectId: string) => Promise<IPCResult>;
   createTaskFromInsights: (

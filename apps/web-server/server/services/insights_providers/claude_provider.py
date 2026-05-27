@@ -41,6 +41,43 @@ CODEGRAPH_SYSTEM_PROMPT = (
 )
 
 
+def resolve_codegraph_bin() -> str | None:
+    """Find the `codegraphcontext` CLI as an absolute path.
+
+    Mirrors core.client._resolve_codegraph_bin so the web-server process
+    doesn't have to import the backend package:
+      1. CODEGRAPH_BIN env var (explicit absolute path).
+      2. The scripts/bin dir of the running interpreter.
+      3. A plain PATH lookup (e.g. a pipx shim).
+    """
+    import sys
+
+    explicit = os.environ.get("CODEGRAPH_BIN")
+    if explicit and Path(explicit).exists():
+        return explicit
+
+    scripts_dir = Path(sys.executable).parent
+    for name in ("codegraphcontext", "codegraphcontext.exe", "cgc", "cgc.exe"):
+        candidate = scripts_dir / name
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("codegraphcontext") or shutil.which("cgc")
+
+
+def codegraph_available(run_dir: Path) -> bool:
+    """CGC is usable only when enabled, indexed, and the CLI is installed.
+
+    Shared by the provider (to decide whether to inject the MCP server) and the
+    availability route (to tell the UI whether to offer CodeGraph for the dir
+    the chat will actually run in).
+    """
+    if str(os.environ.get("CODEGRAPH_DISABLED", "")).lower() == "true":
+        return False
+    if not (run_dir / ".codegraphcontext").is_dir():
+        return False
+    return resolve_codegraph_bin() is not None
+
+
 class ClaudeProvider(ProviderStrategy):
     """Provider that shells out to the Claude Code CLI."""
 
@@ -146,37 +183,6 @@ class ClaudeProvider(ProviderStrategy):
     # Claude can answer structural questions via the indexed graph.
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _resolve_codegraph_bin() -> str | None:
-        """Find the `codegraphcontext` CLI as an absolute path.
-
-        Mirrors core.client._resolve_codegraph_bin so the web-server process
-        doesn't have to import the backend package:
-          1. CODEGRAPH_BIN env var (explicit absolute path).
-          2. The scripts/bin dir of the running interpreter.
-          3. A plain PATH lookup (e.g. a pipx shim).
-        """
-        import sys
-
-        explicit = os.environ.get("CODEGRAPH_BIN")
-        if explicit and Path(explicit).exists():
-            return explicit
-
-        scripts_dir = Path(sys.executable).parent
-        for name in ("codegraphcontext", "codegraphcontext.exe", "cgc", "cgc.exe"):
-            candidate = scripts_dir / name
-            if candidate.exists():
-                return str(candidate)
-        return shutil.which("codegraphcontext") or shutil.which("cgc")
-
-    def _codegraph_available(self, run_dir: Path) -> bool:
-        """CGC is usable only when enabled, indexed, and the CLI is installed."""
-        if str(os.environ.get("CODEGRAPH_DISABLED", "")).lower() == "true":
-            return False
-        if not (run_dir / ".codegraphcontext").is_dir():
-            return False
-        return self._resolve_codegraph_bin() is not None
-
     def _resolve_code_search_mode(self, code_search: str | None, run_dir: Path) -> str:
         """Resolve the requested backend to a concrete one.
 
@@ -185,13 +191,13 @@ class ClaudeProvider(ProviderStrategy):
         """
         if code_search in ("cgc", "files"):
             return code_search
-        return "cgc" if self._codegraph_available(run_dir) else "files"
+        return "cgc" if codegraph_available(run_dir) else "files"
 
     def _build_codegraph_mcp_config(self, run_dir: Path) -> dict | None:
         """Build the inline --mcp-config payload for the codegraph stdio server."""
-        if not self._codegraph_available(run_dir):
+        if not codegraph_available(run_dir):
             return None
-        cgc_bin = self._resolve_codegraph_bin()
+        cgc_bin = resolve_codegraph_bin()
         if not cgc_bin:
             return None
         return {"mcpServers": {"codegraph": {"command": cgc_bin, "args": ["mcp", "start"]}}}

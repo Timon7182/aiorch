@@ -900,6 +900,37 @@ async def send_insights_message(projectId: str = Path(...), request: InsightsMes
     return {"success": True}
 
 
+@insights_router.get("/code-search-availability")
+async def insights_code_search_availability(
+    projectId: str = Path(...),
+    branch: str | None = Query(None),
+    repo: str | None = Query(None),
+):
+    """Which code-search backends are usable for the dir the chat would run in.
+
+    The UI calls this on branch/repo change so it can disable CodeGraph when the
+    selected branch isn't indexed. Resolution mirrors the ``/message`` route:
+    scope to the chosen child repo, then to the branch's (predicted) worktree.
+    """
+    project_path = _get_project_path(projectId)
+
+    ground_dir = project_path
+    if repo:
+        from ..services.git_repos import resolve_repo_cwd
+        resolved = resolve_repo_cwd(str(project_path), repo)
+        if resolved and FilePath(resolved).resolve() != project_path.resolve():
+            ground_dir = FilePath(resolved)
+
+    from ..services.branch_worktree import predicted_ground_dir
+    from ..services.insights_providers.claude_provider import codegraph_available
+
+    run_dir = predicted_ground_dir(ground_dir, branch)
+    return {
+        "cgc": codegraph_available(run_dir),
+        "graphify": (run_dir / "graphify-out" / "graph.json").is_file(),
+    }
+
+
 @insights_router.post("/stop")
 async def stop_insights_message(projectId: str = Path(...)):
     """Stop the currently running insights chat for a project."""

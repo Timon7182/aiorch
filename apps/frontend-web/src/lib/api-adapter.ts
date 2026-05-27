@@ -782,6 +782,13 @@ export const webAPI: API & { _isWebMode: boolean } = {
   sendInsightsMessage: (projectId: string, message: string, modelConfig?: InsightsModelConfig, branch?: string, repo?: string) => {
     post(`/projects/${projectId}/insights/message`, { message, modelConfig, branch, repo });
   },
+  getInsightsCodeSearchAvailability: (projectId: string, branch?: string, repo?: string) => {
+    const params = new URLSearchParams();
+    if (branch) params.set('branch', branch);
+    if (repo) params.set('repo', repo);
+    const qs = params.toString();
+    return get(`/projects/${projectId}/insights/code-search-availability${qs ? `?${qs}` : ''}`);
+  },
   stopInsightsMessage: (projectId: string) =>
     post(`/projects/${projectId}/insights/stop`),
   clearInsightsSession: (projectId: string) => del(`/projects/${projectId}/insights`),

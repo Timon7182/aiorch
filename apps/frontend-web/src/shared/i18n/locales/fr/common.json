@@ -252,7 +252,8 @@
         "cgc": "CodeGraph",
         "cgcDesc": "Interroger le graphe de code indexé (Claude uniquement)",
         "files": "Fichiers",
-        "filesDesc": "Read / Grep / Glob simples"
+        "filesDesc": "Read / Grep / Glob simples",
+        "cgcUnavailable": "Non indexé pour cette branche"
       }
     },
     "createTask": {

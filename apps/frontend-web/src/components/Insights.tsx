@@ -166,6 +166,10 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const [branches, setBranches] = useState<string[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string>('');
   const [selectedBranch, setSelectedBranch] = useState<string>('');
+  // Whether CodeGraph is indexed for the dir the chat will run against
+  // (the selected branch's worktree / active repo). Drives whether the model
+  // selector offers the CodeGraph option. Optimistic default avoids flicker.
+  const [cgcAvailable, setCgcAvailable] = useState<boolean>(true);
 
   // Create Task from Chat state
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
@@ -256,6 +260,21 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   useEffect(() => {
     setSelectedBranch('');
   }, [activeRepoPath]);
+
+  // CodeGraph is only offered when the selected branch/repo's working dir is
+  // actually indexed (a fresh branch worktree has no .codegraphcontext/). Fetch
+  // availability whenever that scope changes so the selector can disable it.
+  useEffect(() => {
+    let cancelled = false;
+    const branch = selectedBranch || undefined;
+    const repo = isMultiRepo && activeRepoPath ? activeRepoPath : undefined;
+    window.API.getInsightsCodeSearchAvailability(projectId, branch, repo)
+      .then((res) => {
+        if (!cancelled) setCgcAvailable(res.success && res.data ? res.data.cgc : false);
+      })
+      .catch(() => { if (!cancelled) setCgcAvailable(false); });
+    return () => { cancelled = true; };
+  }, [projectId, selectedBranch, activeRepoPath, isMultiRepo]);
 
   const handleSend = () => {
     const message = inputValue.trim();
@@ -435,6 +454,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
               currentConfig={session?.modelConfig}
               onConfigChange={handleModelConfigChange}
               disabled={isLoading}
+              cgcAvailable={cgcAvailable}
             />
             {messages.length > 0 && !isLoading && (
               <Button

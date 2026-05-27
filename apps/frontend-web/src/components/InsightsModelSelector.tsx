@@ -20,13 +20,17 @@ interface InsightsModelSelectorProps {
   currentConfig?: InsightsModelConfig;
   onConfigChange: (config: InsightsModelConfig) => void;
   disabled?: boolean;
+  // Whether CodeGraph is indexed for the current branch/repo scope. When false,
+  // the CodeGraph option is shown disabled ("not indexed for this branch").
+  cgcAvailable?: boolean;
 }
 
 export function InsightsModelSelector({
   projectId,
   currentConfig,
   onConfigChange,
-  disabled
+  disabled,
+  cgcAvailable = true
 }: InsightsModelSelectorProps) {
   const { t } = useTranslation(['common', 'dialogs']);
   const [showCustomModal, setShowCustomModal] = useState(false);
@@ -153,10 +157,12 @@ export function InsightsModelSelector({
           </DropdownMenuLabel>
           {codeSearchOptions.map((opt) => {
             const isSelected = currentCodeSearch === opt;
+            const isUnavailable = opt === 'cgc' && !cgcAvailable;
             return (
               <DropdownMenuItem
                 key={opt}
-                onClick={() => handleSelectCodeSearch(opt)}
+                disabled={isUnavailable}
+                onClick={() => !isUnavailable && handleSelectCodeSearch(opt)}
                 className="flex cursor-pointer items-center gap-2 pl-4"
               >
                 <div className="min-w-0 flex-1">
@@ -164,7 +170,9 @@ export function InsightsModelSelector({
                     {t(`common:insights.modelSelector.codeSearch.${opt}`, opt)}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    {t(`common:insights.modelSelector.codeSearch.${opt}Desc`, '')}
+                    {isUnavailable
+                      ? t('common:insights.modelSelector.codeSearch.cgcUnavailable', 'Not indexed for this branch')
+                      : t(`common:insights.modelSelector.codeSearch.${opt}Desc`, '')}
                   </div>
                 </div>
                 {isSelected && <Check className="h-4 w-4 shrink-0 text-primary" />}

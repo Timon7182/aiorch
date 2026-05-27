@@ -124,6 +124,33 @@ def _branch_exists(project_path: Path, branch: str) -> bool:
     ).returncode == 0
 
 
+def predicted_ground_dir(project_path: Path, branch: str | None) -> Path:
+    """Where the chat *will* run for ``(project_path, branch)`` — without
+    creating anything.
+
+    Mirrors :func:`ensure_branch_worktree`'s directory choice so availability
+    checks (e.g. "is CodeGraph indexed for this branch?") inspect the same dir
+    the provider will actually use:
+
+    * no branch / the current checkout / an unknown branch -> ``project_path``
+      (``ensure_branch_worktree`` returns ``None`` in all three cases, and the
+      caller falls back to the project dir)
+    * any other existing branch -> its deterministic insights-worktree path
+
+    Note this is purely a path computation: a not-yet-created worktree won't
+    contain ``.codegraphcontext/`` (it's gitignored), which is exactly why
+    CodeGraph is effectively current-checkout-only.
+    """
+    if not branch or not branch.strip():
+        return project_path
+    branch = branch.strip()
+    if branch == _current_branch(project_path):
+        return project_path
+    if not _branch_exists(project_path, branch):
+        return project_path
+    return project_path / ".magestic-ai" / "worktrees" / "insights" / _sanitize(branch)
+
+
 def ensure_branch_worktree(project_path: Path, branch: str | None) -> Path | None:
     """Return a worktree directory checked out at ``branch``, or ``None``.
 

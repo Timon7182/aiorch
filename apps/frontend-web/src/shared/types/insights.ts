@@ -20,6 +20,13 @@ export type InsightsProvider = 'claude' | 'codex' | 'gemini' | 'ollama'
 //   'files' → raw Read/Grep/Glob only
 export type CodeSearchBackend = 'auto' | 'cgc' | 'files';
 
+// Which code-search backends are usable for the branch/repo the chat will
+// run against. Returned by the code-search-availability endpoint.
+export interface CodeSearchAvailability {
+  cgc: boolean;       // CodeGraph indexed + enabled + CLI present for that dir
+  graphify: boolean;  // graphify-out/graph.json present for that dir
+}
+
 // Model configuration for insights sessions
 export interface InsightsModelConfig {
   provider: InsightsProvider;    // LLM provider (default: 'claude')
