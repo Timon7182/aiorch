@@ -215,6 +215,7 @@ class ClaudeProvider(ProviderStrategy):
         model_config: dict | None,
         conversation_history: list[dict] | None,
         working_dir: Path | None = None,
+        attachment_dir: Path | None = None,
     ) -> str:
         # Run the CLI in the branch worktree when one was selected; usage and
         # token resolution below still key off the main project_path.
@@ -263,6 +264,13 @@ class ClaudeProvider(ProviderStrategy):
                     "[ClaudeProvider] CodeGraph requested but unavailable "
                     "(not indexed / disabled / CLI missing); using file tools"
                 )
+
+        # Grant the CLI read access to attachment files that live outside the
+        # run dir (e.g. images written under the project's .magestic-ai while the
+        # chat runs in a branch worktree). The `=` form assigns a single value so
+        # this array-typed flag doesn't greedily swallow the positional message.
+        if attachment_dir is not None:
+            cmd.append(f"--add-dir={attachment_dir}")
 
         cmd.append(message)
 

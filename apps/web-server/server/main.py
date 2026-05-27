@@ -47,6 +47,7 @@ from .routes import llm_endpoints as llm_endpoints_routes
 from .routes import settings as settings_routes
 from .websockets import events as events_ws
 from .websockets import logs as logs_ws
+from .websockets import lsp as lsp_ws
 from .websockets import progress as progress_ws
 from .websockets import terminal as terminal_ws
 
@@ -119,6 +120,13 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Magestic AI Web Server...")
     await token_service.stop()
+
+    # Stop any running language servers so they don't outlive the app.
+    from .lsp.manager import get_lsp_manager
+
+    closed = await get_lsp_manager().close_all()
+    if closed:
+        logger.info("Closed %d LSP server(s)", closed)
 
 
 def create_app() -> FastAPI:
@@ -270,6 +278,7 @@ def create_app() -> FastAPI:
     app.include_router(progress_ws.router, tags=["WebSocket"])
     app.include_router(terminal_ws.router, tags=["WebSocket"])
     app.include_router(events_ws.router, tags=["WebSocket"])
+    app.include_router(lsp_ws.router, tags=["WebSocket"])
 
     # Health check endpoint (no auth required)
     @app.get("/api/health")

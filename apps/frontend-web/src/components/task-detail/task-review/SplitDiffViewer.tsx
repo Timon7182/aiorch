@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { ScrollArea } from '../../ui/scroll-area';
 import { cn } from '../../../lib/utils';
 
 export interface SplitDiffViewerProps {
@@ -195,7 +194,14 @@ export function SplitDiffViewer({
   }
 
   return (
-    <ScrollArea className={cn('w-full rounded-md bg-muted/50', className)} style={{ maxHeight }}>
+    // Plain scroll container (not Radix ScrollArea, whose display:table wrapper
+    // breaks `w-full table-fixed` width resolution and clips long lines so only
+    // half a line shows). This keeps the table constrained to the visible width
+    // so each side wraps its full content.
+    <div
+      className={cn('w-full overflow-auto rounded-md bg-muted/50', className)}
+      style={{ maxHeight }}
+    >
       <table className="w-full table-fixed border-collapse text-xs leading-relaxed">
         <colgroup>
           <col className="w-12" />
@@ -226,7 +232,7 @@ export function SplitDiffViewer({
           })}
         </tbody>
       </table>
-    </ScrollArea>
+    </div>
   );
 }
 

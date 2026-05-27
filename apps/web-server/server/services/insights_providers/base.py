@@ -53,6 +53,7 @@ class ProviderStrategy(abc.ABC):
         model_config: dict | None,
         conversation_history: list[dict] | None,
         working_dir: Path | None = None,
+        attachment_dir: Path | None = None,
     ) -> str:
         """Send a message and stream the response via WebSocket events.
 
@@ -65,6 +66,11 @@ class ProviderStrategy(abc.ABC):
         when set (e.g. a branch worktree) it overrides ``project_path`` as the
         subprocess cwd / tool root, while usage still rolls up to the project.
         When ``None``, providers fall back to ``project_path``.
+
+        ``attachment_dir`` is a directory holding files attached to this message
+        that live outside ``working_dir`` (e.g. images the agent should Read).
+        Providers with file tools should grant read access to it; others may
+        ignore it. The caller only passes it to providers that support it.
 
         Returns the full accumulated response text for persistence.
         """

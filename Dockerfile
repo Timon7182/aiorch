@@ -107,6 +107,14 @@ RUN mkdir -p /home/magesticai/.npm-global && \
 # The runtime `/api/claude-code/install` endpoint still works as a recovery path.
 RUN npm install -g @anthropic-ai/claude-code
 
+# Language servers for the in-browser Monaco editor's LSP bridge
+# (server/lsp/). pyright -> pyright-langserver --stdio (Python),
+# typescript-language-server -> --stdio (TS/JS); `typescript` provides the
+# tsserver it wraps. These land in /home/magesticai/.npm-global/bin (on PATH),
+# so _resolve_lsp_bin's PATH lookup finds them. Override per-env with
+# LSP_PYRIGHT_BIN / LSP_TS_BIN if installed elsewhere.
+RUN npm install -g pyright typescript typescript-language-server
+
 # Create single Python venv (both web-server and backend share it,
 # because agent_service.py spawns backend scripts via sys.executable)
 RUN python3 -m venv /home/projects/MagesticAI/.venv

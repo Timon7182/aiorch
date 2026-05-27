@@ -804,6 +804,11 @@ class InsightsMessageRequest(BaseModel):
     # path to scope grounding + branch worktree to. None => the project root.
     # Chat history stays keyed to the project, shared across repos.
     repo: str | None = None
+    # Files/images attached to this message. Each item is a ChatAttachment dict:
+    # {id, kind: 'image'|'text', filename, mimeType, size, data (base64), thumbnail?}.
+    # Text files are inlined into the prompt; images are written to disk and read
+    # by the agent (Claude vision). None => no attachments.
+    attachments: list[dict] | None = None
 
 
 @insights_router.get("/providers")
@@ -860,6 +865,7 @@ async def get_insights_session(projectId: str = Path(...)):
                     "timestamp": msg.timestamp,
                     "suggestedTask": msg.suggested_task,
                     "toolsUsed": msg.tools_used,
+                    "attachments": msg.attachments,
                 }
                 for msg in session.messages
             ],
@@ -895,6 +901,7 @@ async def send_insights_message(projectId: str = Path(...), request: InsightsMes
         model_config=request.modelConfig,
         branch=request.branch,
         repo_path=repo_path,
+        attachments=request.attachments,
     )
 
     return {"success": True}
@@ -1086,6 +1093,7 @@ async def switch_insights_session(projectId: str = Path(...), sessionId: str = P
                     "timestamp": msg.timestamp,
                     "suggestedTask": msg.suggested_task,
                     "toolsUsed": msg.tools_used,
+                    "attachments": msg.attachments,
                 }
                 for msg in session.messages
             ],

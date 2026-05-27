@@ -9,6 +9,7 @@ import type {
   InsightsToolUsage,
   InsightsModelConfig,
   InsightsProviderInfo,
+  ChatAttachment,
   TaskMetadata,
   Task
 } from '../shared/types';
@@ -262,7 +263,7 @@ export async function loadInsightsSession(projectId: string): Promise<void> {
   await loadInsightsSessions(projectId);
 }
 
-export function sendMessage(projectId: string, message: string, modelConfig?: InsightsModelConfig, branch?: string, repo?: string): void {
+export function sendMessage(projectId: string, message: string, attachments?: ChatAttachment[], modelConfig?: InsightsModelConfig, branch?: string, repo?: string): void {
   const store = useInsightsStore.getState();
   const session = store.session;
 
@@ -271,7 +272,8 @@ export function sendMessage(projectId: string, message: string, modelConfig?: In
     id: `msg-${Date.now()}`,
     role: 'user',
     content: message,
-    timestamp: new Date()
+    timestamp: new Date(),
+    attachments: attachments && attachments.length > 0 ? attachments : undefined
   };
   store.addMessage(userMessage);
 
@@ -298,7 +300,7 @@ export function sendMessage(projectId: string, message: string, modelConfig?: In
 
   // Send to main process (branch grounds the chat in a read-only worktree;
   // repo scopes a multi-repo project's grounding to a chosen child repo)
-  window.API.sendInsightsMessage(projectId, message, configWithProvider as InsightsModelConfig, branch, repo);
+  window.API.sendInsightsMessage(projectId, message, attachments, configWithProvider as InsightsModelConfig, branch, repo);
 }
 
 export async function stopMessage(projectId: string): Promise<void> {

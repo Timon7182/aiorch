@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     DEFAULT_SHELL: str = "/bin/bash"
     MAX_TERMINALS: int = 20
 
+    # LSP (language servers). Lower than MAX_TERMINALS — each server can use
+    # hundreds of MB of RAM.
+    MAX_LSP_SERVERS: int = 10
+
     # Task execution
     MAX_CONCURRENT_TASKS: int = 5
 

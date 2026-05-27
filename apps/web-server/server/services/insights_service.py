@@ -6,9 +6,11 @@ Streams responses via WebSocket and persists sessions to disk.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import re
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -79,6 +81,9 @@ class InsightsMessage:
     tools_used: list | None = None
     provider: str | None = None        # e.g. 'claude', 'ollama', 'codex'
     provider_model: str | None = None   # e.g. 'opus', 'llama3:8b'
+    # Attachments sent with this message, stripped of base64 `data` (only
+    # metadata + image thumbnail kept, for history display). User messages only.
+    attachments: list | None = None
 
 
 @dataclass
@@ -133,6 +138,7 @@ class InsightsService:
                     "toolsUsed": msg.tools_used,
                     "provider": msg.provider,
                     "providerModel": msg.provider_model,
+                    "attachments": msg.attachments,
                 }
                 for msg in session.messages
             ],
@@ -173,6 +179,7 @@ class InsightsService:
                         tools_used=msg.get("toolsUsed"),
                         provider=msg.get("provider"),
                         provider_model=msg.get("providerModel"),
+                        attachments=msg.get("attachments"),
                     )
                     for msg in data.get("messages", [])
                 ],
@@ -205,6 +212,11 @@ class InsightsService:
         "model": "sonnet",
         "thinkingLevel": "medium",
     }
+
+    # Cap for inlining a text attachment's contents into the prompt body (used
+    # for non-Claude providers, which receive the message via an API body rather
+    # than argv). Claude instead reads the file from disk, so it isn't capped here.
+    MAX_INLINE_TEXT_CHARS = 100_000
 
     def create_session(self, project_path: Path, project_id: str) -> InsightsSession:
         """Create a new session."""
@@ -269,6 +281,11 @@ class InsightsService:
 
         session_file.unlink()
 
+        # Remove any attachment files written for this session's messages.
+        attachments_dir = self._get_sessions_dir(project_path) / "attachments" / session_id
+        if attachments_dir.exists():
+            shutil.rmtree(attachments_dir, ignore_errors=True)
+
         if session_id in self._sessions:
             del self._sessions[session_id]
 
@@ -308,6 +325,101 @@ class InsightsService:
             return True
         return False
 
+    def _prepare_attachments(
+        self,
+        project_path: Path,
+        session_id: str,
+        turn_id: str,
+        attachments: list | None,
+    ) -> tuple[str, str, Path | None]:
+        """Write attachments to disk and build per-provider prompt suffixes.
+
+        Returns ``(claude_suffix, generic_suffix, attachment_dir)``:
+
+        - ``claude_suffix`` — instructs the agent to ``Read`` the written files
+          (text *and* images). Keeping large content off the CLI argv avoids
+          command-line length limits (notably 32 KB on Windows) and lets Claude
+          view images as vision input.
+        - ``generic_suffix`` — inlines text-file contents (truncated) and notes
+          images, for providers without file tools (they get the message via an
+          API body, so length isn't an argv concern).
+        - ``attachment_dir`` — the per-turn directory to grant the Claude CLI via
+          ``--add-dir`` so it can read the files regardless of cwd / branch
+          worktree. ``None`` when nothing was written.
+        """
+        if not attachments:
+            return "", "", None
+
+        turn_dir = (
+            project_path / ".magestic-ai" / "insights" / "attachments" / session_id / turn_id
+        )
+        written_any = False
+        read_paths: list[Path] = []   # text + image paths for the Claude Read instruction
+        inline_blocks: list[str] = [] # inlined text contents for generic providers
+        image_notes: list[str] = []   # image filenames noted for generic providers
+
+        for att in attachments:
+            if not isinstance(att, dict):
+                continue
+            kind = att.get("kind")
+            raw_name = str(att.get("filename") or "attachment")
+            # Sanitize: drop any path components so a crafted filename can't
+            # escape the turn dir (mirrors save_changelog_image).
+            safe_name = raw_name.replace("/", "_").replace("\\", "_").lstrip(".") or "attachment"
+            data_b64 = att.get("data") or ""
+
+            if kind == "image":
+                try:
+                    turn_dir.mkdir(parents=True, exist_ok=True)
+                    dest = turn_dir / safe_name
+                    dest.write_bytes(base64.b64decode(data_b64))
+                    dest.chmod(0o600)
+                    written_any = True
+                    read_paths.append(dest)
+                    image_notes.append(safe_name)
+                except Exception as e:
+                    logger.warning(f"[InsightsService] Failed to write image attachment {safe_name!r}: {e}")
+
+            elif kind == "text":
+                try:
+                    content = base64.b64decode(data_b64).decode("utf-8", errors="replace")
+                except Exception as e:
+                    logger.warning(f"[InsightsService] Failed to decode text attachment {safe_name!r}: {e}")
+                    continue
+                # Claude path: write to disk so it can Read (no argv bloat).
+                try:
+                    turn_dir.mkdir(parents=True, exist_ok=True)
+                    dest = turn_dir / safe_name
+                    dest.write_text(content, encoding="utf-8")
+                    dest.chmod(0o600)
+                    written_any = True
+                    read_paths.append(dest)
+                except Exception as e:
+                    logger.warning(f"[InsightsService] Failed to write text attachment {safe_name!r}: {e}")
+                # Generic path: inline the (truncated) contents.
+                snippet = content
+                if len(snippet) > self.MAX_INLINE_TEXT_CHARS:
+                    snippet = snippet[: self.MAX_INLINE_TEXT_CHARS] + "\n… [truncated]"
+                inline_blocks.append(f"\n\n--- Attached file: {safe_name} ---\n```\n{snippet}\n```")
+
+        claude_suffix = ""
+        if read_paths:
+            listed = ", ".join(str(p) for p in read_paths)
+            claude_suffix = (
+                "\n\n[The user attached file(s) for this message. "
+                f"Use the Read tool to view them: {listed}]"
+            )
+
+        generic_parts = list(inline_blocks)
+        if image_notes:
+            generic_parts.append(
+                f"\n\n[The user also attached image(s): {', '.join(image_notes)}. "
+                "Image viewing is only supported with the Claude provider.]"
+            )
+        generic_suffix = "".join(generic_parts)
+
+        return claude_suffix, generic_suffix, (turn_dir if written_any else None)
+
     async def send_message(
         self,
         project_path: Path,
@@ -316,6 +428,7 @@ class InsightsService:
         model_config: dict | None = None,
         branch: str | None = None,
         repo_path: Path | None = None,
+        attachments: list | None = None,
     ) -> None:
         """Send a message and stream the response via the appropriate provider.
 
@@ -353,20 +466,52 @@ class InsightsService:
             provider_id = model_config.get("provider", "claude")
             provider_model = model_config.get("model", "sonnet")
 
-            # Add user message
+            # Add user message. Persist only attachment metadata (+ image
+            # thumbnail) — never the full base64 `data`, which is large and only
+            # needed transiently to write the files below.
+            stored_attachments = None
+            if attachments:
+                stored_attachments = [
+                    {
+                        "id": att.get("id"),
+                        "kind": att.get("kind"),
+                        "filename": att.get("filename"),
+                        "mimeType": att.get("mimeType"),
+                        "size": att.get("size"),
+                        **({"thumbnail": att.get("thumbnail")} if att.get("thumbnail") else {}),
+                    }
+                    for att in attachments
+                    if isinstance(att, dict)
+                ]
+
             user_msg = InsightsMessage(
                 id=f"msg-{uuid.uuid4().hex[:8]}",
                 role="user",
                 content=message,
                 timestamp=datetime.now().isoformat(),
+                attachments=stored_attachments,
             )
             session.messages.append(user_msg)
 
             # Auto-generate title from first message
             if session.title == "New Session" and len(session.messages) == 1:
-                session.title = message[:50] + ("..." if len(message) > 50 else "")
+                title_seed = message.strip() or "Attachment"
+                session.title = title_seed[:50] + ("..." if len(title_seed) > 50 else "")
 
             self._save_session(project_path, session)
+
+            # Materialize attachments to disk and build the prompt augmentation.
+            # The stored message content stays clean (the original text); only the
+            # text sent to the provider carries the inlined files / Read pointers.
+            claude_suffix, generic_suffix, attachment_dir = self._prepare_attachments(
+                project_path, session.id, user_msg.id, attachments
+            )
+            suffix = claude_suffix if provider_id == "claude" else generic_suffix
+            final_message = message
+            if suffix:
+                if not final_message.strip():
+                    final_message = "Please review the attached file(s) and respond."
+                final_message = final_message + suffix
 
             # Build conversation history for stateless providers
             conversation_history = [
@@ -403,11 +548,14 @@ class InsightsService:
             response_content = await provider.send_message(
                 project_path=project_path,
                 project_id=project_id,
-                message=message,
+                message=final_message,
                 model=provider_model,
                 model_config=model_config,
                 conversation_history=conversation_history if provider_id != "claude" else None,
                 working_dir=working_dir,
+                # Only the Claude provider reads attachment files via --add-dir;
+                # other providers' signatures are left untouched.
+                **({"attachment_dir": attachment_dir} if provider_id == "claude" else {}),
             )
 
             # Persist the assistant response to disk
@@ -448,6 +596,7 @@ class InsightsService:
         model_config: dict | None = None,
         branch: str | None = None,
         repo_path: Path | None = None,
+        attachments: list | None = None,
     ) -> None:
         """Start send_message as a tracked background task."""
         # Cancel any existing running task for this project
@@ -455,7 +604,7 @@ class InsightsService:
 
         task = asyncio.create_task(
             self.send_message(
-                project_path, project_id, message, model_config, branch, repo_path
+                project_path, project_id, message, model_config, branch, repo_path, attachments
             )
         )
         self._running_tasks[project_id] = task

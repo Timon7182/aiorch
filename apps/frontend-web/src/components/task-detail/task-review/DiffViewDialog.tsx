@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Eye, FileCode, ChevronDown, ChevronRight, Columns2, AlignJustify, Loader2 } from 'lucide-react';
 import {
   AlertDialog,
@@ -111,14 +111,30 @@ function FileEntry({
 export function ChangedFilesPanel({
   worktreeDiff,
   isLoading = false,
+  defaultExpanded = false,
   className,
 }: {
   worktreeDiff: WorktreeDiff | null;
   isLoading?: boolean;
+  /** Expand every file's diff as soon as it loads (used by the inline tab). */
+  defaultExpanded?: boolean;
   className?: string;
 }) {
   const [expandedFiles, setExpandedFiles] = useState<Set<number>>(new Set());
   const [viewMode, setViewMode] = useState<DiffViewMode>('split');
+
+  // When asked to default-expand (inline Changes tab), open every file that has
+  // a diff as soon as the payload arrives or changes (e.g. after Refresh), so
+  // the side-by-side diffs are visible immediately instead of a bare file list.
+  useEffect(() => {
+    if (!defaultExpanded || !worktreeDiff?.files?.length) return;
+    const withDiff = worktreeDiff.files
+      .map((f, idx) => (f.diff ? idx : -1))
+      .filter(idx => idx >= 0);
+    if (withDiff.length > 0) {
+      setExpandedFiles(new Set(withDiff));
+    }
+  }, [worktreeDiff, defaultExpanded]);
 
   const toggleFile = (idx: number) => {
     setExpandedFiles(prev => {

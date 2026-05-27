@@ -17,7 +17,8 @@ import {
   ListPlus,
   GitBranch,
   PanelLeft,
-  Network
+  Network,
+  Paperclip
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -50,7 +51,8 @@ import { ChatHistorySidebar } from './ChatHistorySidebar';
 import { RepoSwitcher } from './RepoSwitcher';
 import { CreateTaskFromChatDialog } from './CreateTaskFromChatDialog';
 import { InsightsModelSelector } from './InsightsModelSelector';
-import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider } from '../shared/types';
+import { ChatAttachmentBar, processChatFiles, CHAT_FILE_ACCEPT } from './insights/ChatAttachmentBar';
+import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider, ChatAttachment } from '../shared/types';
 import {
   TASK_CATEGORY_LABELS,
   TASK_CATEGORY_COLORS,
@@ -130,6 +132,10 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const { t } = useTranslation(['common']);
 
   const [inputValue, setInputValue] = useState('');
+  // Files/images attached to the next message. Cleared on send.
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [creatingTask, setCreatingTask] = useState<string | null>(null);
   const [taskCreated, setTaskCreated] = useState<Set<string>>(new Set());
   // On mobile the chat-history panel is hidden behind a toggle so the
@@ -180,6 +186,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load session and set up listeners on mount
   useEffect(() => {
@@ -278,15 +285,26 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
 
   const handleSend = () => {
     const message = inputValue.trim();
-    if (!message || status.phase === 'thinking' || status.phase === 'streaming') return;
+    // Allow sending with attachments only (no typed text required).
+    if ((!message && attachments.length === 0) || status.phase === 'thinking' || status.phase === 'streaming') return;
 
     setInputValue('');
+    const sentAttachments = attachments;
+    setAttachments([]);
+    setAttachmentError(null);
     // Only pass a branch when it differs from the current checkout — otherwise
     // the backend would needlessly build a worktree of the branch we're on.
     const branch = selectedBranch && selectedBranch !== currentBranch ? selectedBranch : undefined;
     // For multi-repo projects, scope grounding to the active child repo.
     const repo = isMultiRepo && activeRepoPath ? activeRepoPath : undefined;
-    sendMessage(projectId, message, session?.modelConfig, branch, repo);
+    sendMessage(
+      projectId,
+      message,
+      sentAttachments.length > 0 ? sentAttachments : undefined,
+      session?.modelConfig,
+      branch,
+      repo,
+    );
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -294,6 +312,43 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  // Add picked/pasted/dropped files as attachments. Shared by the file picker,
+  // paste handler, and drop handler so they all enforce the same caps/types.
+  const handleAddFiles = async (files: FileList | File[]) => {
+    if (isLoading) return;
+    const { attachments: added, errors } = await processChatFiles(files, attachments);
+    if (added.length > 0) setAttachments((prev) => [...prev, ...added]);
+    setAttachmentError(errors.length > 0 ? errors.join(' ') : null);
+  };
+
+  // Capture pasted images. Do NOT preventDefault — let the browser paste text
+  // naturally so mixed text+image pastes keep both (mirrors TaskCreationWizard).
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = Array.from(e.clipboardData.items)
+      .filter((item) => item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (imageFiles.length > 0) handleAddFiles(imageFiles);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) handleAddFiles(files);
+  };
+
+  const handleRemoveAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    setAttachmentError(null);
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) handleAddFiles(files);
+    if (fileInputRef.current) fileInputRef.current.value = ''; // allow re-picking same file
   };
 
   const handleNewSession = async () => {
@@ -608,7 +663,15 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
       </ScrollArea>
 
       {/* Input */}
-      <div className="border-t border-border p-4">
+      <div
+        className={cn(
+          'border-t border-border p-4 transition-colors',
+          isDraggingOver && 'bg-primary/5'
+        )}
+        onDragOver={(e) => { e.preventDefault(); if (!isLoading) setIsDraggingOver(true); }}
+        onDragLeave={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+        onDrop={handleDrop}
+      >
         {branches.length > 0 && (
           <div className="mb-2 flex items-center gap-2">
             <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -637,34 +700,59 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
             )}
           </div>
         )}
+        {/* Pending attachments (above the input) */}
+        <ChatAttachmentBar
+          attachments={attachments}
+          onRemove={handleRemoveAttachment}
+          error={attachmentError}
+          className="mb-2"
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={CHAT_FILE_ACCEPT}
+          multiple
+          onChange={handleFileInputChange}
+          className="hidden"
+        />
         <div className="flex gap-2">
           <Textarea
             ref={textareaRef}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about your codebase..."
+            onPaste={handlePaste}
+            placeholder="Ask about your codebase... (attach images or text files)"
             className="min-h-[80px] resize-none"
             disabled={isLoading}
           />
-          {isLoading ? (
+          <div className="flex flex-col gap-2 self-end">
             <Button
-              variant="destructive"
-              onClick={() => stopMessage(projectId)}
-              className="self-end"
-              title="Stop response"
+              variant="outline"
+              size="icon"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading}
+              title="Attach images or text/code files"
             >
-              <Square className="h-4 w-4" />
+              <Paperclip className="h-4 w-4" />
             </Button>
-          ) : (
-            <Button
-              onClick={handleSend}
-              disabled={!inputValue.trim()}
-              className="self-end"
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          )}
+            {isLoading ? (
+              <Button
+                variant="destructive"
+                onClick={() => stopMessage(projectId)}
+                title="Stop response"
+              >
+                <Square className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button
+                onClick={handleSend}
+                disabled={!inputValue.trim() && attachments.length === 0}
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
           Press Enter to send, Shift+Enter for new line
@@ -719,15 +807,22 @@ function MessageBubble({
         <div className="text-sm font-medium text-foreground">
           {isUser ? 'You' : <>Assistant{(() => { const m = getModelLabel(message.provider, message.providerModel); return m ? <span className="font-normal text-muted-foreground"> ({m})</span> : null; })()}</>}
         </div>
-        <div className="prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeHighlight]}
-            components={markdownComponents}
-          >
-            {message.content}
-          </ReactMarkdown>
-        </div>
+        {message.content && (
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+              components={markdownComponents}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
+
+        {/* Attachments sent with this message (read-only) */}
+        {message.attachments && message.attachments.length > 0 && (
+          <ChatAttachmentBar attachments={message.attachments} />
+        )}
 
         {/* Tool usage history for assistant messages */}
         {!isUser && message.toolsUsed && message.toolsUsed.length > 0 && (

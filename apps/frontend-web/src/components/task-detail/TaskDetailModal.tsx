@@ -722,6 +722,7 @@ function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInb
                     <ChangedFilesPanel
                       worktreeDiff={state.worktreeDiff}
                       isLoading={state.isLoadingWorktree}
+                      defaultExpanded
                       className="flex-1"
                     />
                   </div>

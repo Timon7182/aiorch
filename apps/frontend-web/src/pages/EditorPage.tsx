@@ -2,9 +2,14 @@
  * Monaco Editor page for file editing
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
+import { isLspLanguage } from '@/lib/lsp/languages';
+
+// Heavy @codingame/monaco-languageclient stack — loaded only when an LSP file
+// (python/ts/js) is opened, so it stays out of the main bundle.
+const LspEditor = lazy(() => import('@/components/editor/LspEditor'));
 import { ChevronRight, ChevronDown, File, Folder, Save, X, Eye, Code, Columns, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
@@ -480,27 +485,47 @@ export function EditorPage({ projectPath }: EditorPageProps) {
         <div className="flex-1 overflow-hidden">
           {activeTabData ? (
             viewMode === 'editor' || !isPreviewable ? (
-              // Editor only mode
-              <Editor
-                height="100%"
-                language={activeTabData.language}
-                value={activeTabData.content}
-                onChange={handleEditorChange}
-                theme="vs-dark"
-                options={{
-                  minimap: { enabled: true },
-                  fontSize: 14,
-                  lineNumbers: 'on',
-                  wordWrap: 'on',
-                  automaticLayout: true,
-                  scrollBeyondLastLine: false,
-                }}
-                loading={
-                  <div className="flex items-center justify-center h-full text-muted-foreground">
-                    Loading editor...
-                  </div>
-                }
-              />
+              // Editor only mode. LSP-backed languages (python/ts/js) use the
+              // language-server editor; everything else uses the plain editor.
+              isLspLanguage(activeTabData.language) && projectPath ? (
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center h-full text-muted-foreground">
+                      Loading language server...
+                    </div>
+                  }
+                >
+                  <LspEditor
+                    key={activeTabData.path}
+                    path={activeTabData.path}
+                    language={activeTabData.language}
+                    projectPath={projectPath}
+                    value={activeTabData.content}
+                    onChange={handleEditorChange}
+                  />
+                </Suspense>
+              ) : (
+                <Editor
+                  height="100%"
+                  language={activeTabData.language}
+                  value={activeTabData.content}
+                  onChange={handleEditorChange}
+                  theme="vs-dark"
+                  options={{
+                    minimap: { enabled: true },
+                    fontSize: 14,
+                    lineNumbers: 'on',
+                    wordWrap: 'on',
+                    automaticLayout: true,
+                    scrollBeyondLastLine: false,
+                  }}
+                  loading={
+                    <div className="flex items-center justify-center h-full text-muted-foreground">
+                      Loading editor...
+                    </div>
+                  }
+                />
+              )
             ) : viewMode === 'preview' ? (
               // Preview only mode (markdown / html)
               <div className="h-full overflow-auto p-6">

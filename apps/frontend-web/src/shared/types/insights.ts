@@ -48,6 +48,20 @@ export interface InsightsProviderInfo {
 
 export type InsightsChatRole = 'user' | 'assistant';
 
+// An attachment sent with a chat message. Images are forwarded to vision-capable
+// models (written to disk + read by the agent); text/code files have their
+// contents inlined into the prompt. `data` is always base64 (no data-URL prefix)
+// for a uniform transport contract — the backend decodes both kinds.
+export interface ChatAttachment {
+  id: string;
+  kind: 'image' | 'text';
+  filename: string;
+  mimeType: string;
+  size: number;        // bytes (decoded size)
+  data: string;        // base64-encoded contents (images and text alike)
+  thumbnail?: string;  // base64 data URL, images only — for the chip preview
+}
+
 // Tool usage record for showing what tools the AI used
 export interface InsightsToolUsage {
   name: string;
@@ -71,6 +85,8 @@ export interface InsightsChatMessage {
   // Provider info (for showing badges on non-Claude messages)
   provider?: InsightsProvider;
   providerModel?: string;
+  // Files/images attached to this message (user messages only)
+  attachments?: ChatAttachment[];
 }
 
 export interface InsightsSession {

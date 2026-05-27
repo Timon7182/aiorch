@@ -3719,38 +3719,72 @@ async def get_worktree_diff(task_id: str):
             "error": "No worktree found for this task"
         }
 
-    # Get worktree branch
+    # Run all git operations INSIDE the worktree. The worktree knows its own
+    # repo even for multi-repo projects, where the project root itself is not a
+    # git repo (e.g. a parent folder of several child repos like `cts`). Running
+    # git in project_path there fails and yields a file list with empty diffs.
+    git_cwd = worktree_path
+
+    # Get worktree branch (the task branch checked out in this worktree)
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=worktree_path,
+            cwd=git_cwd,
             capture_output=True,
             text=True,
             check=True
         )
         worktree_branch = result.stdout.strip()
     except subprocess.CalledProcessError:
-        worktree_branch = f"feature/{spec_id}"
+        worktree_branch = f"magestic-ai/{spec_id}"
 
-    # Get base branch from main project
+    # Base = the ref checked out in the repo's MAIN worktree (the first entry of
+    # `git worktree list`). This works for both single-repo and multi-repo
+    # projects. Falls back to the main project's HEAD, then a sensible default.
+    base_branch = None
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=project_path,
+        wl = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=git_cwd,
             capture_output=True,
             text=True,
             check=True
-        )
-        base_branch = result.stdout.strip()
+        ).stdout
+        main_block = wl.strip().split("\n\n")[0].splitlines() if wl.strip() else []
+        head_sha = None
+        for ln in main_block:
+            if ln.startswith("branch "):
+                base_branch = ln.split(" ", 1)[1].strip().replace("refs/heads/", "")
+                break
+            if ln.startswith("HEAD "):
+                head_sha = ln.split(" ", 1)[1].strip()
+        if not base_branch:
+            base_branch = head_sha
     except subprocess.CalledProcessError:
-        base_branch = "develop"
+        pass
+
+    if not base_branch:
+        try:
+            base_branch = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                check=True
+            ).stdout.strip()
+        except subprocess.CalledProcessError:
+            base_branch = "main"
+
+    # Three-dot range against HEAD (= the worktree branch, since git_cwd is the
+    # worktree) shows only the task's changes since it diverged from base.
+    diff_range = f"{base_branch}...HEAD"
 
     # Get detailed diff with numstat
     files = []
     try:
         result = subprocess.run(
-            ["git", "diff", "--numstat", f"{base_branch}...{worktree_branch}"],
-            cwd=project_path,
+            ["git", "diff", "--numstat", diff_range],
+            cwd=git_cwd,
             capture_output=True,
             text=True,
             check=True
@@ -3777,8 +3811,8 @@ async def get_worktree_diff(task_id: str):
     # Get file statuses (A/M/D/R)
     try:
         result = subprocess.run(
-            ["git", "diff", "--name-status", f"{base_branch}...{worktree_branch}"],
-            cwd=project_path,
+            ["git", "diff", "--name-status", diff_range],
+            cwd=git_cwd,
             capture_output=True,
             text=True,
             check=True
@@ -3854,16 +3888,18 @@ async def get_worktree_diff(task_id: str):
     for f in files:
         try:
             result = subprocess.run(
-                ["git", "diff", f"{base_branch}...{worktree_branch}", "--", f["path"]],
-                cwd=project_path,
+                ["git", "diff", diff_range, "--", f["path"]],
+                cwd=git_cwd,
                 capture_output=True,
                 text=True,
                 check=True
             )
-            f["diff"] = result.stdout
+            # Don't clobber a synthetic diff (e.g. for a new untracked file in
+            # the fallback path) with an empty result when git produced nothing.
+            if result.stdout or not f.get("diff"):
+                f["diff"] = result.stdout
         except subprocess.CalledProcessError:
-            # If diff fails for a file, leave diff empty
-            f["diff"] = ""
+            f.setdefault("diff", "")
 
     # Generate summary
     total_additions = sum(f["additions"] for f in files)

@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import importMetaUrlPlugin from '@codingame/esbuild-import-meta-url-plugin';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -15,7 +16,19 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // monaco-languageclient / @codingame ESM packages need import.meta.url
+    // rewriting during dev prebundle, ESM workers, and a single 'vscode' copy.
+    worker: {
+      format: 'es',
+    },
+    optimizeDeps: {
+      esbuildOptions: {
+        plugins: [importMetaUrlPlugin],
+      },
+    },
     resolve: {
+      // Prevent multiple copies of the 'vscode' shim (breaks the LSP client).
+      dedupe: ['vscode'],
       alias: {
         '@': path.resolve(__dirname, './src'),
         '@components': path.resolve(__dirname, './src/components'),
