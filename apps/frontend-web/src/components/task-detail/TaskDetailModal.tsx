@@ -30,6 +30,8 @@ import {
   Pencil,
   X,
   ArrowLeft,
+  GitBranch,
+  RefreshCw,
   Zap
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -48,6 +50,7 @@ import { TaskUsage } from './TaskUsage';
 import { TaskReview } from './TaskReview';
 import { PlanReviewSection } from './PlanReviewSection';
 import { CreatePRDialog } from './task-review/CreatePRDialog';
+import { ChangedFilesPanel } from './task-review';
 import type { Task } from '../../shared/types';
 
 type TaskDetailMode = 'modal' | 'page';
@@ -574,6 +577,12 @@ function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInb
                   >
                     Logs
                   </TabsTrigger>
+                  <TabsTrigger
+                    value="changes"
+                    className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2.5 text-sm"
+                  >
+                    Changes
+                  </TabsTrigger>
                   {showFilesTab && (
                     <TabsTrigger
                       value="files"
@@ -690,6 +699,33 @@ function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInb
                     />
                   </TabsContent>
                 )}
+
+                {/* Changes Tab — inline side-by-side diff of the worktree changes */}
+                <TabsContent value="changes" className="flex-1 min-h-0 overflow-hidden mt-0">
+                  <div className="flex flex-col h-full p-5">
+                    <div className="flex items-center justify-between mb-3 shrink-0">
+                      <h3 className="text-sm font-medium flex items-center gap-2">
+                        <GitBranch className="h-4 w-4 text-purple-400" />
+                        Code Changes
+                      </h3>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => state.loadWorktreeStatus()}
+                        disabled={state.isLoadingWorktree}
+                      >
+                        <RefreshCw className={cn('h-3.5 w-3.5 mr-1', state.isLoadingWorktree && 'animate-spin')} />
+                        Refresh
+                      </Button>
+                    </div>
+                    <ChangedFilesPanel
+                      worktreeDiff={state.worktreeDiff}
+                      isLoading={state.isLoadingWorktree}
+                      className="flex-1"
+                    />
+                  </div>
+                </TabsContent>
 
                 {/* Usage Tab — per-task token & cache breakdown */}
                 <TabsContent value="usage" className="flex-1 min-h-0 overflow-hidden mt-0">

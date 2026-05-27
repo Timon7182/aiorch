@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Eye, FileCode, ChevronDown, ChevronRight, Columns2, AlignJustify } from 'lucide-react';
+import { Eye, FileCode, ChevronDown, ChevronRight, Columns2, AlignJustify, Loader2 } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -104,14 +104,19 @@ function FileEntry({
 }
 
 /**
- * Dialog displaying the list of changed files with their status, line changes,
- * and expandable diff content
+ * Inline panel showing the list of changed files with a Split/Unified toggle,
+ * expand/collapse, and per-file expandable diffs. Used both inside the
+ * DiffViewDialog (popup) and embedded directly in the task page's Changes tab.
  */
-export function DiffViewDialog({
-  open,
+export function ChangedFilesPanel({
   worktreeDiff,
-  onOpenChange
-}: DiffViewDialogProps) {
+  isLoading = false,
+  className,
+}: {
+  worktreeDiff: WorktreeDiff | null;
+  isLoading?: boolean;
+  className?: string;
+}) {
   const [expandedFiles, setExpandedFiles] = useState<Set<number>>(new Set());
   const [viewMode, setViewMode] = useState<DiffViewMode>('split');
 
@@ -143,79 +148,106 @@ export function DiffViewDialog({
   const allExpanded = worktreeDiff?.files?.every((f, idx) => !f.diff || expandedFiles.has(idx));
 
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent
-        className={cn(
-          'max-h-[85vh] overflow-hidden flex flex-col',
-          viewMode === 'split' ? 'max-w-6xl' : 'max-w-4xl'
+    <div className={cn('flex flex-col min-h-0', className)}>
+      {/* Toolbar: summary + view-mode toggle + expand/collapse */}
+      <div className="flex items-center justify-between gap-2 mb-3 shrink-0">
+        <span className="text-sm text-muted-foreground truncate">
+          {isLoading ? 'Loading changes…' : (worktreeDiff?.summary || 'No changes found')}
+        </span>
+        {hasAnyDiff && (
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
+              <button
+                onClick={() => setViewMode('split')}
+                className={cn(
+                  'flex items-center gap-1 px-2 py-1 text-xs transition-colors',
+                  viewMode === 'split'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-secondary/50'
+                )}
+                title="Side-by-side view"
+              >
+                <Columns2 className="h-3.5 w-3.5" />
+                Split
+              </button>
+              <button
+                onClick={() => setViewMode('unified')}
+                className={cn(
+                  'flex items-center gap-1 px-2 py-1 text-xs transition-colors',
+                  viewMode === 'unified'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-secondary/50'
+                )}
+                title="Unified (inline) view"
+              >
+                <AlignJustify className="h-3.5 w-3.5" />
+                Unified
+              </button>
+            </div>
+            <button
+              onClick={allExpanded ? collapseAll : expandAll}
+              className="text-xs text-primary hover:underline"
+            >
+              {allExpanded ? 'Collapse all' : 'Expand all'}
+            </button>
+          </div>
         )}
-      >
+      </div>
+
+      {/* File list */}
+      <div className="flex-1 overflow-auto min-h-0">
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading changes…
+          </div>
+        ) : worktreeDiff?.files && worktreeDiff.files.length > 0 ? (
+          <div className="space-y-2">
+            {worktreeDiff.files.map((file, idx) => (
+              <FileEntry
+                key={idx}
+                file={file}
+                isExpanded={expandedFiles.has(idx)}
+                onToggle={() => toggleFile(idx)}
+                viewMode={viewMode}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8 text-muted-foreground">
+            No changed files found
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Dialog displaying the list of changed files with their status, line changes,
+ * and expandable diff content
+ */
+export function DiffViewDialog({
+  open,
+  worktreeDiff,
+  onOpenChange
+}: DiffViewDialogProps) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent className="max-w-6xl max-h-[85vh] overflow-hidden flex flex-col">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
             <Eye className="h-5 w-5 text-purple-400" />
             Changed Files
           </AlertDialogTitle>
-          <AlertDialogDescription className="flex items-center justify-between gap-2">
-            <span>{worktreeDiff?.summary || 'No changes found'}</span>
-            {hasAnyDiff && (
-              <div className="flex items-center gap-3 shrink-0">
-                <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
-                  <button
-                    onClick={() => setViewMode('split')}
-                    className={cn(
-                      'flex items-center gap-1 px-2 py-1 text-xs transition-colors',
-                      viewMode === 'split'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-secondary/50'
-                    )}
-                    title="Side-by-side view"
-                  >
-                    <Columns2 className="h-3.5 w-3.5" />
-                    Split
-                  </button>
-                  <button
-                    onClick={() => setViewMode('unified')}
-                    className={cn(
-                      'flex items-center gap-1 px-2 py-1 text-xs transition-colors',
-                      viewMode === 'unified'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-secondary/50'
-                    )}
-                    title="Unified (inline) view"
-                  >
-                    <AlignJustify className="h-3.5 w-3.5" />
-                    Unified
-                  </button>
-                </div>
-                <button
-                  onClick={allExpanded ? collapseAll : expandAll}
-                  className="text-xs text-primary hover:underline"
-                >
-                  {allExpanded ? 'Collapse all' : 'Expand all'}
-                </button>
-              </div>
-            )}
+          <AlertDialogDescription className="sr-only">
+            Side-by-side and unified diff of the files changed in this task's worktree.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="flex-1 overflow-auto min-h-0 -mx-6 px-6">
-          {worktreeDiff?.files && worktreeDiff.files.length > 0 ? (
-            <div className="space-y-2">
-              {worktreeDiff.files.map((file, idx) => (
-                <FileEntry
-                  key={idx}
-                  file={file}
-                  isExpanded={expandedFiles.has(idx)}
-                  onToggle={() => toggleFile(idx)}
-                  viewMode={viewMode}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-8 text-muted-foreground">
-              No changed files found
-            </div>
-          )}
-        </div>
+        <ChangedFilesPanel
+          worktreeDiff={worktreeDiff}
+          className="flex-1 -mx-6 px-6"
+        />
         <AlertDialogFooter className="mt-4">
           <AlertDialogCancel>Close</AlertDialogCancel>
         </AlertDialogFooter>

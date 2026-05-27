@@ -11,7 +11,7 @@ export { MergePreviewSummary } from './MergePreviewSummary';
 export { QAFeedbackSection } from './QAFeedbackSection';
 export { DiscardDialog } from './DiscardDialog';
 export { CreatePRDialog } from './CreatePRDialog';
-export { DiffViewDialog } from './DiffViewDialog';
+export { DiffViewDialog, ChangedFilesPanel } from './DiffViewDialog';
 export { ConflictDetailsDialog } from './ConflictDetailsDialog';
 export { LoadingMessage, NoWorkspaceMessage, StagedInProjectMessage, ReviewPlanReminder } from './WorkspaceMessages';
 export { getSeverityIcon, getSeverityVariant } from './utils';

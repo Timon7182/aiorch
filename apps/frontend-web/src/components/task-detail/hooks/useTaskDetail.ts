@@ -177,15 +177,21 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
     }
   }, [task.id]);
 
-  // Load worktree status when task is in human_review (including plan_review — worktrees exist for all phases)
+  // Clear worktree info when switching to a different task so the Changes tab
+  // never shows stale data from a previously opened task.
   useEffect(() => {
-    if (needsReview) {
+    setWorktreeStatus(null);
+    setWorktreeDiff(null);
+  }, [task.id]);
+
+  // Load worktree status + diff when the task is in human_review (including
+  // plan_review — worktrees exist for all phases) OR when the user opens the
+  // Changes tab, so changes are viewable any time the worktree has them.
+  useEffect(() => {
+    if (needsReview || activeTab === 'changes') {
       loadWorktreeStatus();
-    } else {
-      setWorktreeStatus(null);
-      setWorktreeDiff(null);
     }
-  }, [task.id, task.reviewReason, needsReview, loadWorktreeStatus]);
+  }, [task.id, task.reviewReason, needsReview, activeTab, loadWorktreeStatus]);
 
   // Load and watch phase logs
   useEffect(() => {
