@@ -3079,6 +3079,23 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
     if not spec_dir.exists():
         return {"success": False, "error": f"Task {task_id} not found"}
 
+    # Resolve the task's actual git repo. For multi-repo projects the project
+    # root is a non-git parent folder and the real repo lives at
+    # task_metadata.repoPath (e.g. <project>/backend). gh and base-branch
+    # detection must run there, not in the non-git parent — otherwise gh
+    # reports "not a git repository". Falls back to the project root for
+    # single-repo projects.
+    repo_path = project_path
+    meta_file = spec_dir / "task_metadata.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text())
+            rp = meta.get("repoPath")
+            if rp and (Path(rp) / ".git").exists():
+                repo_path = Path(rp)
+        except (json.JSONDecodeError, OSError):
+            pass
+
     # Find the worktree
     worktree_path = project_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
 
@@ -3098,13 +3115,13 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
     except subprocess.CalledProcessError as e:
         return {"success": False, "error": f"Could not determine worktree branch: {e}"}
 
-    # Get the base branch (from options or detect from main project)
+    # Get the base branch (from options or detect from the task's repo)
     base_branch = options.baseBranch
     if not base_branch:
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=project_path,
+                cwd=repo_path,
                 capture_output=True,
                 text=True,
                 check=True
@@ -3216,7 +3233,53 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
             except Exception:
                 pr_body = ""
 
-    # Create the PR using gh CLI
+    # Determine the remote host. GitHub goes through the gh CLI (below);
+    # GitLab and Bitbucket use their REST APIs (gh is GitHub-only).
+    origin_url = ""
+    try:
+        _ou = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=str(worktree_path), capture_output=True, text=True, timeout=5
+        )
+        if _ou.returncode == 0:
+            origin_url = _ou.stdout.strip()
+    except Exception:
+        pass
+
+    from ..services.pr_providers import detect_provider, create_merge_request
+
+    provider_kind = detect_provider(origin_url)["kind"]
+    if provider_kind in ("gitlab", "bitbucket"):
+        mr = create_merge_request(
+            remote_url=origin_url,
+            head=worktree_branch,
+            base=base_branch,
+            title=pr_title,
+            body=pr_body or "",
+            draft=bool(options.draft),
+        )
+        if not mr.get("success"):
+            return {
+                "success": False,
+                "error": f"Failed to create {provider_kind} request: {mr.get('error', 'unknown error')}",
+            }
+        return {
+            "success": True,
+            "data": {
+                "prUrl": mr.get("url"),
+                "prNumber": mr.get("number"),
+                "branch": worktree_branch,
+                "baseBranch": base_branch,
+                "provider": mr.get("provider", provider_kind),
+            },
+        }
+    if provider_kind == "unknown" and origin_url:
+        return {
+            "success": False,
+            "error": f"Unsupported git host for remote '{origin_url}'. Supported: GitHub, GitLab, Bitbucket.",
+        }
+
+    # Create the PR using gh CLI (GitHub)
     from .github import run_gh_command
 
     head_ref = worktree_branch
@@ -3250,7 +3313,10 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
     if options.draft:
         gh_args.append("--draft")
 
-    gh_result = run_gh_command(gh_args, cwd=str(project_path))
+    # Run gh inside the worktree (a real git checkout with the repo's remote),
+    # never the project root — for multi-repo projects the root is a non-git
+    # parent and gh would fail with "not a git repository".
+    gh_result = run_gh_command(gh_args, cwd=str(worktree_path))
 
     if not gh_result["success"]:
         return {"success": False, "error": f"Failed to create PR: {gh_result.get('error', 'unknown error')}"}
