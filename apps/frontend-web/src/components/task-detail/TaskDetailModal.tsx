@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '../../hooks/use-toast';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
@@ -29,6 +29,7 @@ import {
   AlertTriangle,
   Pencil,
   X,
+  ArrowLeft,
   Zap
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -43,10 +44,13 @@ import { TaskWarnings } from './TaskWarnings';
 import { TaskSubtasks } from './TaskSubtasks';
 import { TaskLogs } from './TaskLogs';
 import { TaskFiles } from './TaskFiles';
+import { TaskUsage } from './TaskUsage';
 import { TaskReview } from './TaskReview';
 import { PlanReviewSection } from './PlanReviewSection';
 import { CreatePRDialog } from './task-review/CreatePRDialog';
 import type { Task } from '../../shared/types';
+
+type TaskDetailMode = 'modal' | 'page';
 
 interface TaskDetailModalProps {
   open: boolean;
@@ -57,19 +61,100 @@ interface TaskDetailModalProps {
 }
 
 export function TaskDetailModal({ open, task, onOpenChange, onSwitchToTerminals, onOpenInbuiltTerminal }: TaskDetailModalProps) {
-  // Don't render anything if no task
+  // Don't render anything if no task or not open
+  if (!task || !open) {
+    return null;
+  }
+
+  return (
+    <TaskDetailContent
+      mode="modal"
+      task={task}
+      onClose={() => onOpenChange(false)}
+      onSwitchToTerminals={onSwitchToTerminals}
+      onOpenInbuiltTerminal={onOpenInbuiltTerminal}
+    />
+  );
+}
+
+interface TaskDetailPageProps {
+  task: Task | null;
+  onClose: () => void;
+  onSwitchToTerminals?: () => void;
+  onOpenInbuiltTerminal?: (id: string, cwd: string) => void;
+}
+
+/**
+ * Full-page rendering of the task detail. Same body as the modal, but it fills
+ * the main content area so it can have its own URL (`/p/:projectId/tasks/:taskId`)
+ * and be linked/shared directly.
+ */
+export function TaskDetailPage({ task, onClose, onSwitchToTerminals, onOpenInbuiltTerminal }: TaskDetailPageProps) {
   if (!task) {
     return null;
   }
 
   return (
-    <TaskDetailModalContent
-      open={open}
+    <TaskDetailContent
+      mode="page"
       task={task}
-      onOpenChange={onOpenChange}
+      onClose={onClose}
       onSwitchToTerminals={onSwitchToTerminals}
       onOpenInbuiltTerminal={onOpenInbuiltTerminal}
     />
+  );
+}
+
+/**
+ * Wraps the task detail body either as a centered modal (Radix dialog) or as a
+ * full-height page container, depending on `mode`.
+ */
+function TaskDetailShell({
+  mode,
+  onClose,
+  children,
+}: {
+  mode: TaskDetailMode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  if (mode === 'page') {
+    return (
+      <div className="h-full w-full bg-card flex flex-col overflow-hidden">
+        {children}
+      </div>
+    );
+  }
+
+  return (
+    <DialogPrimitive.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogPrimitive.Portal>
+        {/* Semi-transparent overlay - can see background content */}
+        <DialogPrimitive.Overlay
+          className={cn(
+            'fixed inset-0 z-50 bg-black/60',
+            'data-[state=open]:animate-in data-[state=closed]:animate-out',
+            'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0'
+          )}
+        />
+        {/* Full-height centered modal content */}
+        <DialogPrimitive.Content
+          className={cn(
+            'fixed left-[50%] top-4 z-50',
+            'translate-x-[-50%]',
+            'w-[95vw] max-w-5xl h-[calc(100vh-32px)]',
+            'bg-card border border-border rounded-xl',
+            'shadow-2xl overflow-hidden flex flex-col',
+            'data-[state=open]:animate-in data-[state=closed]:animate-out',
+            'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+            'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
+            'duration-200'
+          )}
+        >
+          {children}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
 
@@ -80,7 +165,7 @@ const isFilesTabEnabled = () => {
 };
 
 // Separate component to use hooks only when task exists
-function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals, onOpenInbuiltTerminal }: { open: boolean; task: Task; onOpenChange: (open: boolean) => void; onSwitchToTerminals?: () => void; onOpenInbuiltTerminal?: (id: string, cwd: string) => void }) {
+function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInbuiltTerminal }: { mode: TaskDetailMode; task: Task; onClose: () => void; onSwitchToTerminals?: () => void; onOpenInbuiltTerminal?: (id: string, cwd: string) => void }) {
   const { t } = useTranslation(['tasks']);
   const state = useTaskDetail({ task });
   const showFilesTab = isFilesTabEnabled();
@@ -186,7 +271,7 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
       stopTask(task.id);
     } else {
       startTask(task.id);
-      onOpenChange(false);
+      onClose();
     }
   };
 
@@ -231,7 +316,7 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
     const result = await deleteTask(task.id);
     if (result.success) {
       state.setShowDeleteDialog(false);
-      onOpenChange(false);
+      onClose();
     } else {
       state.setDeleteError(result.error || 'Failed to delete task');
     }
@@ -255,7 +340,7 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
           if (!statusUpdated) {
             console.warn('Merge succeeded but failed to persist done status for task:', task.id);
           }
-          onOpenChange(false);
+          onClose();
         }
       }
       // Errors are handled inside unifiedMerge via setWorkspaceError
@@ -278,7 +363,7 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
     const result = await window.API.discardWorktree(task.id);
     if (result.success && result.data?.success) {
       state.setShowDiscardDialog(false);
-      onOpenChange(false);
+      onClose();
     } else {
       state.setWorkspaceError(result.data?.message || result.error || 'Failed to discard changes');
     }
@@ -286,7 +371,7 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
   };
 
   const handleClose = () => {
-    onOpenChange(false);
+    onClose();
   };
 
   // Render primary action button based on state
@@ -358,40 +443,15 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
 
   return (
     <TooltipProvider delayDuration={300}>
-      <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-        <DialogPrimitive.Portal>
-          {/* Semi-transparent overlay - can see background content */}
-          <DialogPrimitive.Overlay
-            className={cn(
-              'fixed inset-0 z-50 bg-black/60',
-              'data-[state=open]:animate-in data-[state=closed]:animate-out',
-              'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0'
-            )}
-          />
-
-          {/* Full-height centered modal content */}
-          <DialogPrimitive.Content
-            className={cn(
-              'fixed left-[50%] top-4 z-50',
-              'translate-x-[-50%]',
-              'w-[95vw] max-w-5xl h-[calc(100vh-32px)]',
-              'bg-card border border-border rounded-xl',
-              'shadow-2xl overflow-hidden flex flex-col',
-              'data-[state=open]:animate-in data-[state=closed]:animate-out',
-              'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
-              'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
-              'duration-200'
-            )}
-          >
+      <TaskDetailShell mode={mode} onClose={onClose}>
             {/* Header */}
             <div className="p-5 pb-4 border-b border-border shrink-0">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0 overflow-hidden">
-                  <DialogPrimitive.Title className="text-xl font-semibold leading-tight text-foreground truncate">
+                  <h2 className="text-xl font-semibold leading-tight text-foreground truncate">
                     {task.title}
-                  </DialogPrimitive.Title>
-                  <DialogPrimitive.Description asChild>
-                    <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+                  </h2>
+                  <div className="mt-2.5 flex items-center gap-2 flex-wrap">
                       <Badge variant="outline" className="text-xs font-mono">
                         {task.specId}
                       </Badge>
@@ -442,7 +502,6 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
                         </span>
                       )}
                     </div>
-                  </DialogPrimitive.Description>
                 </div>
                 <div className="flex items-center gap-1 shrink-0 electron-no-drag">
                   <Button
@@ -454,16 +513,15 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
                   >
                     <Pencil className="h-4 w-4" />
                   </Button>
-                  <DialogPrimitive.Close asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="hover:bg-muted transition-colors"
-                    >
-                      <X className="h-5 w-5" />
-                      <span className="sr-only">Close</span>
-                    </Button>
-                  </DialogPrimitive.Close>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="hover:bg-muted transition-colors"
+                    onClick={onClose}
+                  >
+                    {mode === 'page' ? <ArrowLeft className="h-5 w-5" /> : <X className="h-5 w-5" />}
+                    <span className="sr-only">Close</span>
+                  </Button>
                 </div>
               </div>
 
@@ -524,6 +582,12 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
                       {t('tasks:files.tab')}
                     </TabsTrigger>
                   )}
+                  <TabsTrigger
+                    value="usage"
+                    className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2.5 text-sm"
+                  >
+                    {t('tasks:usage.tab', 'Usage')}
+                  </TabsTrigger>
                 </TabsList>
 
                 {/* Overview Tab */}
@@ -626,6 +690,11 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
                     />
                   </TabsContent>
                 )}
+
+                {/* Usage Tab — per-task token & cache breakdown */}
+                <TabsContent value="usage" className="flex-1 min-h-0 overflow-hidden mt-0">
+                  <TaskUsage task={task} />
+                </TabsContent>
               </Tabs>
             </div>
 
@@ -644,12 +713,10 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
               <div className="flex-1" />
               {renderPrimaryAction()}
               <Button variant="outline" onClick={handleClose}>
-                Close
+                {mode === 'page' ? 'Back' : 'Close'}
               </Button>
             </div>
-          </DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>
+      </TaskDetailShell>
 
       {/* Edit Task Dialog */}
       <TaskEditDialog

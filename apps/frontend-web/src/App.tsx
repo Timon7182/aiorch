@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/toaster';
@@ -22,7 +22,7 @@ import { AddProjectModal } from './components/AddProjectModal';
 import { DocumentationView } from './components/DocumentationView';
 import { AppSettingsDialog } from './components/settings';
 import { TaskCreationWizard } from './components/TaskCreationWizard';
-import { TaskDetailModal } from './components/task-detail';
+import { TaskDetailPage } from './components/task-detail';
 import { OnboardingWizard } from './components/onboarding';
 import { LoadingScreen } from './components/LoadingScreen';
 import { ProjectSwitchLoadingModal } from './components/ProjectSwitchLoadingModal';
@@ -39,6 +39,8 @@ import { useSettingsStore, loadSettings } from './stores/settings-store';
 import { useAuthStore } from './stores/auth-store';
 import { useIpcListeners } from './hooks/useIpc';
 import { useIsMobile } from './hooks/use-media-query';
+import { useWorkspaceRoute, GLOBAL_VIEWS, DEFAULT_PROJECT_VIEW } from './hooks/use-workspace-route';
+import { cn } from './lib/utils';
 import { UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_DEFAULT } from './shared/constants';
 import type { Task, Project } from './shared/types';
 
@@ -81,15 +83,17 @@ function AuthenticatedApp() {
     return [...orderedProjects, ...remainingProjects];
   }, [projects, openProjectIds, tabOrder]);
 
-  // UI State - store only task ID, derive task from store for live updates
-  // IMPORTANT REACTIVITY PATTERN:
-  // - selectedTaskId: stable state (only changes when user selects a task)
-  // - selectedTask: derived from Zustand store, recomputes when tasks array changes
-  // This ensures TaskDetailModal receives fresh task data on every store update
-  // (status changes, subtask updates, execution progress, etc.)
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // URL is the source of truth for which project/view/task is active, so every
+  // screen is linkable. We derive these from the path instead of useState.
+  const navigate = useNavigate();
+  const location = useLocation();
+  const route = useWorkspaceRoute();
+  const routeProjectId = route.projectId;
+  const activeView: SidebarView = route.view ?? DEFAULT_PROJECT_VIEW;
+  const selectedTaskId = route.taskId;
+
   // Derive selectedTask from store so it updates when store changes
-  // Dependencies: [selectedTaskId, tasks] - tasks is a new array ref on every store update
+  // (status changes, subtask updates, execution progress, etc.)
   const selectedTask = useMemo(
     () => {
       if (!selectedTaskId) return null;
@@ -101,7 +105,6 @@ function AuthenticatedApp() {
     },
     [selectedTaskId, tasks]
   );
-  const [activeView, setActiveView] = useState<SidebarView>('kanban');
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isNewTaskDialogOpen, setIsNewTaskDialogOpen] = useState(false);
@@ -116,7 +119,35 @@ function AuthenticatedApp() {
     description?: string;
   } | null>(null);
 
-  const selectedProject = projects.find((p) => p.id === (activeProjectId || selectedProjectId));
+  // selectedProject follows the URL; for global views (no project in the path)
+  // it falls back to the store's active project so the tab bar/wizard still work.
+  const selectedProject = projects.find((p) => p.id === routeProjectId);
+  const currentProjectId = routeProjectId ?? activeProjectId ?? selectedProjectId ?? null;
+
+  // Navigate to a sidebar view (global views live at /:view, project views at /p/:id/:view).
+  const handleViewChange = useCallback((v: SidebarView) => {
+    if ((GLOBAL_VIEWS as readonly string[]).includes(v)) {
+      navigate(`/${v}`);
+      return;
+    }
+    if (currentProjectId) {
+      navigate(`/p/${currentProjectId}/${v}`);
+    } else {
+      navigate('/');
+    }
+  }, [currentProjectId, navigate]);
+
+  // Open a task as a full page with its own URL.
+  const handleTaskClick = useCallback((task: Task) => {
+    if (currentProjectId) {
+      navigate(`/p/${currentProjectId}/tasks/${task.id}`);
+    }
+  }, [currentProjectId, navigate]);
+
+  // Close the task page, returning to the project board.
+  const handleCloseTask = useCallback(() => {
+    navigate(currentProjectId ? `/p/${currentProjectId}/kanban` : '/');
+  }, [currentProjectId, navigate]);
 
   // Compute project name for loading modal
   const switchingProjectName = useMemo(() => {
@@ -172,14 +203,42 @@ function AuthenticatedApp() {
 
   // Load tasks when project changes
   useEffect(() => {
-    const currentProjectId = activeProjectId || selectedProjectId;
-    if (currentProjectId) {
-      loadTasks(currentProjectId);
-      setSelectedTaskId(null);
+    const pid = activeProjectId || selectedProjectId;
+    if (pid) {
+      loadTasks(pid);
     } else {
       useTaskStore.getState().clearTasks();
     }
   }, [activeProjectId, selectedProjectId]);
+
+  // Sync the project store to the project in the URL so child components
+  // (which read selectedProjectId from the store) follow deep links. An
+  // unknown project id bounces back to root.
+  useEffect(() => {
+    if (!routeProjectId) return;
+    if (projects.length === 0) return; // wait for projects to load
+    const proj = projects.find((p) => p.id === routeProjectId);
+    if (!proj) {
+      navigate('/', { replace: true });
+      return;
+    }
+    if (activeProjectId !== routeProjectId) {
+      setActiveProject(routeProjectId);
+      useProjectStore.getState().selectProject(routeProjectId);
+      openProjectTab(routeProjectId);
+    }
+  }, [routeProjectId, projects, activeProjectId, navigate, setActiveProject, openProjectTab]);
+
+  // From the bare root, jump into the last active project's board. Only
+  // redirect to a project that still exists, otherwise a stale id would
+  // bounce back to root and loop.
+  useEffect(() => {
+    if (location.pathname !== '/') return;
+    const pid = activeProjectId || selectedProjectId;
+    if (pid && projects.some((p) => p.id === pid)) {
+      navigate(`/p/${pid}/kanban`, { replace: true });
+    }
+  }, [location.pathname, activeProjectId, selectedProjectId, projects, navigate]);
 
   // Safety timeout: auto-clear stuck switching state after 10 seconds
   useEffect(() => {
@@ -248,10 +307,6 @@ function AuthenticatedApp() {
     if (!isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
-  const handleTaskClick = (task: Task) => {
-    setSelectedTaskId(task.id);
-  };
-
   const handleAddProject = () => {
     setIsAddProjectModalOpen(true);
   };
@@ -266,6 +321,8 @@ function AuthenticatedApp() {
       // selectedProjectId. Without this the wizard would open against
       // whichever project tab was active before.
       setActiveProject(project.id);
+      useProjectStore.getState().selectProject(project.id);
+      navigate(`/p/${project.id}/kanban`);
       setTaskWizardSeed({ description: project.initialPrompt });
       setIsNewTaskDialogOpen(true);
     }
@@ -281,8 +338,8 @@ function AuthenticatedApp() {
       rows: 24,
     });
     // Switch to terminals view to show the new terminal
-    setActiveView('terminals');
-  }, []);
+    if (currentProjectId) navigate(`/p/${currentProjectId}/terminals`);
+  }, [currentProjectId, navigate]);
 
   // Show loading screen for 2 seconds on page load
   if (isLoading) {
@@ -299,7 +356,7 @@ function AuthenticatedApp() {
             onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
             onOpenOnboarding={() => setIsOnboardingOpen(true)}
             activeView={activeView}
-            onViewChange={setActiveView}
+            onViewChange={handleViewChange}
             isMobile={isMobile}
             mobileOpen={sidebarOpen}
             onMobileClose={() => setSidebarOpen(false)}
@@ -324,9 +381,11 @@ function AuthenticatedApp() {
                 projects={openProjects}
                 activeProjectId={activeProjectId}
                 onProjectSelect={(projectId) => {
-                  setActiveProject(projectId);
-                  // Also update selectedProjectId so components use the correct project context
-                  useProjectStore.getState().selectProject(projectId);
+                  // Preserve the current view across project switches (unless it's
+                  // a project-independent global view). The store sync effect
+                  // updates activeProjectId from the new URL.
+                  const v = route.isGlobalView ? 'kanban' : activeView;
+                  navigate(`/p/${projectId}/${v}`);
                 }}
                 onProjectClose={(projectId) => closeProjectTab(projectId)}
                 onAddProject={handleAddProject}
@@ -337,6 +396,9 @@ function AuthenticatedApp() {
             )}
 
             <main className="flex-1 overflow-hidden">
+              {/* View content stays mounted (preserving e.g. the terminal grid)
+                  but is hidden while a task page is open. */}
+              <div className={cn('h-full overflow-hidden', selectedTaskId && 'hidden')}>
               {activeView === 'hermes' ? (
                 <HermesPage />
               ) : activeView === 'members' ? (
@@ -351,7 +413,7 @@ function AuthenticatedApp() {
                       onTaskClick={handleTaskClick}
                       onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
                       isInitialized={!!selectedProject?.autoBuildPath}
-                      onOpenUsage={() => setActiveView('usage')}
+                      onOpenUsage={() => handleViewChange('usage')}
                     />
                   )}
                   {/* TerminalGrid stays mounted but hidden to preserve xterm instances and PTY connections */}
@@ -375,8 +437,7 @@ function AuthenticatedApp() {
                     <GitHubIssues
                       onOpenSettings={() => setIsSettingsDialogOpen(true)}
                       onNavigateToTask={(taskId) => {
-                        setSelectedTaskId(taskId);
-                        setActiveView('kanban');
+                        if (currentProjectId) navigate(`/p/${currentProjectId}/tasks/${taskId}`);
                       }}
                     />
                   )}
@@ -391,7 +452,7 @@ function AuthenticatedApp() {
                     <UsageView projectId={selectedProject?.id || ''} />
                   )}
                   {activeView === 'insights' && (
-                    <Insights projectId={selectedProject?.id || ''} onNavigate={setActiveView} />
+                    <Insights projectId={selectedProject?.id || ''} onNavigate={handleViewChange} />
                   )}
                   {activeView === 'agent-tools' && <AgentTools />}
                   {activeView === 'skills' && <SkillsPage />}
@@ -406,8 +467,25 @@ function AuthenticatedApp() {
                   onOpenProject={handleAddProject}
                   onSelectProject={(projectId) => {
                     openProjectTab(projectId);
+                    navigate(`/p/${projectId}/kanban`);
                   }}
                 />
+              )}
+              </div>
+              {/* Task detail — full page with its own URL (/p/:projectId/tasks/:taskId) */}
+              {selectedTaskId && (
+                selectedTask ? (
+                  <TaskDetailPage
+                    task={selectedTask}
+                    onClose={handleCloseTask}
+                    onSwitchToTerminals={() => handleViewChange('terminals')}
+                    onOpenInbuiltTerminal={handleOpenInbuiltTerminal}
+                  />
+                ) : (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">
+                    Loading task…
+                  </div>
+                )
               )}
             </main>
           </div>
@@ -455,17 +533,6 @@ function AuthenticatedApp() {
             />
           )}
 
-          {/* Task Detail Modal */}
-          <TaskDetailModal
-            open={selectedTask !== null}
-            task={selectedTask}
-            onOpenChange={(open) => {
-              if (!open) setSelectedTaskId(null);
-            }}
-            onSwitchToTerminals={() => setActiveView('terminals')}
-            onOpenInbuiltTerminal={handleOpenInbuiltTerminal}
-          />
-
           {/* Onboarding Wizard */}
           <OnboardingWizard
             open={isOnboardingOpen}
@@ -498,18 +565,6 @@ export default function App() {
       <Route
         path="/login"
         element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />}
-      />
-      <Route
-        path="/hermes"
-        element={
-          !isAuthenticated ? (
-            <Navigate to="/login" replace />
-          ) : isPending ? (
-            <PendingApprovalScreen />
-          ) : (
-            <HermesPage />
-          )
-        }
       />
       <Route
         path="/*"

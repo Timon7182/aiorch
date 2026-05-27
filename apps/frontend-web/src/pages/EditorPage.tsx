@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import { ChevronRight, ChevronDown, File, Folder, Save, X, Eye, Code, Columns, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -191,6 +192,10 @@ export function EditorPage({ projectPath }: EditorPageProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('editor');
   const [isSaving, setIsSaving] = useState(false);
+  // The open file is reflected in the URL (?file=<absolute path>) so an
+  // editor view can be linked to a specific file.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const fileParam = searchParams.get('file');
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -267,6 +272,29 @@ export function EditorPage({ projectPath }: EditorPageProps) {
       setIsLoading(false);
     }
   }, [tabs]);
+
+  // Open the file named in the URL (deep link / page refresh).
+  useEffect(() => {
+    if (!fileParam || activeTab === fileParam) return;
+    const name = fileParam.split('/').pop() || fileParam;
+    openFile(fileParam, name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileParam]);
+
+  // Reflect the active tab back into the URL so it can be linked/shared.
+  useEffect(() => {
+    const current = searchParams.get('file');
+    if (activeTab && activeTab !== current) {
+      const next = new URLSearchParams(searchParams);
+      next.set('file', activeTab);
+      setSearchParams(next, { replace: true });
+    } else if (!activeTab && current) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('file');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   // Load directory children (for lazy loading in file tree)
   const loadChildren = useCallback(async (dirPath: string): Promise<FileNode[]> => {

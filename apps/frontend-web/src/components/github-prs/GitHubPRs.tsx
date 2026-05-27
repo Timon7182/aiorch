@@ -1,4 +1,5 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { GitPullRequest, RefreshCw, ExternalLink, Settings } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../stores/project-store';
@@ -83,6 +84,38 @@ export function GitHubPRs({ onOpenSettings, isActive = false }: GitHubPRsProps) 
   } = useGitHubPRs(selectedProject?.id);
 
   const selectedPR = prs.find(pr => pr.number === selectedPRNumber);
+
+  // Selected PR is reflected in the URL (?pr=<number>) so it can be linked.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const prParam = searchParams.get('pr');
+  const didApplyUrlPr = useRef(false);
+
+  useEffect(() => {
+    if (didApplyUrlPr.current) return;
+    if (!prParam) { didApplyUrlPr.current = true; return; }
+    const num = parseInt(prParam, 10);
+    if (Number.isNaN(num)) { didApplyUrlPr.current = true; return; }
+    if (prs.length === 0) return; // wait for PRs to load
+    if (selectedPRNumber !== num && prs.some((p) => p.number === num)) {
+      selectPR(num);
+    }
+    didApplyUrlPr.current = true;
+  }, [prParam, prs, selectedPRNumber, selectPR]);
+
+  useEffect(() => {
+    if (!didApplyUrlPr.current) return;
+    const current = searchParams.get('pr');
+    if (selectedPRNumber != null && String(selectedPRNumber) !== current) {
+      const next = new URLSearchParams(searchParams);
+      next.set('pr', String(selectedPRNumber));
+      setSearchParams(next, { replace: true });
+    } else if (selectedPRNumber == null && current) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('pr');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPRNumber]);
 
   // Get previousResult and newCommitsCheck for follow-up review continuity
   const selectedPRReviewState = selectedPRNumber

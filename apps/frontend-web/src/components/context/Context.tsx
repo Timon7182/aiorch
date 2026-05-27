@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { FolderTree, Brain } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { useContextStore } from '../../stores/context-store';
@@ -21,7 +22,16 @@ export function Context({ projectId }: ContextProps) {
     searchQuery
   } = useContextStore();
 
-  const [activeTab, setActiveTab] = useState('index');
+  // Active tab lives in the URL (?tab=index|memories) so it's linkable.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') === 'memories' ? 'memories' : 'index';
+  const setActiveTab = useCallback((tab: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', tab);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   // Custom hooks
   useProjectContext(projectId);

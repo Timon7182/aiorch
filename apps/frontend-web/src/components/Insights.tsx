@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   MessageSquare,
   Send,
@@ -135,6 +136,13 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const isMobile = useIsMobile();
   const [historyOpen, setHistoryOpen] = useState(false);
 
+  // The active conversation is reflected in the URL (?session=<id>) so a chat
+  // can be linked directly. didApplyUrlSession guards against the reflect
+  // effect clobbering an incoming deep-link before it's been applied.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sessionParam = searchParams.get('session');
+  const didApplyUrlSession = useRef(false);
+
   // Branch grounding: which branch the chat should read from. '' means the
   // project's current working tree (no worktree); any other value makes the
   // backend answer from a read-only worktree of that branch.
@@ -170,10 +178,35 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
 
   // Load session and set up listeners on mount
   useEffect(() => {
+    didApplyUrlSession.current = false;
     loadInsightsSession(projectId);
     const cleanup = setupInsightsListeners();
     return cleanup;
   }, [projectId]);
+
+  // Apply a ?session= deep link once the session list has loaded.
+  useEffect(() => {
+    if (didApplyUrlSession.current) return;
+    if (!sessionParam) { didApplyUrlSession.current = true; return; }
+    if (sessions.length === 0) return; // wait for sessions to load
+    if (session?.id === sessionParam) { didApplyUrlSession.current = true; return; }
+    if (sessions.some((s) => s.id === sessionParam)) {
+      switchSession(projectId, sessionParam);
+    }
+    didApplyUrlSession.current = true;
+  }, [sessionParam, sessions, session?.id, projectId]);
+
+  // Reflect the active conversation back into the URL.
+  useEffect(() => {
+    if (!didApplyUrlSession.current) return;
+    const current = searchParams.get('session');
+    if (session?.id && session.id !== current) {
+      const next = new URLSearchParams(searchParams);
+      next.set('session', session.id);
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {

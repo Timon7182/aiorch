@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .auth import TokenAuthMiddleware
 from .config import get_settings
@@ -22,6 +23,7 @@ from .database.engine import init_db
 from .logging_config import setup_logging
 from .services.skills_service import init_skills_service
 from .routes import (
+    agent_prompts,
     api_keys,
     audit,
     auth_routes,
@@ -52,6 +54,25 @@ from .websockets import terminal as terminal_ws
 settings = get_settings()
 setup_logging(log_level="DEBUG" if settings.DEBUG else "INFO")
 logger = logging.getLogger(__name__)
+
+
+class SPAStaticFiles(StaticFiles):
+    """Static file server that falls back to index.html for unknown paths.
+
+    The React frontend uses client-side routing (BrowserRouter), so deep links
+    such as ``/p/<projectId>/kanban`` or ``/p/<id>/tasks/<taskId>`` have no
+    corresponding file on disk. Without this fallback a refresh or shared link
+    to one of those routes would 404. API and WebSocket routes are registered
+    before this mount, so they keep precedence.
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
 
 
 @asynccontextmanager
@@ -159,6 +180,9 @@ def create_app() -> FastAPI:
         tags=["Tasks"],
         dependencies=require_active,
     )
+    # Per-project agent prompt overrides (routers declare their own prefixes).
+    app.include_router(agent_prompts.catalog_router, dependencies=require_active)
+    app.include_router(agent_prompts.router, dependencies=require_active)
     app.include_router(usage.router, prefix="/api/usage", tags=["Usage"])
     # Execution routes also under /api/tasks for frontend compatibility
     app.include_router(
@@ -255,7 +279,7 @@ def create_app() -> FastAPI:
     # Mount static files for SPA (if build directory exists)
     static_dir = Path(__file__).parent.parent / "static"
     if static_dir.exists():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+        app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="static")
     else:
         # Placeholder for development
         @app.get("/")

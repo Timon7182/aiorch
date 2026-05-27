@@ -1,4 +1,4 @@
-export { TaskDetailModal } from './TaskDetailModal';
+export { TaskDetailModal, TaskDetailPage } from './TaskDetailModal';
 export { TaskHeader } from './TaskHeader';
 export { TaskProgress } from './TaskProgress';
 export { TaskMetadata } from './TaskMetadata';

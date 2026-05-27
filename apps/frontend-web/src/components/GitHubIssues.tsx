@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useProjectStore } from '../stores/project-store';
 import { useTaskStore } from '../stores/task-store';
 import { useGitHubIssues, useGitHubInvestigation, useIssueFiltering, useAutoFix } from './github-issues/hooks';
@@ -44,6 +45,38 @@ export function GitHubIssues({ onOpenSettings, onNavigateToTask }: GitHubIssuesP
   } = useGitHubInvestigation(selectedProject?.id);
 
   const { searchQuery, setSearchQuery, filteredIssues } = useIssueFiltering(getFilteredIssues());
+
+  // Selected issue is reflected in the URL (?issue=<number>) so it can be linked.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const issueParam = searchParams.get('issue');
+  const didApplyUrlIssue = useRef(false);
+
+  useEffect(() => {
+    if (didApplyUrlIssue.current) return;
+    if (!issueParam) { didApplyUrlIssue.current = true; return; }
+    const num = parseInt(issueParam, 10);
+    if (Number.isNaN(num)) { didApplyUrlIssue.current = true; return; }
+    if (issues.length === 0) return; // wait for issues to load
+    if (selectedIssueNumber !== num && issues.some((i) => i.number === num)) {
+      selectIssue(num);
+    }
+    didApplyUrlIssue.current = true;
+  }, [issueParam, issues, selectedIssueNumber, selectIssue]);
+
+  useEffect(() => {
+    if (!didApplyUrlIssue.current) return;
+    const current = searchParams.get('issue');
+    if (selectedIssueNumber != null && String(selectedIssueNumber) !== current) {
+      const next = new URLSearchParams(searchParams);
+      next.set('issue', String(selectedIssueNumber));
+      setSearchParams(next, { replace: true });
+    } else if (selectedIssueNumber == null && current) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('issue');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIssueNumber]);
 
   const {
     config: autoFixConfig,

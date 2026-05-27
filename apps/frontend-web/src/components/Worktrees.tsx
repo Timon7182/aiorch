@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   GitBranch,
   RefreshCw,
@@ -39,6 +40,7 @@ import {
 import { useProjectStore } from '../stores/project-store';
 import { useTaskStore } from '../stores/task-store';
 import { RepoSwitcher } from './RepoSwitcher';
+import { cn } from '../lib/utils';
 import type { WorktreeListItem, WorktreeMergeResult } from '../shared/types';
 
 interface WorktreesProps {
@@ -56,6 +58,10 @@ export function Worktrees({ projectId }: WorktreesProps) {
   const [worktrees, setWorktrees] = useState<WorktreeListItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A ?worktree=<specName> deep link scrolls to and highlights that worktree.
+  const [searchParams] = useSearchParams();
+  const highlightedSpec = searchParams.get('worktree');
 
   // Merge dialog state
   const [showMergeDialog, setShowMergeDialog] = useState(false);
@@ -102,6 +108,13 @@ export function Worktrees({ projectId }: WorktreesProps) {
   useEffect(() => {
     loadWorktrees();
   }, [loadWorktrees]);
+
+  // Scroll a deep-linked worktree into view once the list has loaded.
+  useEffect(() => {
+    if (!highlightedSpec || worktrees.length === 0) return;
+    const el = document.getElementById(`worktree-${highlightedSpec}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [highlightedSpec, worktrees]);
 
   // Find task for a worktree
   const findTaskForWorktree = (specName: string) => {
@@ -323,7 +336,14 @@ export function Worktrees({ projectId }: WorktreesProps) {
             {filteredAndSortedWorktrees.map((worktree) => {
               const task = findTaskForWorktree(worktree.specName);
               return (
-                <Card key={worktree.specName} className="overflow-hidden">
+                <Card
+                  key={worktree.specName}
+                  id={`worktree-${worktree.specName}`}
+                  className={cn(
+                    'overflow-hidden',
+                    highlightedSpec === worktree.specName && 'ring-2 ring-primary'
+                  )}
+                >
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
