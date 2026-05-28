@@ -18,7 +18,8 @@ import {
   GitBranch,
   PanelLeft,
   Network,
-  Paperclip
+  Paperclip,
+  Brain
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -125,6 +126,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const sessions = useInsightsStore((state) => state.sessions);
   const status = useInsightsStore((state) => state.status);
   const streamingContent = useInsightsStore((state) => state.streamingContent);
+  const streamingThinking = useInsightsStore((state) => state.streamingThinking);
   const currentTool = useInsightsStore((state) => state.currentTool);
   const isLoadingSessions = useInsightsStore((state) => state.isLoadingSessions);
   const lastMetrics = useInsightsStore((state) => state.lastMetrics);
@@ -223,7 +225,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [session?.messages, streamingContent]);
+  }, [session?.messages, streamingContent, streamingThinking]);
 
   // Focus textarea on mount
   useEffect(() => {
@@ -593,7 +595,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
             ))}
 
             {/* Streaming message */}
-            {(streamingContent || currentTool) && (
+            {(streamingContent || streamingThinking || currentTool) && (
               <div className="flex gap-3">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
                   <Bot className="h-4 w-4 text-primary" />
@@ -602,6 +604,22 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
                   <div className="mb-1 text-sm font-medium text-foreground">
                     Assistant{(() => { const m = getModelLabel(session?.modelConfig?.provider, session?.modelConfig?.model); return m ? <span className="font-normal text-muted-foreground"> ({m})</span> : null; })()}
                   </div>
+                  {/* Live extended-thinking trace — shown only while the turn is
+                      streaming. Cleared once the assistant message finalizes. */}
+                  {streamingThinking && (
+                    <div className="mb-2 rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs">
+                      <div className="mb-1 flex items-center gap-1.5 font-medium text-muted-foreground">
+                        <Brain className="h-3.5 w-3.5" />
+                        <span>Reasoning</span>
+                        {!streamingContent && (
+                          <Loader2 className="h-3 w-3 animate-spin opacity-70" />
+                        )}
+                      </div>
+                      <div className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground/90">
+                        {streamingThinking}
+                      </div>
+                    </div>
+                  )}
                   {streamingContent && (
                     <div className="prose prose-sm dark:prose-invert max-w-none">
                       <ReactMarkdown
@@ -636,8 +654,8 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
               </div>
             )}
 
-            {/* Thinking indicator */}
-            {status.phase === 'thinking' && !streamingContent && !currentTool && (
+            {/* Thinking indicator — initial wait before any reasoning/text arrives */}
+            {status.phase === 'thinking' && !streamingContent && !streamingThinking && !currentTool && (
               <div className="flex gap-3">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
                   <Bot className="h-4 w-4 text-primary" />

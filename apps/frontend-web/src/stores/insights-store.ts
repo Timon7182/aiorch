@@ -27,6 +27,7 @@ interface InsightsState {
   status: InsightsChatStatus;
   pendingMessage: string;
   streamingContent: string; // Accumulates streaming response
+  streamingThinking: string; // Accumulates live extended-thinking deltas for the current turn
   currentTool: ToolUsage | null; // Currently executing tool
   toolsUsed: InsightsToolUsage[]; // Tools used during current response
   isLoadingSessions: boolean;
@@ -43,6 +44,8 @@ interface InsightsState {
   updateLastAssistantMessage: (content: string) => void;
   appendStreamingContent: (content: string) => void;
   clearStreamingContent: () => void;
+  appendStreamingThinking: (content: string) => void;
+  clearStreamingThinking: () => void;
   setCurrentTool: (tool: ToolUsage | null) => void;
   addToolUsage: (tool: ToolUsage) => void;
   clearToolsUsed: () => void;
@@ -66,6 +69,7 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
   status: initialStatus,
   pendingMessage: '',
   streamingContent: '',
+  streamingThinking: '',
   currentTool: null,
   toolsUsed: [],
   isLoadingSessions: false,
@@ -140,6 +144,13 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
 
   clearStreamingContent: () => set({ streamingContent: '' }),
 
+  appendStreamingThinking: (content) =>
+    set((state) => ({
+      streamingThinking: state.streamingThinking + content
+    })),
+
+  clearStreamingThinking: () => set({ streamingThinking: '' }),
+
   setCurrentTool: (tool) => set({ currentTool: tool }),
 
   addToolUsage: (tool) =>
@@ -164,7 +175,7 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
       const toolsUsed = state.toolsUsed.length > 0 ? [...state.toolsUsed] : undefined;
 
       if (!content && !suggestedTask && !toolsUsed) {
-        return { streamingContent: '', toolsUsed: [] };
+        return { streamingContent: '', streamingThinking: '', toolsUsed: [] };
       }
 
       // Attach provider info from current session config
@@ -183,6 +194,7 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
       if (!state.session) {
         return {
           streamingContent: '',
+          streamingThinking: '',
           toolsUsed: [],
           session: {
             id: `session-${Date.now()}`,
@@ -196,6 +208,7 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
 
       return {
         streamingContent: '',
+        streamingThinking: '',
         toolsUsed: [],
         session: {
           ...state.session,
@@ -211,6 +224,7 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
       status: initialStatus,
       pendingMessage: '',
       streamingContent: '',
+      streamingThinking: '',
       currentTool: null,
       toolsUsed: []
     })
@@ -280,6 +294,7 @@ export function sendMessage(projectId: string, message: string, attachments?: Ch
   // Clear pending and set status
   store.setPendingMessage('');
   store.clearStreamingContent();
+  store.clearStreamingThinking(); // Clear reasoning from previous response
   store.clearToolsUsed(); // Clear tools from previous response
   store.setLastMetrics(null); // Clear metrics from previous response
   store.setStatus({
@@ -340,6 +355,7 @@ export async function switchSession(projectId: string, sessionId: string): Promi
     useInsightsStore.getState().setSession(result.data);
     // Reset streaming state when switching sessions
     useInsightsStore.getState().clearStreamingContent();
+    useInsightsStore.getState().clearStreamingThinking();
     useInsightsStore.getState().clearToolsUsed();
     useInsightsStore.getState().setCurrentTool(null);
     useInsightsStore.getState().setStatus({ phase: 'idle', message: '' });
@@ -441,6 +457,13 @@ export function setupInsightsListeners(): () => void {
               phase: 'streaming',
               message: 'Receiving response...'
             });
+          }
+          break;
+        case 'thinking':
+          if (chunk.content) {
+            store().appendStreamingThinking(chunk.content);
+            // Keep status as 'thinking' — the dedicated reasoning panel renders
+            // these tokens; we don't flip to 'streaming' until real text arrives.
           }
           break;
         case 'tool_start':

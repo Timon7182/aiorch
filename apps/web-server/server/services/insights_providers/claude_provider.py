@@ -226,6 +226,11 @@ class ClaudeProvider(ProviderStrategy):
             "--print",
             "--verbose",
             "--output-format", "stream-json",
+            # Surface incremental deltas (text_delta + thinking_delta + tool_use
+            # content_block_start) so the UI can stream tokens and show the
+            # model's reasoning and tool activity live, instead of waiting for
+            # the whole assistant turn to land at once.
+            "--include-partial-messages",
         ]
 
         if model_config:
@@ -306,6 +311,13 @@ class ClaudeProvider(ProviderStrategy):
             accumulated_content = ""
             tools_used = []
             stream_start = time.monotonic()
+            # Tracks whether the CLI is emitting `stream_event` deltas (i.e.
+            # `--include-partial-messages` is in effect). When true, we
+            # source text/thinking/tool activity from the deltas and ignore
+            # the final `assistant` event's content blocks (they'd duplicate
+            # what we already streamed). When false (older CLI), we fall back
+            # to reading whole content blocks off the `assistant` event.
+            partial_seen = False
 
             async for line_bytes in proc.stdout:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip()
@@ -317,17 +329,111 @@ class ClaudeProvider(ProviderStrategy):
                         data = json.loads(line)
                         event_type = data.get("type", "")
 
+                        # ----- Live deltas (preferred path) -------------
+                        if event_type == "stream_event":
+                            partial_seen = True
+                            sub = data.get("event", {}) or {}
+                            sub_type = sub.get("type", "")
+                            if sub_type == "content_block_start":
+                                block = sub.get("content_block", {}) or {}
+                                if block.get("type") == "tool_use":
+                                    tool_name = block.get("name", "tool")
+                                    tools_used.append({
+                                        "name": tool_name,
+                                        "input": "",
+                                        "timestamp": datetime.now().isoformat(),
+                                    })
+                                    await broadcast_event("insights:chunk", {
+                                        "projectId": project_id,
+                                        "type": "tool_start",
+                                        "tool": {"name": tool_name, "input": ""},
+                                    })
+                            elif sub_type == "content_block_delta":
+                                delta = sub.get("delta", {}) or {}
+                                dtype = delta.get("type")
+                                if dtype == "text_delta":
+                                    text = delta.get("text", "")
+                                    if text:
+                                        accumulated_content += text
+                                        await broadcast_event("insights:chunk", {
+                                            "projectId": project_id,
+                                            "type": "text",
+                                            "content": text,
+                                        })
+                                elif dtype == "thinking_delta":
+                                    thought = delta.get("thinking", "")
+                                    if thought:
+                                        await broadcast_event("insights:chunk", {
+                                            "projectId": project_id,
+                                            "type": "thinking",
+                                            "content": thought,
+                                        })
+                                # input_json_delta (streaming tool arguments)
+                                # is intentionally ignored — it's noisy and the
+                                # tool name alone is informative enough.
+                            continue
+
+                        # ----- Tool result (closes the tool indicator) ---
+                        if event_type == "user":
+                            message = data.get("message", {}) or {}
+                            content = message.get("content")
+                            if isinstance(content, list) and any(
+                                isinstance(b, dict) and b.get("type") == "tool_result"
+                                for b in content
+                            ):
+                                await broadcast_event("insights:chunk", {
+                                    "projectId": project_id,
+                                    "type": "tool_end",
+                                })
+                            continue
+
+                        # ----- Assistant full message --------------------
+                        # With partial_seen the body has already streamed; the
+                        # assistant event is a recap and we skip it to avoid
+                        # double-broadcasting. Without partial_seen this is the
+                        # only place text/tool_use blocks appear, so we process
+                        # them as a fallback.
                         if event_type == "assistant":
+                            if partial_seen:
+                                continue
                             content = data.get("message", {}).get("content", "")
                             if isinstance(content, list):
                                 for block in content:
-                                    if block.get("type") == "text":
+                                    btype = block.get("type")
+                                    if btype == "text":
                                         text = block.get("text", "")
                                         accumulated_content += text
                                         await broadcast_event("insights:chunk", {
                                             "projectId": project_id,
                                             "type": "text",
                                             "content": text,
+                                        })
+                                    elif btype == "thinking":
+                                        thought = block.get("thinking", "")
+                                        if thought:
+                                            await broadcast_event("insights:chunk", {
+                                                "projectId": project_id,
+                                                "type": "thinking",
+                                                "content": thought,
+                                            })
+                                    elif btype == "tool_use":
+                                        tool_name = block.get("name", "tool")
+                                        tool_input = block.get("input", "")
+                                        if isinstance(tool_input, dict):
+                                            tool_input = (
+                                                tool_input.get("file_path")
+                                                or tool_input.get("pattern")
+                                                or str(tool_input)[:100]
+                                            )
+                                        tools_used.append({
+                                            "name": tool_name,
+                                            "input": str(tool_input)[:200],
+                                            "timestamp": datetime.now().isoformat(),
+                                        })
+                                        await broadcast_event("insights:chunk", {
+                                            "projectId": project_id,
+                                            "type": "tool_start",
+                                            "tool": {"name": tool_name, "input": str(tool_input)[:200]},
                                         })
                             elif isinstance(content, str):
                                 accumulated_content += content
@@ -336,49 +442,23 @@ class ClaudeProvider(ProviderStrategy):
                                     "type": "text",
                                     "content": content,
                                 })
+                            continue
 
-                        elif event_type == "content_block_delta":
-                            delta = data.get("delta", {})
-                            if delta.get("type") == "text_delta":
-                                text = delta.get("text", "")
-                                accumulated_content += text
-                                await broadcast_event("insights:chunk", {
-                                    "projectId": project_id,
-                                    "type": "text",
-                                    "content": text,
-                                })
-
-                        elif event_type == "tool_use":
-                            tool_name = data.get("name", data.get("tool", "Unknown"))
-                            tool_input = data.get("input", "")
-                            if isinstance(tool_input, dict):
-                                tool_input = tool_input.get("file_path") or tool_input.get("pattern") or str(tool_input)[:100]
-                            tools_used.append({
-                                "name": tool_name,
-                                "input": str(tool_input)[:200],
-                                "timestamp": datetime.now().isoformat(),
-                            })
-                            await broadcast_event("insights:chunk", {
-                                "projectId": project_id,
-                                "type": "tool_start",
-                                "tool": {"name": tool_name, "input": str(tool_input)[:200]},
-                            })
-
-                        elif event_type == "tool_result":
-                            await broadcast_event("insights:chunk", {
-                                "projectId": project_id,
-                                "type": "tool_end",
-                            })
-
-                        elif event_type == "result":
-                            result = data.get("result", "")
-                            if result and result != accumulated_content:
-                                accumulated_content = result
-                                await broadcast_event("insights:chunk", {
-                                    "projectId": project_id,
-                                    "type": "text",
-                                    "content": result,
-                                })
+                        if event_type == "result":
+                            # When streaming via deltas the body is already in
+                            # accumulated_content; broadcasting `result` again
+                            # would duplicate the whole answer in the UI. Only
+                            # use the result text as a fallback when no deltas
+                            # arrived.
+                            if not partial_seen:
+                                result = data.get("result", "")
+                                if result and result != accumulated_content:
+                                    accumulated_content = result
+                                    await broadcast_event("insights:chunk", {
+                                        "projectId": project_id,
+                                        "type": "text",
+                                        "content": result,
+                                    })
                             # The CLI's `result` event carries the canonical
                             # per-turn token totals + SDK-computed cost.
                             # Record exactly once per send_message() call.
@@ -438,6 +518,11 @@ class ClaudeProvider(ProviderStrategy):
             # Estimate tokens: ~4 chars per token for English text
             estimated_tokens = max(1, len(accumulated_content) // 4)
             tokens_per_sec = round(estimated_tokens / elapsed, 1) if elapsed > 0 else 0
+            logger.info(
+                f"[ClaudeProvider] Turn finished in {elapsed:.1f}s "
+                f"(rc={proc.returncode}, chars={len(accumulated_content)}, "
+                f"tools={len(tools_used)}, streaming={'on' if partial_seen else 'off'})"
+            )
 
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,

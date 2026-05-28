@@ -125,7 +125,7 @@ export interface InsightsStreamMetrics {
 }
 
 export interface InsightsStreamChunk {
-  type: 'text' | 'task_suggestion' | 'tool_start' | 'tool_end' | 'done' | 'error';
+  type: 'text' | 'thinking' | 'task_suggestion' | 'tool_start' | 'tool_end' | 'done' | 'error';
   content?: string;
   suggestedTask?: {
     title: string;
