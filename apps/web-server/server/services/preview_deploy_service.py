@@ -89,7 +89,14 @@ def resolve_task(task_id: str) -> TaskRef:
         except (json.JSONDecodeError, OSError):
             pass
 
+    # Worktrees usually live under the project root, but multi-repo projects
+    # (e.g. cts → repoPath=cts-backend) keep them under the repo. Prefer the
+    # project-root path, fall back to the repo's.
     worktree_path = project_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
+    if not worktree_path.exists():
+        repo_worktree = repo_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
+        if repo_worktree.exists():
+            worktree_path = repo_worktree
 
     return TaskRef(
         project_id=project_id,

@@ -231,6 +231,74 @@ remove_vhost() {
 }
 
 # ---------------------------------------------------------------------------
+# cts recipe: build the .NET backend from the task worktree (proxy stripped),
+# clone the main DB from the lane golden, reuse the lane's Identity/Hangfire DBs,
+# and serve the prebuilt SPA via nginx proxying /v1+/v2 to the preview backend.
+# Driven by deploy.config.json {"recipe":"cts","cts":{frontendDist,backendDockerfile,backendPort}}.
+# ---------------------------------------------------------------------------
+cmd_deploy_cts() {
+  need docker; need jq
+  local proj sdir lane_lc golden identity_db hangfire_db dbname net front_dist back_df bport fport
+  proj=$(proj_name "$ARG_TASK"); sdir="${STATE_DIR}/${proj}"; mkdir -p "$sdir"
+  cp "$ARG_CONFIG" "${sdir}/deploy.config.json"
+  lane_lc=$(echo "$ARG_LANE" | tr 'A-Z' 'a-z')
+  golden=$(golden_db_for "$ARG_LANE")
+  identity_db="cts_static_${lane_lc}_identity"
+  hangfire_db="cts_static_${lane_lc}_hangfire"
+  dbname=$(preview_db "$ARG_TASK")
+  net="${PREVIEW_DOCKER_NETWORK:-cts-static}"
+  front_dist=$(jq -r '.cts.frontendDist // "/home/saya/projects/cts/frontend/dist"' "$ARG_CONFIG")
+  back_df=$(jq -r '.cts.backendDockerfile // "Dockerfile"' "$ARG_CONFIG")
+  [[ -d "$front_dist" ]] || die "frontend dist not found: $front_dist (build it: npm install && VITE_SERVER_URL=/v1 npx vite build)"
+  [[ -f "${ARG_SRC}/${back_df}" ]] || die "backend Dockerfile not found: ${ARG_SRC}/${back_df}"
+
+  # 1. own main DB cloned from the lane golden; Identity/Hangfire shared with the lane.
+  db_clone_from_golden "$dbname" "$golden"
+
+  # 2. build the task's backend from the worktree, stripping the corporate proxy ENV
+  #    (unreachable off the corp network; the host reaches nuget.org/telerik directly).
+  log "building backend image preview-${ARG_TASK}-backend from $ARG_SRC"
+  sed -E '/ENV (HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)/d' "${ARG_SRC}/${back_df}" > "${sdir}/backend.Dockerfile"
+  docker build -f "${sdir}/backend.Dockerfile" -t "preview-${ARG_TASK}-backend:latest" "$ARG_SRC" >&2
+
+  # 3. run backend (connection strings via env-file; password never on argv).
+  bport=$(alloc_port)
+  cat > "${sdir}/backend.env" <<EOF
+ASPNETCORE_ENVIRONMENT=pre-prod.server
+ASPNETCORE_URLS=http://+:8080
+ConnectionStrings__DefaultConnection=Host=cts-preview-pg;Port=5432;Database=${dbname};Username=${PGUSER};Password=${PGPASSWORD};CommandTimeout=60
+ConnectionStrings__IdentityConnection=Host=cts-preview-pg;Port=5432;Database=${identity_db};Username=${PGUSER};Password=${PGPASSWORD}
+ConnectionStrings__HangfireConnection=Host=cts-preview-pg;Port=5432;Database=${hangfire_db};Username=${PGUSER};Password=${PGPASSWORD}
+EOF
+  chmod 600 "${sdir}/backend.env"
+  docker rm -f "${proj}-backend" >/dev/null 2>&1 || true
+  docker run -d --name "${proj}-backend" --restart unless-stopped --network "$net" \
+    --env-file "${sdir}/backend.env" -p "${bport}:8080" "preview-${ARG_TASK}-backend:latest" >&2
+
+  # 4. frontend: prebuilt SPA + nginx proxy /v1,/v2 -> this preview's backend (same-origin).
+  fport=$(alloc_port)
+  cat > "${sdir}/frontend.conf" <<EOF
+server {
+  listen 5000; root /usr/share/nginx/html; index index.html;
+  location /v1 { proxy_pass http://${proj}-backend:8080; proxy_set_header Host \$host; }
+  location /v2 { proxy_pass http://${proj}-backend:8080; }
+  location / { try_files \$uri \$uri/ /index.html; }
+}
+EOF
+  docker rm -f "${proj}-frontend" >/dev/null 2>&1 || true
+  docker run -d --name "${proj}-frontend" --restart unless-stopped --network "$net" -p "${fport}:5000" \
+    -v "${front_dist}:/usr/share/nginx/html:ro" -v "${sdir}/frontend.conf:/etc/nginx/conf.d/default.conf:ro" \
+    nginx:alpine >&2
+
+  local url="http://${PUBLIC_HOST}:${fport}"
+  local now; now=$(date +%s)
+  cat > "${sdir}/meta.json" <<EOF
+{"task":$(json_str "$ARG_TASK"),"lane":$(json_str "$ARG_LANE"),"recipe":"cts","port":$fport,"backendPort":$bport,"url":$(json_str "$url"),"db":$(json_str "$dbname"),"created_at":$now,"ref":$(json_str "$ARG_REF")}
+EOF
+  emit_json "{\"ok\":true,\"task\":$(json_str "$ARG_TASK"),\"lane\":$(json_str "$ARG_LANE"),\"url\":$(json_str "$url"),\"ip\":$(json_str "$PUBLIC_HOST"),\"port\":$fport,\"db\":$(json_str "$dbname")}"
+}
+
+# ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
 cmd_deploy() {
@@ -244,6 +312,11 @@ cmd_deploy() {
   if (( live >= MAX_PREVIEWS )); then
     die "max concurrent previews reached ($live/$MAX_PREVIEWS) — stop one first or raise PREVIEW_MAX_CONCURRENT"
   fi
+
+  # Project-specific recipe (e.g. cts: .NET backend built from the worktree +
+  # prebuilt SPA + 3 connection strings). Falls through to the generic compose path.
+  local recipe; recipe=$(jq -r '.recipe // "generic"' "$ARG_CONFIG")
+  if [[ "$recipe" == "cts" ]]; then cmd_deploy_cts; return; fi
 
   local proj; proj=$(proj_name "$ARG_TASK")
   local sdir="${STATE_DIR}/${proj}"
@@ -289,6 +362,8 @@ cmd_teardown() {
   else
     docker compose -p "$proj" down -v --remove-orphans >&2 2>/dev/null || true
   fi
+  # cts recipe uses plain `docker run` (not compose) — remove its named containers.
+  docker rm -f "${proj}-backend" "${proj}-frontend" >&2 2>/dev/null || true
   # remove preview-specific images
   docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep "^preview-${ARG_TASK}-" | xargs -r docker rmi -f >&2 2>/dev/null || true
   db_drop "$(preview_db "$ARG_TASK")"
@@ -349,6 +424,7 @@ cmd_teardown_quiet() {
   local proj; proj=$(proj_name "$task")
   local sdir="${STATE_DIR}/${proj}"
   [[ -f "${sdir}/docker-compose.yml" ]] && docker compose -p "$proj" -f "${sdir}/docker-compose.yml" down -v --remove-orphans >&2 2>/dev/null || true
+  docker rm -f "${proj}-backend" "${proj}-frontend" >&2 2>/dev/null || true
   db_drop "$(preview_db "$task")"
   remove_vhost "$task"
   rm -rf "$sdir"
