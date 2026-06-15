@@ -35,7 +35,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH
 # ---------------------------------------------------------------------------
 # Config / globals
 # ---------------------------------------------------------------------------
-PREVIEW_ENV="${PREVIEW_ENV:-/etc/magestic-preview/preview.env}"
+PREVIEW_ENV="${PREVIEW_ENV:-$HOME/.magestic-preview/preview.env}"
 if [[ -f "$PREVIEW_ENV" ]]; then
   # shellcheck disable=SC1090
   set -a; source "$PREVIEW_ENV"; set +a
@@ -47,7 +47,8 @@ PORT_MAX="${PREVIEW_PORT_MAX:-12999}"
 PREVIEW_DOMAIN="${PREVIEW_DOMAIN:-}"            # e.g. preview.cts.local — empty => port-only URLs
 NGINX_ENABLED="${PREVIEW_NGINX_ENABLED:-0}"     # 1 to write vhosts
 NGINX_VHOST_DIR="${PREVIEW_NGINX_VHOST_DIR:-/etc/nginx/sites-enabled}"
-PUBLIC_HOST="${PREVIEW_PUBLIC_HOST:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+PUBLIC_HOST="${PREVIEW_PUBLIC_HOST:-$(hostname -I 2>/dev/null | awk '{print $1}' || true)}"
+PUBLIC_HOST="${PUBLIC_HOST:-127.0.0.1}"
 GOLDEN_DB_A="${PREVIEW_GOLDEN_DB_A:-cts_golden_a}"
 GOLDEN_DB_B="${PREVIEW_GOLDEN_DB_B:-cts_golden_b}"
 STATIC_DB_A="${PREVIEW_STATIC_DB_A:-$GOLDEN_DB_A}"

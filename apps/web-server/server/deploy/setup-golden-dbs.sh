@@ -99,8 +99,11 @@ restore_into() {
   drop_db "$db"
   admin -c "CREATE DATABASE \"$db\";"
   case "$dump" in
-    *.sql) psql -v ON_ERROR_STOP=1 -qX -d "$db" -f "$dump";;
-    *)     need pg_restore; pg_restore --no-owner --no-privileges -d "$db" "$dump";;
+    *.sql) psql -qX -d "$db" -f "$dump" || log "psql restore finished with warnings (non-fatal)";;
+    *)     need pg_restore
+           # pg_restore exits non-zero on harmless warnings (missing roles, COMMENT
+           # on extensions, etc.); don't let that abort the script.
+           pg_restore --no-owner --no-privileges -d "$db" "$dump" || log "pg_restore finished with warnings (non-fatal)";;
   esac
 }
 

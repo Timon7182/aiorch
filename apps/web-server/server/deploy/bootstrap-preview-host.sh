@@ -22,12 +22,13 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-PG_PASS=""; PG_PORT="5436"; PUBLIC_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+PG_PASS=""; PG_PORT="5436"
+PUBLIC_HOST="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"; PUBLIC_HOST="${PUBLIC_HOST:-192.168.88.55}"
 DUMP=""; SANITIZE=""; CTS_ROOT=""
 SRC_SSH=""; SRC_DB="cts"; SRC_CONTAINER="cts-db-postgres-1"; SRC_USER="admin"
 PG_CONTAINER="cts-preview-pg"
 PG_VOLUME="cts-preview-pg-data"
-STATE_DIR="${MAGESTIC_PREVIEW_STATE:-/home/$USER/.magestic-preview}"
+STATE_DIR="${MAGESTIC_PREVIEW_STATE:-$HOME/.magestic-preview}"
 
 log(){ printf '[bootstrap] %s\n' "$*" >&2; }
 die(){ log "ERROR: $*"; exit 1; }
@@ -71,22 +72,23 @@ fi
 BRIDGE_GW="$(docker network inspect bridge -f '{{ (index .IPAM.Config 0).Gateway }}' 2>/dev/null || echo 172.17.0.1)"
 
 # ---------------------------------------------------------------------------
-# 2. tools
+# 2. tools (must already be present; we never sudo-install)
 # ---------------------------------------------------------------------------
-if ! command -v jq >/dev/null || ! command -v psql >/dev/null; then
-  log "installing jq + postgresql-client"
-  sudo apt-get update -y && sudo apt-get install -y jq postgresql-client
-fi
+for t in jq psql pg_restore createdb dropdb; do
+  command -v "$t" >/dev/null || die "required tool missing on host: $t (install jq + postgresql-client once)"
+done
 
 # ---------------------------------------------------------------------------
-# 3. runner + preview.env
+# 3. runner + preview.env (user-space, NO sudo)
 # ---------------------------------------------------------------------------
-log "installing preview-runner -> /usr/local/bin/preview-runner"
-sudo install -m0755 "$HERE/preview-runner.sh" /usr/local/bin/preview-runner
+RUNNER_DEST="$HOME/.magestic-preview/bin/preview-runner"
+ENV_FILE="$HOME/.magestic-preview/preview.env"
+mkdir -p "$HOME/.magestic-preview/bin" "$STATE_DIR"
+log "installing preview-runner -> $RUNNER_DEST"
+install -m0755 "$HERE/preview-runner.sh" "$RUNNER_DEST"
 
-log "writing /etc/magestic-preview/preview.env"
-sudo install -d -m0755 /etc/magestic-preview
-sudo tee /etc/magestic-preview/preview.env >/dev/null <<EOF
+log "writing $ENV_FILE"
+cat > "$ENV_FILE" <<EOF
 PGHOST=127.0.0.1
 PGPORT=${PG_PORT}
 PGUSER=admin
@@ -107,8 +109,7 @@ PREVIEW_NGINX_ENABLED=0
 PREVIEW_MAX_CONCURRENT=2
 MAGESTIC_PREVIEW_STATE=${STATE_DIR}
 EOF
-sudo chmod 600 /etc/magestic-preview/preview.env
-mkdir -p "$STATE_DIR"
+chmod 600 "$ENV_FILE"
 
 # ---------------------------------------------------------------------------
 # 4. golden + static DBs
@@ -120,7 +121,7 @@ setup_args=()
 if [[ -z "$DUMP" && -n "$SRC_SSH" ]]; then
   export SRC_SSH SRC_DB SRC_PG_CONTAINER="$SRC_CONTAINER" SRC_PG_USER="$SRC_USER"
 fi
-PREVIEW_ENV=/etc/magestic-preview/preview.env bash "$HERE/setup-golden-dbs.sh" "${setup_args[@]}"
+PREVIEW_ENV="$ENV_FILE" bash "$HERE/setup-golden-dbs.sh" "${setup_args[@]}"
 
 # ---------------------------------------------------------------------------
 # 5. optional: stand up the two static lanes (gives the 2 standing URLs now)
@@ -132,14 +133,15 @@ if [[ -n "$CTS_ROOT" ]]; then
   log "initial static deploy: lane A (main) and lane B (test) from $CTS_ROOT (config $CFG)"
   # Deploy a throwaway preview from the current source then immediately promote
   # it to the static lane (this is exactly what the UI's Promote does).
-  preview-runner deploy   --task static-init-a --lane A --src "$CTS_ROOT" --config "$CFG"
-  preview-runner promote  --task static-init-a --lane A
-  preview-runner deploy   --task static-init-b --lane B --src "$CTS_ROOT" --config "$CFG"
-  preview-runner promote  --task static-init-b --lane B
+  export PREVIEW_ENV="$ENV_FILE"
+  "$RUNNER_DEST" deploy   --task static-init-a --lane A --src "$CTS_ROOT" --config "$CFG"
+  "$RUNNER_DEST" promote  --task static-init-a --lane A
+  "$RUNNER_DEST" deploy   --task static-init-b --lane B --src "$CTS_ROOT" --config "$CFG"
+  "$RUNNER_DEST" promote  --task static-init-b --lane B
 fi
 
 log "running doctor:"
-PREVIEW_ENV=/etc/magestic-preview/preview.env preview-runner doctor
+PREVIEW_ENV="$ENV_FILE" "$RUNNER_DEST" doctor
 
 cat >&2 <<EOF
 
@@ -147,6 +149,6 @@ cat >&2 <<EOF
   Static lane A (main/pre-prod): http://${PUBLIC_HOST}:13001
   Static lane B (test):          http://${PUBLIC_HOST}:13002
 Next: register a 'preview-host' server in MagesticAI (Settings > Servers):
-  host=${PUBLIC_HOST}  auth=key  deploys.preview=/usr/local/bin/preview-runner
+  host=${PUBLIC_HOST}  auth=key  deploys.preview=${RUNNER_DEST}
   host_path_map={"/home/magesticai/projects":"/home/saya/projects"}
 EOF
