@@ -51,6 +51,7 @@ import { TaskReview } from './TaskReview';
 import { PlanReviewSection } from './PlanReviewSection';
 import { CreatePRDialog } from './task-review/CreatePRDialog';
 import { ChangedFilesPanel } from './task-review';
+import { PreviewDeploy } from './task-review/PreviewDeploy';
 import type { Task } from '../../shared/types';
 
 type TaskDetailMode = 'modal' | 'page';
@@ -433,9 +434,13 @@ function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInb
 
     if (task.status === 'done') {
       return (
-        <div className="completion-state text-sm flex items-center gap-2 text-success">
-          <CheckCircle2 className="h-5 w-5" />
-          <span className="font-medium">Task completed</span>
+        <div className="space-y-3">
+          <div className="completion-state text-sm flex items-center gap-2 text-success">
+            <CheckCircle2 className="h-5 w-5" />
+            <span className="font-medium">Task completed</span>
+          </div>
+          {/* Run on server — deploy this finished task's build to a preview env. */}
+          <PreviewDeploy taskId={task.id} />
         </div>
       );
     }

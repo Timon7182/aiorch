@@ -364,6 +364,9 @@ export const webAPI: API & { _isWebMode: boolean } = {
     post(`/tasks/${taskId}/promote`, options || {}),
   // ========== Databases (chat DB connection) ==========
   listDatabases: () => get(`/ext/databases`),
+  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) =>
+    post(`/ext/databases`, profile),
+  deleteDatabase: (dbId: string) => del(`/ext/databases/${dbId}`),
   getForkInfo: (projectPath: string) =>
     get(`/github/fork-info?project_path=${encodeURIComponent(projectPath)}`),
   listWorktrees: (projectId: string, repo?: string) =>

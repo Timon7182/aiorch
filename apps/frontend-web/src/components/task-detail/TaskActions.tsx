@@ -98,6 +98,7 @@ export function TaskActions({
           </div>
         )}
 
+
         {/* Delete Button - always visible but disabled when running */}
         <Button
           variant="ghost"

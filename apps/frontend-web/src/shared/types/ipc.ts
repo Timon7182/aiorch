@@ -213,6 +213,8 @@ export interface API {
   promotePreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
   // Databases (chat DB connection)
   listDatabases: () => Promise<IPCResult<import('./insights').DatabaseProfileSummary[]>>;
+  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) => Promise<IPCResult<import('./insights').DatabaseProfileSummary>>;
+  deleteDatabase: (dbId: string) => Promise<IPCResult<{ status: string }>>;
   getForkInfo: (projectPath: string) => Promise<IPCResult<{
     isFork: boolean;
     origin: string;

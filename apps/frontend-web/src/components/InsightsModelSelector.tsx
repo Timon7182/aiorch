@@ -13,6 +13,7 @@ import {
 import { PROVIDER_INFO } from '../shared/constants';
 import type { InsightsModelConfig, InsightsProvider, CodeSearchBackend, DatabaseProfileSummary } from '../shared/types';
 import { CustomModelModal } from './CustomModelModal';
+import { AddDatabaseModal } from './AddDatabaseModal';
 import { useInsightsStore, loadInsightsProviders } from '../stores/insights-store';
 
 interface InsightsModelSelectorProps {
@@ -46,13 +47,13 @@ export function InsightsModelSelector({
 
   // Registered DB connections (for the optional chat→DB connection).
   const [databases, setDatabases] = useState<DatabaseProfileSummary[]>([]);
-  useEffect(() => {
-    let active = true;
+  const [showAddDb, setShowAddDb] = useState(false);
+  const loadDatabases = useCallback(() => {
     window.API.listDatabases?.()
-      .then((res) => { if (active && res?.success && res.data) setDatabases(res.data); })
+      .then((res) => { if (res?.success && res.data) setDatabases(res.data); })
       .catch(() => {});
-    return () => { active = false; };
   }, []);
+  useEffect(() => { loadDatabases(); }, [loadDatabases]);
 
   const currentProvider = currentConfig?.provider || 'claude';
 
@@ -232,6 +233,12 @@ export function InsightsModelSelector({
               {currentDb === db.id && <Check className="h-4 w-4 shrink-0 text-primary" />}
             </DropdownMenuItem>
           ))}
+          <DropdownMenuItem
+            onClick={(e) => { e.preventDefault(); setShowAddDb(true); }}
+            className="flex cursor-pointer items-center gap-2 pl-4 text-primary"
+          >
+            <div className="text-sm">{t('common:insights.modelSelector.database.add', '+ Add connection…')}</div>
+          </DropdownMenuItem>
 
           {/* Custom */}
           <DropdownMenuSeparator />
@@ -257,6 +264,14 @@ export function InsightsModelSelector({
         onSave={handleCustomSave}
         onClose={() => setShowCustomModal(false)}
       />
+
+      {showAddDb && (
+        <AddDatabaseModal
+          open={showAddDb}
+          onClose={() => setShowAddDb(false)}
+          onSaved={loadDatabases}
+        />
+      )}
     </>
   );
 }
