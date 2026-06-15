@@ -362,6 +362,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
   stopPreview: (taskId: string) => del(`/tasks/${taskId}/deploy-preview`),
   promotePreview: (taskId: string, options?: { lane?: string }) =>
     post(`/tasks/${taskId}/promote`, options || {}),
+  // ========== Databases (chat DB connection) ==========
+  listDatabases: () => get(`/ext/databases`),
   getForkInfo: (projectPath: string) =>
     get(`/github/fork-info?project_path=${encodeURIComponent(projectPath)}`),
   listWorktrees: (projectId: string, repo?: string) =>

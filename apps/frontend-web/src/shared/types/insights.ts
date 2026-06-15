@@ -34,6 +34,17 @@ export interface InsightsModelConfig {
   model: string;                 // Model ID (e.g. 'opus', 'llama3:8b', 'gpt-4o')
   thinkingLevel?: ThinkingLevel; // Only applicable for Claude
   codeSearch?: CodeSearchBackend; // Code navigation backend (default: 'auto')
+  dbProfileId?: string;          // Connect the chat to a registered DB (read-only); undefined = none
+}
+
+// A saved database connection profile (from the Databases extension)
+export interface DatabaseProfileSummary {
+  id: string;
+  name: string;
+  kind: string;       // 'postgres' | 'mysql' | 'sqlite'
+  env?: string;
+  database?: string;
+  host?: string;
 }
 
 // Provider info returned from detection endpoint

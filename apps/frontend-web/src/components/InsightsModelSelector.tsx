@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Sliders, Check, Loader2 } from 'lucide-react';
+import { Sliders, Check, Loader2, Database } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   DropdownMenu,
@@ -11,7 +11,7 @@ import {
   DropdownMenuLabel
 } from './ui/dropdown-menu';
 import { PROVIDER_INFO } from '../shared/constants';
-import type { InsightsModelConfig, InsightsProvider, CodeSearchBackend } from '../shared/types';
+import type { InsightsModelConfig, InsightsProvider, CodeSearchBackend, DatabaseProfileSummary } from '../shared/types';
 import { CustomModelModal } from './CustomModelModal';
 import { useInsightsStore, loadInsightsProviders } from '../stores/insights-store';
 
@@ -44,6 +44,16 @@ export function InsightsModelSelector({
     return () => clearInterval(interval);
   }, [projectId]);
 
+  // Registered DB connections (for the optional chat→DB connection).
+  const [databases, setDatabases] = useState<DatabaseProfileSummary[]>([]);
+  useEffect(() => {
+    let active = true;
+    window.API.listDatabases?.()
+      .then((res) => { if (active && res?.success && res.data) setDatabases(res.data); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
   const currentProvider = currentConfig?.provider || 'claude';
 
   const handleSelectProviderModel = useCallback((provider: InsightsProvider, modelId: string, modelLabel: string) => {
@@ -73,6 +83,15 @@ export function InsightsModelSelector({
 
   const currentCodeSearch: CodeSearchBackend = currentConfig?.codeSearch ?? 'auto';
   const codeSearchOptions: CodeSearchBackend[] = ['auto', 'cgc', 'files'];
+
+  // Connect the chat to a registered DB (read-only), preserving provider/model.
+  const handleSelectDb = useCallback((dbProfileId: string | null) => {
+    const base: InsightsModelConfig = currentConfig ?? {
+      provider: 'claude', profileId: 'custom', model: 'sonnet', thinkingLevel: 'medium',
+    };
+    onConfigChange({ ...base, dbProfileId: dbProfileId ?? undefined });
+  }, [onConfigChange, currentConfig]);
+  const currentDb = currentConfig?.dbProfileId ?? null;
 
   // Build display text
   const getDisplayText = () => {
@@ -179,6 +198,40 @@ export function InsightsModelSelector({
               </DropdownMenuItem>
             );
           })}
+
+          {/* Database connection (read-only) */}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="flex items-center gap-1.5">
+            <Database className="h-3.5 w-3.5" />
+            {t('common:insights.modelSelector.database.label', 'Database')}
+          </DropdownMenuLabel>
+          <DropdownMenuItem
+            onClick={() => handleSelectDb(null)}
+            className="flex cursor-pointer items-center gap-2 pl-4"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-sm">{t('common:insights.modelSelector.database.none', 'None')}</div>
+              <div className="text-xs text-muted-foreground">
+                {t('common:insights.modelSelector.database.noneDesc', 'No database connection')}
+              </div>
+            </div>
+            {currentDb === null && <Check className="h-4 w-4 shrink-0 text-primary" />}
+          </DropdownMenuItem>
+          {databases.map((db) => (
+            <DropdownMenuItem
+              key={db.id}
+              onClick={() => handleSelectDb(db.id)}
+              className="flex cursor-pointer items-center gap-2 pl-4"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-sm">{db.name}</div>
+                <div className="text-xs text-muted-foreground">
+                  {db.kind}{db.database ? ` · ${db.database}` : ''}{db.env ? ` · ${db.env}` : ''}
+                </div>
+              </div>
+              {currentDb === db.id && <Check className="h-4 w-4 shrink-0 text-primary" />}
+            </DropdownMenuItem>
+          ))}
 
           {/* Custom */}
           <DropdownMenuSeparator />

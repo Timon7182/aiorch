@@ -211,6 +211,8 @@ export interface API {
   getPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
   stopPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
   promotePreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
+  // Databases (chat DB connection)
+  listDatabases: () => Promise<IPCResult<import('./insights').DatabaseProfileSummary[]>>;
   getForkInfo: (projectPath: string) => Promise<IPCResult<{
     isFork: boolean;
     origin: string;

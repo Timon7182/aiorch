@@ -202,6 +202,41 @@ class ClaudeProvider(ProviderStrategy):
             return None
         return {"mcpServers": {"codegraph": {"command": cgc_bin, "args": ["mcp", "start"]}}}
 
+    def _build_postgres_mcp_config(self, db_profile_id: str) -> dict | None:
+        """Build the inline --mcp-config payload for a read-only Postgres MCP
+        server pointed at a saved DB profile, so the chat can query that DB.
+
+        Returns None (chat proceeds normally) if the profile is missing, isn't
+        a postgres profile, or lacks a database name.
+        """
+        try:
+            from .. import ext_storage
+        except Exception:
+            return None
+        prof = ext_storage.find("databases", db_profile_id)
+        if not prof or prof.get("kind") != "postgres" or not prof.get("database"):
+            return None
+        from urllib.parse import quote
+        host = prof.get("host") or "localhost"
+        port = prof.get("port") or 5432
+        db = prof["database"]
+        user = quote(prof.get("username") or "", safe="")
+        pw = quote(prof.get("password") or "", safe="")
+        auth = f"{user}:{pw}@" if user else ""
+        conn = f"postgresql://{auth}{host}:{port}/{db}"
+        name = prof.get("name") or db
+        return {
+            "mcpServers": {
+                "db": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-postgres", conn]}
+            },
+            "systemPrompt": (
+                f"You are connected to the PostgreSQL database '{name}' (database `{db}` on {host}) "
+                f"through the mcp__db__* tools, READ-ONLY. Use mcp__db__query to run SELECT statements "
+                f"and the server's schema resources to inspect tables/columns before querying. Prefer "
+                f"these tools over guessing the schema. Never attempt writes."
+            ),
+        }
+
     # ------------------------------------------------------------------
     # Message sending (extracted from InsightsService.send_message)
     # ------------------------------------------------------------------
@@ -247,28 +282,46 @@ class ClaudeProvider(ProviderStrategy):
         elif model:
             cmd.extend(["--model", model])
 
-        # Code-search backend: optionally inject the CodeGraph MCP server so the
-        # model navigates the indexed graph instead of grepping raw files.
+        # Optional MCP servers for this turn: CodeGraph (code navigation) and/or
+        # a Postgres connection (chat-to-DB). Collect both, then emit one config.
+        mcp_servers: dict = {}
+        allowed_tools: list[str] = []
+        sys_prompt_appends: list[str] = []
+
         code_search = (model_config or {}).get("codeSearch") or "auto"
-        search_mode = self._resolve_code_search_mode(code_search, run_dir)
-        if search_mode == "cgc":
+        if self._resolve_code_search_mode(code_search, run_dir) == "cgc":
             cgc_config = self._build_codegraph_mcp_config(run_dir)
             if cgc_config:
-                # NOTE: --allowedTools is variadic, so it must be followed by
-                # another flag (here --append-system-prompt) — never by the
-                # trailing positional message, which it would otherwise swallow.
-                cmd.extend([
-                    "--mcp-config", json.dumps(cgc_config),
-                    "--strict-mcp-config",
-                    "--allowedTools", "mcp__codegraph__*", "Read", "Glob", "Grep",
-                    "--append-system-prompt", CODEGRAPH_SYSTEM_PROMPT,
-                ])
+                mcp_servers.update(cgc_config["mcpServers"])
+                allowed_tools.append("mcp__codegraph__*")
+                sys_prompt_appends.append(CODEGRAPH_SYSTEM_PROMPT)
                 logger.info("[ClaudeProvider] CodeGraph MCP enabled for this turn")
             else:
                 logger.info(
                     "[ClaudeProvider] CodeGraph requested but unavailable "
                     "(not indexed / disabled / CLI missing); using file tools"
                 )
+
+        db_profile_id = (model_config or {}).get("dbProfileId")
+        if db_profile_id:
+            pg_config = self._build_postgres_mcp_config(db_profile_id)
+            if pg_config:
+                mcp_servers.update(pg_config["mcpServers"])
+                allowed_tools.append("mcp__db__*")
+                sys_prompt_appends.append(pg_config["systemPrompt"])
+                logger.info("[ClaudeProvider] Postgres MCP enabled (db profile %s)", db_profile_id)
+            else:
+                logger.info("[ClaudeProvider] DB profile %s not usable; skipping", db_profile_id)
+
+        if mcp_servers:
+            # --allowedTools is variadic, so it must be followed by another flag
+            # (--append-system-prompt) — never by the trailing positional message.
+            cmd.extend([
+                "--mcp-config", json.dumps({"mcpServers": mcp_servers}),
+                "--strict-mcp-config",
+                "--allowedTools", *allowed_tools, "Read", "Glob", "Grep",
+                "--append-system-prompt", "\n\n".join(sys_prompt_appends),
+            ])
 
         # Grant the CLI read access to attachment files that live outside the
         # run dir (e.g. images written under the project's .magestic-ai while the
