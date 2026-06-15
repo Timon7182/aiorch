@@ -1,4 +1,23 @@
 {
+  "preview": {
+    "title": "Run on server",
+    "deploy": "Deploy preview",
+    "redeploy": "Redeploy preview",
+    "promote": "Promote to static",
+    "stop": "Stop",
+    "lane": "lane",
+    "building": "Building…",
+    "deploying": "Deploying…",
+    "promoting": "Promoting…",
+    "running": "Running",
+    "failed": "Failed",
+    "stopped": "Stopped",
+    "promoted": "Promoted",
+    "promotedTo": "Promoted to",
+    "deployFailed": "Deploy failed",
+    "stopFailed": "Stop failed",
+    "promoteFailed": "Promote failed"
+  },
   "usage": {
     "title": "Token usage",
     "projectTitle": "Project token usage",

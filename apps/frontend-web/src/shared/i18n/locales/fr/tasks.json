@@ -1,4 +1,23 @@
 {
+  "preview": {
+    "title": "Exécuter sur le serveur",
+    "deploy": "Déployer un aperçu",
+    "redeploy": "Redéployer l'aperçu",
+    "promote": "Promouvoir en statique",
+    "stop": "Arrêter",
+    "lane": "voie",
+    "building": "Construction…",
+    "deploying": "Déploiement…",
+    "promoting": "Promotion…",
+    "running": "En cours d'exécution",
+    "failed": "Échec",
+    "stopped": "Arrêté",
+    "promoted": "Promu",
+    "promotedTo": "Promu vers",
+    "deployFailed": "Échec du déploiement",
+    "stopFailed": "Échec de l'arrêt",
+    "promoteFailed": "Échec de la promotion"
+  },
   "usage": {
     "title": "Consommation de tokens",
     "projectTitle": "Consommation de tokens du projet",

@@ -115,10 +115,16 @@ async def lifespan(app: FastAPI):
     await token_service.start()
     logger.info("ClaudeTokenService started")
 
+    # Reap expired preview deploys in the background so disposable previews
+    # don't accumulate on deploy hosts.
+    from .services import preview_reaper
+    preview_reaper.start()
+
     yield
 
     # Shutdown
     logger.info("Shutting down Magestic AI Web Server...")
+    preview_reaper.stop()
     await token_service.stop()
 
     # Stop any running language servers so they don't outlive the app.

@@ -130,6 +130,31 @@ export interface DiscoveredProject {
   has_claude_md: boolean;
 }
 
+export type PreviewStatus =
+  | 'none'
+  | 'building'
+  | 'deploying'
+  | 'running'
+  | 'failed'
+  | 'stopped'
+  | 'promoting'
+  | 'promoted';
+
+export interface PreviewState {
+  status: PreviewStatus;
+  lane?: 'A' | 'B' | string;
+  branch?: string;
+  ref?: string;
+  url?: string | null;
+  ip?: string | null;
+  port?: number | null;
+  db?: string | null;
+  staticUrl?: string | null;
+  error?: string | null;
+  startedAt?: number;
+  updatedAt?: number;
+}
+
 export interface API {
   // Project operations
   addProject: (projectPath: string) => Promise<IPCResult<Project>>;
@@ -181,6 +206,11 @@ export interface API {
     baseBranch?: string;
     targetRepo?: string;
   }) => Promise<IPCResult<{ prUrl: string; prNumber: number | null; branch: string; baseBranch: string }>>;
+  // Preview deploy ("Run on server")
+  deployPreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
+  getPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
+  stopPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
+  promotePreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
   getForkInfo: (projectPath: string) => Promise<IPCResult<{
     isFork: boolean;
     origin: string;

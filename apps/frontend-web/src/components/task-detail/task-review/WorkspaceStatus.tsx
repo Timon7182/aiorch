@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Checkbox } from '../../ui/checkbox';
+import { PreviewDeploy } from './PreviewDeploy';
 import { cn, isWebMode } from '../../../lib/utils';
 import type { WorktreeStatus, MergeConflict, MergeStats, GitConflictInfo, SupportedIDE, SupportedTerminal, Task, TaskLogs } from '../../../shared/types';
 import { useSettingsStore } from '../../../stores/settings-store';
@@ -627,6 +628,9 @@ export function WorkspaceStatus({
               <FolderX className="h-4 w-4" />
             </Button>
           </div>
+
+          {/* Run on server — isolated preview deploy of this build */}
+          <PreviewDeploy taskId={task.id} />
         </div>
       )}
     </div>

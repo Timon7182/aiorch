@@ -1401,6 +1401,18 @@ async def delete_task(task_id: str):
             detail="Task not found",
         )
 
+    # Best-effort: tear down any live preview so deleting a task doesn't leak a
+    # running container/DB/vhost on the deploy host.
+    try:
+        meta_file = spec_dir / "task_metadata.json"
+        if meta_file.exists():
+            preview = (json.loads(meta_file.read_text()).get("preview") or {})
+            if preview.get("status") in ("building", "deploying", "running", "promoting"):
+                from ..services import preview_deploy_service as pds
+                pds.stop_preview(task_id)
+    except Exception:
+        pass  # never block task deletion on teardown
+
     # Remove directory (recursively)
     import shutil
 
@@ -3340,6 +3352,81 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
             "baseBranch": base_branch,
         }
     }
+
+
+# --------------------------------------------------------------------------
+# Preview deploy ("Run on server") — build the task's worktree into an isolated
+# Docker stack on a target host and return a live URL/IP. See
+# services/preview_deploy_service.py and deploy/preview-runner.sh.
+# --------------------------------------------------------------------------
+
+
+class DeployPreviewOptions(BaseModel):
+    lane: Optional[str] = Field(None, description="Override lane (A or B); default derived from branch")
+
+
+class PromoteOptions(BaseModel):
+    lane: Optional[str] = Field(None, description="Override target static lane (A or B)")
+
+
+@router.post("/{task_id}/deploy-preview")
+async def deploy_preview(task_id: str, options: DeployPreviewOptions = None):
+    """Start an isolated preview deploy of the task's worktree. Returns immediately;
+    poll GET /deploy-preview for status (building -> deploying -> running/failed)."""
+    from ..services import preview_deploy_service as pds
+
+    if options is None:
+        options = DeployPreviewOptions()
+    try:
+        state = pds.deploy_preview(task_id, lane_override=options.lane)
+    except pds.PreviewError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"deploy-preview failed: {exc}"}
+    return {"success": True, "data": state}
+
+
+@router.get("/{task_id}/deploy-preview")
+async def get_deploy_preview(task_id: str):
+    """Current preview status + URL/IP for a task."""
+    from ..services import preview_deploy_service as pds
+
+    try:
+        state = pds.get_preview(task_id)
+    except pds.PreviewError as exc:
+        return {"success": False, "error": str(exc)}
+    return {"success": True, "data": state}
+
+
+@router.delete("/{task_id}/deploy-preview")
+async def stop_deploy_preview(task_id: str):
+    """Tear down a task's preview (compose down -v, drop DB, remove vhost)."""
+    from ..services import preview_deploy_service as pds
+
+    try:
+        state = pds.stop_preview(task_id)
+    except pds.PreviewError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"teardown failed: {exc}"}
+    return {"success": True, "data": state}
+
+
+@router.post("/{task_id}/promote")
+async def promote_preview(task_id: str, options: PromoteOptions = None):
+    """Promote a validated preview onto its branch's static lane, then tear the
+    ephemeral preview down."""
+    from ..services import preview_deploy_service as pds
+
+    if options is None:
+        options = PromoteOptions()
+    try:
+        state = pds.promote(task_id, lane_override=options.lane)
+    except pds.PreviewError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"promote failed: {exc}"}
+    return {"success": True, "data": state}
 
 
 @router.post("/{task_id}/worktree/merge")

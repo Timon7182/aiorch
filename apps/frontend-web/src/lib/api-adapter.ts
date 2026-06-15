@@ -355,6 +355,13 @@ export const webAPI: API & { _isWebMode: boolean } = {
   discardWorktree: (taskId: string) => post(`/tasks/${taskId}/worktree/discard`),
   createPRFromTask: (taskId: string, options?: { title?: string; body?: string; draft?: boolean; baseBranch?: string; targetRepo?: string }) =>
     post(`/tasks/${taskId}/worktree/create-pr`, options || {}),
+  // ========== Preview deploy ("Run on server") ==========
+  deployPreview: (taskId: string, options?: { lane?: string }) =>
+    post(`/tasks/${taskId}/deploy-preview`, options || {}),
+  getPreview: (taskId: string) => get(`/tasks/${taskId}/deploy-preview`),
+  stopPreview: (taskId: string) => del(`/tasks/${taskId}/deploy-preview`),
+  promotePreview: (taskId: string, options?: { lane?: string }) =>
+    post(`/tasks/${taskId}/promote`, options || {}),
   getForkInfo: (projectPath: string) =>
     get(`/github/fork-info?project_path=${encodeURIComponent(projectPath)}`),
   listWorktrees: (projectId: string, repo?: string) =>

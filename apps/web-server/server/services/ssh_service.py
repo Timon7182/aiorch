@@ -119,3 +119,52 @@ def run_deploy(profile: dict[str, Any], deploy_name: str) -> SshResult:
     if not isinstance(script, str) or not script.startswith("/"):
         raise SshError("deploy script path must be absolute")
     return _run(profile, shlex.quote(script), timeout=600)
+
+
+# Args are restricted to flags (--word) and "safe" values. Everything is also
+# shlex.quoted before hitting the shell, so this is defense-in-depth: it keeps
+# the allowlisted-script model honest (no operators, no substitution, no paths
+# with shell metacharacters sneaking through).
+import re as _re  # noqa: E402
+
+_FLAG_RE = _re.compile(r"^--[a-z][a-z0-9-]*$")
+# letters, digits, and a small set of path/value-safe punctuation
+_VALUE_RE = _re.compile(r"^[A-Za-z0-9_./:@=+,-]+$")
+
+
+def run_script(
+    profile: dict[str, Any],
+    deploy_name: str,
+    args: list[str] | None = None,
+    *,
+    timeout: int = 1800,
+) -> SshResult:
+    """Run an allowlisted deploy script WITH validated arguments.
+
+    Like run_deploy(), but appends a vetted argument vector. Each arg must be
+    either a ``--flag`` or a value matching a conservative safe charset; both are
+    then shlex.quoted. There is still no free-form command surface — the script
+    path comes only from profile.deploys[deploy_name].
+    """
+    deploys = profile.get("deploys") or {}
+    script = deploys.get(deploy_name)
+    if not script:
+        raise SshError(
+            f"deploy {deploy_name!r} not in profile allowlist; add it to "
+            f"profile.deploys[{deploy_name!r}] = '/abs/path/to/script.sh'"
+        )
+    if not isinstance(script, str) or not script.startswith("/"):
+        raise SshError("deploy script path must be absolute")
+
+    parts = [shlex.quote(script)]
+    for a in args or []:
+        if not isinstance(a, str) or not a:
+            raise SshError(f"invalid script argument: {a!r}")
+        if a.startswith("--"):
+            if not _FLAG_RE.match(a):
+                raise SshError(f"invalid flag argument: {a!r}")
+        elif not _VALUE_RE.match(a):
+            raise SshError(f"argument contains unsafe characters: {a!r}")
+        parts.append(shlex.quote(a))
+
+    return _run(profile, " ".join(parts), timeout=timeout)

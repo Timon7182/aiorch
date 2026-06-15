@@ -1,0 +1,34 @@
+{
+  "$comment": "Per-project preview-deploy config. Place at <project>/deploy.config.json or <project>/.magestic-ai/deploy.config.json. This example matches cts (CargoTrackingSystem: .NET backend + Node frontend + Postgres).",
+  "target": "preview-host",
+  "ship": "save-load",
+  "registry": "registry.gitlab.com/kazminerals-adhr/cts",
+  "exposure": "nginx-port",
+  "domain": "preview.cts.local",
+  "ttlHours": 24,
+  "maxConcurrent": 2,
+  "lanes": {
+    "A": ["main", "pre-prod"],
+    "B": ["test"]
+  },
+  "components": [
+    {
+      "name": "backend",
+      "build": { "dockerfile": "cts-backend/Dockerfile", "context": "cts-backend" },
+      "port": 5000,
+      "public": false,
+      "env": {}
+    },
+    {
+      "name": "frontend",
+      "build": { "dockerfile": "frontend/Dockerfile", "context": "frontend" },
+      "port": 5000,
+      "public": true,
+      "env": {}
+    }
+  ],
+  "services": {
+    "postgres": { "strategy": "clone", "image": "postgres:16" },
+    "minio": { "strategy": "shared" }
+  }
+}

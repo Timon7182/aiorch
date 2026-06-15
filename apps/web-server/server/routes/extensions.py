@@ -36,6 +36,10 @@ class ServerProfile(BaseModel):
     private_key_path: str | None = None
     logs: dict[str, str] = Field(default_factory=dict)
     deploys: dict[str, str] = Field(default_factory=dict)
+    # Container->host path prefixes for preview deploys, e.g.
+    # {"/home/magesticai/projects": "/home/saya/projects"}. Used by
+    # preview_deploy_service to translate worktree/config paths the runner sees.
+    host_path_map: dict[str, str] = Field(default_factory=dict)
     project: str | None = None
 
 
