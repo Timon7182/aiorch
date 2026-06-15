@@ -22,6 +22,9 @@ export function PreviewDeploy({ taskId }: PreviewDeployProps) {
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which golden DB the preview clones from: 'auto' = derive from branch,
+  // 'A' = main/pre-prod data, 'B' = test data.
+  const [lane, setLane] = useState<'auto' | 'A' | 'B'>('auto');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -64,7 +67,7 @@ export function PreviewDeploy({ taskId }: PreviewDeployProps) {
     setBusy(true);
     setError(null);
     try {
-      const res = await window.API.deployPreview(taskId);
+      const res = await window.API.deployPreview(taskId, lane === 'auto' ? undefined : { lane });
       if (res.success && res.data) {
         setPreview(res.data);
         startPolling();
@@ -170,6 +173,32 @@ export function PreviewDeploy({ taskId }: PreviewDeployProps) {
         <div className="flex items-start gap-1.5 text-xs text-destructive">
           <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span className="break-words">{error || preview?.error}</span>
+        </div>
+      )}
+
+      {/* DB source chooser — which golden the preview clones from */}
+      {showDeployButton && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">{t('tasks:preview.dbSource')}</span>
+          <div className="inline-flex rounded-md border border-border/60 overflow-hidden">
+            {([
+              ['auto', t('tasks:preview.laneAuto')],
+              ['A', t('tasks:preview.laneMain')],
+              ['B', t('tasks:preview.laneTest')],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setLane(value)}
+                className={cn(
+                  'px-2 py-0.5 transition-colors',
+                  lane === value ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

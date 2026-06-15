@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import { isLspLanguage } from '@/lib/lsp/languages';
+import { getAuthToken } from '@/lib/auth';
 
 // Heavy @codingame/monaco-languageclient stack — loaded only when an LSP file
 // (python/ts/js) is opened, so it stays out of the main bundle.
@@ -469,7 +470,14 @@ export function EditorPage({ projectPath }: EditorPageProps) {
               <button
                 className="flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors bg-muted text-muted-foreground hover:bg-accent ml-2"
                 onClick={() => {
-                  const params = new URLSearchParams({ path: activeTabData.path, root: projectPath });
+                  // window.open is a browser navigation with no Authorization
+                  // header, so the token must ride along as a query param —
+                  // the middleware and /files/serve both accept ?token=.
+                  const params = new URLSearchParams({
+                    path: activeTabData.path,
+                    root: projectPath,
+                    token: getAuthToken() ?? '',
+                  });
                   window.open(`/api/files/serve?${params.toString()}`, '_blank');
                 }}
                 title={t('common:buttons.openInBrowser')}
