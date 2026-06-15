@@ -22,17 +22,25 @@ REMOTE_REPO = "/home/saya/magestic"
 REMOTE_COMPOSE = f"{REMOTE_REPO}/.ops/compose.server.yml"
 COMPOSE_PROJECT = "magesticai-server"
 
+# Single source of truth: the fork. All changes + deploys flow through here.
+GIT_URL = "https://github.com/Timon7182/aiorch.git"
+GIT_BRANCH = "main"
+
 
 def ensure_repo(r: Remote) -> None:
     res = r.run(f"test -d {REMOTE_REPO}/.git && echo EXISTS || echo MISSING")
     if "EXISTS" in res.stdout:
-        print("[deploy] repo exists; fetching latest dev")
-        r.run(f"cd {REMOTE_REPO} && git fetch origin && git reset --hard origin/dev", timeout=120, check=True)
-    else:
-        print("[deploy] cloning MagesticAI dev branch")
-        r.run("rm -rf /tmp/magestic-clone")
+        print(f"[deploy] repo exists; fetching latest {GIT_BRANCH}")
+        # Make sure origin points at the single canonical repo, then hard-reset.
+        r.run(f"cd {REMOTE_REPO} && git remote set-url origin {GIT_URL}", timeout=30, check=True)
         r.run(
-            f"git clone --depth 30 -b dev https://github.com/dataseeek/MagesticAI.git {REMOTE_REPO}",
+            f"cd {REMOTE_REPO} && git fetch origin {GIT_BRANCH} && git reset --hard origin/{GIT_BRANCH}",
+            timeout=120, check=True,
+        )
+    else:
+        print(f"[deploy] cloning {GIT_URL} ({GIT_BRANCH})")
+        r.run(
+            f"git clone --depth 30 -b {GIT_BRANCH} {GIT_URL} {REMOTE_REPO}",
             timeout=180,
             check=True,
         )
