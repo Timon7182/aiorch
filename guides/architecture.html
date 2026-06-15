@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MagesticAI — Task Architecture</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #eaf6ff;
+    color: #0f172a;
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main {
+    display: flex;
+    justify-content: center;
+    padding: 24px 12px;
+  }
+  svg.flow { width: 100%; max-width: 1440px; height: auto; display: block; }
+
+  /* Annex below — contributor reference */
+  .annex {
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 0 24px 56px;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr;
+    gap: 18px;
+  }
+  .annex h2 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #475569;
+    font-weight: 700;
+  }
+  .annex .card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+  }
+  .annex table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .annex td {
+    padding: 6px 6px;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: top;
+    color: #334155;
+  }
+  .annex td:first-child {
+    white-space: nowrap;
+    color: #0284c7;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  .annex td .ask { color: #64748b; font-style: italic; }
+  .annex pre {
+    margin: 0;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 11.8px;
+    color: #1e293b;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    overflow-x: auto;
+    line-height: 1.55;
+  }
+  .annex pre .k { color: #0284c7; }
+  .annex pre .s { color: #047857; }
+  .annex pre .c { color: #94a3b8; font-style: italic; }
+  .annex ul.logs { margin: 0; padding: 0; list-style: none; font-size: 12.5px; }
+  .annex ul.logs li {
+    padding: 6px 0;
+    border-bottom: 1px solid #f1f5f9;
+    color: #334155;
+  }
+  .annex ul.logs li:last-child { border-bottom: none; }
+  .annex ul.logs code {
+    color: #0284c7;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: transparent;
+    padding: 0;
+  }
+  .annex .desc { color: #64748b; display: block; margin-top: 2px; font-size: 11.8px; }
+  @media (max-width: 1000px) { .annex { grid-template-columns: 1fr; } }
+
+  /* SMIL animations respected — disable on reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .flowdash { stroke-dasharray: none !important; }
+    .flowdash animate { display: none; }
+  }
+</style>
+</head>
+
+<body>
+
+<main>
+  <svg class="flow" viewBox="0 0 1440 880" xmlns="http://www.w3.org/2000/svg" fill="none">
+    <defs>
+      <linearGradient id="pageBg" x1="0" y1="0" x2="1440" y2="880" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#eaf6ff"/>
+        <stop offset="1" stop-color="#dbeafe"/>
+      </linearGradient>
+      <linearGradient id="heroLine" x1="84" y1="0" x2="1356" y2="0" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#0ea5e9"/>
+        <stop offset="0.55" stop-color="#f59e0b"/>
+        <stop offset="1" stop-color="#10b981"/>
+      </linearGradient>
+      <filter id="panelShadow" x="-20%" y="-20%" width="140%" height="160%">
+        <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.07"/>
+      </filter>
+      <filter id="softShadow" x="-20%" y="-20%" width="140%" height="160%">
+        <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.05"/>
+      </filter>
+      <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+        <path d="M0.8 0.8 L 6 4 L 0.8 7.2" stroke="#0284c7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </marker>
+      <marker id="arrowSmall" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto">
+        <path d="M0.6 0.6 L 5.5 3.5 L 0.6 6.4" stroke="#64748b" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </marker>
+      <marker id="arrowLoop" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+        <path d="M0.8 0.8 L 6 4 L 0.8 7.2" stroke="#ef4444" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </marker>
+
+      <style>
+        .title    { font: 700 32px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+        .subtitle { font: 500 15px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+        .section  { font: 700 20px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+        .body     { font: 500 13px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+        .small    { font: 500 12px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748b; }
+        .tag      { font: 700 10.5px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0.10em; }
+        .subtaskTitle { font: 700 12.5px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+        .subtaskBody  { font: 500 10.5px ui-monospace, "SF Mono", Menlo, Consolas, monospace; fill: #475569; }
+        .doneTag { font: 800 16px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #065f46; letter-spacing: 0.05em; }
+      </style>
+    </defs>
+
+    <!-- Background + frame -->
+    <rect width="1440" height="880" rx="20" fill="url(#pageBg)"/>
+    <rect x="28" y="28" width="1384" height="824" rx="18" fill="none" stroke="rgba(148,163,184,0.25)"/>
+
+    <!-- Subtle decorative circles (ocean) -->
+    <circle cx="1300" cy="120" r="120" fill="#bae6fd" opacity="0.32"/>
+    <circle cx="160" cy="780" r="140" fill="#a7f3d0" opacity="0.32"/>
+    <circle cx="1260" cy="760" r="90" fill="#fde68a" opacity="0.36"/>
+
+    <!-- ============================ HEADER ============================ -->
+    <text x="84" y="88" class="title"><tspan fill="#0284c7">MagesticAI</tspan> — End-to-End Task Architecture</text>
+    <text x="84" y="116" class="subtitle">Task creation → Spec pipeline → Planning → Plan review → Coder loop → AI QA → Human review → Done</text>
+    <rect x="84" y="132" width="1272" height="4" rx="2" fill="url(#heroLine)"/>
+
+    <!-- Legend chips -->
+    <g transform="translate(84, 154)">
+      <g>
+        <rect x="0" y="0" width="14" height="14" rx="3" fill="#e0f2fe" stroke="#0ea5e9" stroke-width="1.5"/>
+        <text x="20" y="11" class="small" fill="#475569">Phase</text>
+      </g>
+      <g transform="translate(80, 0)">
+        <rect x="0" y="0" width="14" height="14" rx="3" fill="#ffffff" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="3,2"/>
+        <text x="20" y="11" class="small" fill="#475569">Conditional</text>
+      </g>
+      <g transform="translate(190, 0)">
+        <rect x="0" y="0" width="14" height="14" rx="3" fill="#fff8e1" stroke="#f59e0b" stroke-width="1.5" transform="rotate(45 7 7)"/>
+        <text x="20" y="11" class="small" fill="#475569">Decision</text>
+      </g>
+      <g transform="translate(285, 0)">
+        <rect x="0" y="0" width="14" height="14" rx="3" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1.5"/>
+        <text x="20" y="11" class="small" fill="#475569">Human gate</text>
+      </g>
+      <g transform="translate(385, 0)">
+        <circle cx="7" cy="7" r="7" fill="none" stroke="#ef4444" stroke-width="1.5"/>
+        <text x="20" y="11" class="small" fill="#475569">Loop / retry</text>
+      </g>
+      <g transform="translate(485, 0)">
+        <circle cx="7" cy="7" r="7" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+        <text x="20" y="11" class="small" fill="#475569">Done</text>
+      </g>
+    </g>
+
+    <!-- ============================ FLOW LINES ============================ -->
+    <!-- Top row arrows (L→R) -->
+    <g class="flowdash" stroke="#0284c7" stroke-width="2" fill="none" stroke-dasharray="6 5">
+      <line x1="264"  y1="280" x2="320"  y2="280"/>
+      <line x1="480"  y1="280" x2="500"  y2="280" />
+      <line x1="920"  y1="280" x2="975"  y2="280"/>
+      <line x1="1135" y1="280" x2="1170" y2="280"/>
+      <animate attributeName="stroke-dashoffset" from="0" to="-22" dur="1.6s" repeatCount="indefinite"/>
+    </g>
+    <g fill="#0284c7">
+      <polygon points="314,275 314,285 322,280"/>
+      <polygon points="496,275 496,285 502,280"/>
+      <polygon points="969,275 969,285 977,280"/>
+      <polygon points="1164,275 1164,285 1172,280"/>
+    </g>
+
+    <!-- Vertical drop right side -->
+    <path class="flowdash" d="M 1260 340 L 1260 540" stroke="#0284c7" stroke-width="2" fill="none" stroke-dasharray="6 5">
+      <animate attributeName="stroke-dashoffset" from="0" to="-22" dur="1.6s" repeatCount="indefinite"/>
+    </path>
+    <polygon points="1255,534 1265,534 1260,544" fill="#0284c7"/>
+
+    <!-- Bottom row arrows (R→L) -->
+    <g class="flowdash" stroke="#0284c7" stroke-width="2" fill="none" stroke-dasharray="6 5">
+      <line x1="770"  y1="610" x2="730"  y2="610"/>
+      <line x1="620"  y1="610" x2="580"  y2="610"/>
+      <line x1="310"  y1="610" x2="270"  y2="610"/>
+      <line x1="160"  y1="610" x2="120"  y2="610"/>
+      <animate attributeName="stroke-dashoffset" from="0" to="22" dur="1.6s" repeatCount="indefinite"/>
+    </g>
+    <g fill="#0284c7">
+      <polygon points="736,605 736,615 728,610"/>
+      <polygon points="586,605 586,615 578,610"/>
+      <polygon points="276,605 276,615 268,610"/>
+      <polygon points="126,605 126,615 118,610"/>
+    </g>
+
+    <!-- ============================ 1. TASK INPUT ============================ -->
+    <g filter="url(#panelShadow)">
+      <rect x="84" y="216" width="180" height="128" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+      <rect x="84" y="216" width="8" height="128" rx="4" fill="#0ea5e9"/>
+    </g>
+    <rect x="108" y="232" width="96" height="22" rx="11" fill="#e0f2fe"/>
+    <text x="156" y="247" class="tag" fill="#0369a1" text-anchor="middle">TASK INPUT</text>
+    <text x="108" y="284" class="section">Step 1</text>
+    <text x="108" y="306" class="body">User submits task</text>
+    <text x="108" y="324" class="small">CLI · Web UI</text>
+
+    <!-- ============================ 2. COMPLEXITY (decision) ============================ -->
+    <polygon points="400,216 480,280 400,344 320,280" fill="#fff8e1" stroke="#f59e0b" stroke-width="2.2"/>
+    <rect x="362" y="244" width="76" height="20" rx="10" fill="#fde68a"/>
+    <text x="400" y="258" class="tag" fill="#92400e" text-anchor="middle">DECISION</text>
+    <text x="400" y="288" class="section" text-anchor="middle" font-size="16">Complexity</text>
+    <text x="400" y="306" class="small" text-anchor="middle">Lv 0–4</text>
+
+    <!-- ============================ 3. SPEC PIPELINE ============================ -->
+    <g filter="url(#panelShadow)">
+      <rect x="500" y="200" width="420" height="160" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+      <rect x="500" y="200" width="8" height="160" rx="4" fill="#0ea5e9"/>
+    </g>
+    <rect x="524" y="216" width="112" height="22" rx="11" fill="#e0f2fe"/>
+    <text x="580" y="231" class="tag" fill="#0369a1" text-anchor="middle">SPEC PIPELINE</text>
+    <text x="524" y="266" class="section">3 to 9 phases</text>
+    <text x="524" y="286" class="small">track-gated by complexity</text>
+
+    <!-- Phase chips row -->
+    <g>
+      <rect x="524" y="298" width="68" height="22" rx="11" fill="#e0f2fe"/>
+      <text x="558" y="313" class="small" fill="#0c4a6e" text-anchor="middle" font-weight="700">discovery</text>
+
+      <rect x="600" y="298" width="92" height="22" rx="11" fill="#e0f2fe"/>
+      <text x="646" y="313" class="small" fill="#0c4a6e" text-anchor="middle" font-weight="700">requirements</text>
+
+      <rect x="700" y="298" width="72" height="22" rx="11" fill="#ffffff" stroke="#0ea5e9" stroke-dasharray="3,2"/>
+      <text x="736" y="313" class="small" fill="#0369a1" text-anchor="middle">research</text>
+
+      <rect x="780" y="298" width="88" height="22" rx="11" fill="#ffffff" stroke="#0ea5e9" stroke-dasharray="3,2"/>
+      <text x="824" y="313" class="small" fill="#0369a1" text-anchor="middle">architecture</text>
+
+      <rect x="524" y="324" width="64" height="22" rx="11" fill="#e0f2fe"/>
+      <text x="556" y="339" class="small" fill="#0c4a6e" text-anchor="middle" font-weight="700">context</text>
+
+      <rect x="596" y="324" width="68" height="22" rx="11" fill="#e0f2fe"/>
+      <text x="630" y="339" class="small" fill="#0c4a6e" text-anchor="middle" font-weight="700">spec.md</text>
+
+      <rect x="672" y="324" width="92" height="22" rx="11" fill="#ffffff" stroke="#0ea5e9" stroke-dasharray="3,2"/>
+      <text x="718" y="339" class="small" fill="#0369a1" text-anchor="middle">self-critique</text>
+
+      <rect x="772" y="324" width="70" height="22" rx="11" fill="#e0f2fe"/>
+      <text x="807" y="339" class="small" fill="#0c4a6e" text-anchor="middle" font-weight="700">planning</text>
+
+      <rect x="850" y="324" width="62" height="22" rx="11" fill="#e0f2fe"/>
+      <text x="881" y="339" class="small" fill="#0c4a6e" text-anchor="middle" font-weight="700">validate</text>
+    </g>
+
+    <!-- ============================ 4. PLAN REVIEW (human gate) ============================ -->
+    <polygon points="1055,216 1135,280 1055,344 975,280" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2.2"/>
+    <rect x="1014" y="244" width="82" height="20" rx="10" fill="#ddd6fe"/>
+    <text x="1055" y="258" class="tag" fill="#5b21b6" text-anchor="middle">HUMAN GATE</text>
+    <text x="1055" y="288" class="section" text-anchor="middle" font-size="16">Plan review?</text>
+    <text x="1055" y="306" class="small" text-anchor="middle">optional</text>
+
+    <!-- ============================ 5. WORKTREE ============================ -->
+    <g filter="url(#panelShadow)">
+      <rect x="1170" y="216" width="180" height="128" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+      <rect x="1170" y="216" width="8" height="128" rx="4" fill="#0ea5e9"/>
+    </g>
+    <rect x="1194" y="232" width="84" height="22" rx="11" fill="#e0f2fe"/>
+    <text x="1236" y="247" class="tag" fill="#0369a1" text-anchor="middle">WORKTREE</text>
+    <text x="1194" y="284" class="section">Step 5</text>
+    <text x="1194" y="306" class="body">Isolated branch</text>
+    <text x="1194" y="324" class="small">.magestic-ai/worktrees/</text>
+
+    <!-- ============================ 6. CODER LOOP (BIG — subtask chain) ============================ -->
+    <g filter="url(#panelShadow)">
+      <rect x="770" y="540" width="500" height="160" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+      <rect x="770" y="540" width="8" height="160" rx="4" fill="#0ea5e9"/>
+    </g>
+    <rect x="794" y="556" width="92" height="22" rx="11" fill="#e0f2fe"/>
+    <text x="840" y="571" class="tag" fill="#0369a1" text-anchor="middle">CODER LOOP</text>
+    <text x="794" y="601" class="section">Step 6 · Alex</text>
+
+    <!-- Subtask sequence -->
+    <g>
+      <rect x="794" y="618" width="104" height="62" rx="8" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.4"/>
+      <text x="846" y="636" class="subtaskTitle" text-anchor="middle">subtask 1</text>
+      <text x="846" y="652" class="subtaskBody" text-anchor="middle">read CLAUDE.md</text>
+      <text x="846" y="668" class="subtaskBody" text-anchor="middle" fill="#64748b">discover</text>
+
+      <line x1="900" y1="649" x2="922" y2="649" stroke="#64748b" stroke-width="1.6" marker-end="url(#arrowSmall)"/>
+
+      <rect x="924" y="618" width="104" height="62" rx="8" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.4"/>
+      <text x="976" y="636" class="subtaskTitle" text-anchor="middle">subtask 2</text>
+      <text x="976" y="652" class="subtaskBody" text-anchor="middle">add /api/auth</text>
+      <text x="976" y="668" class="subtaskBody" text-anchor="middle" fill="#64748b">implement</text>
+
+      <line x1="1030" y1="649" x2="1052" y2="649" stroke="#64748b" stroke-width="1.6" marker-end="url(#arrowSmall)"/>
+
+      <rect x="1054" y="618" width="104" height="62" rx="8" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.4"/>
+      <text x="1106" y="636" class="subtaskTitle" text-anchor="middle">subtask 3</text>
+      <text x="1106" y="652" class="subtaskBody" text-anchor="middle">wire UI</text>
+      <text x="1106" y="668" class="subtaskBody" text-anchor="middle" fill="#64748b">integrate</text>
+
+      <line x1="1160" y1="649" x2="1182" y2="649" stroke="#64748b" stroke-width="1.6" marker-end="url(#arrowSmall)"/>
+
+      <rect x="1184" y="618" width="78" height="62" rx="8" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.4"/>
+      <text x="1223" y="636" class="subtaskTitle" text-anchor="middle">subtask 4</text>
+      <text x="1223" y="652" class="subtaskBody" text-anchor="middle">npm test</text>
+      <text x="1223" y="668" class="subtaskBody" text-anchor="middle" fill="#64748b">verify</text>
+    </g>
+
+    <!-- Retry arc -->
+    <path d="M 1262 680 C 1300 720, 740 720, 794 680" fill="none" stroke="#ef4444" stroke-width="1.8"
+          stroke-dasharray="6 4" marker-end="url(#arrowLoop)">
+      <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1.5s" repeatCount="indefinite"/>
+    </path>
+
+    <!-- ============================ 7. ALL DONE? ============================ -->
+    <polygon points="675,546 730,610 675,674 620,610" fill="#fff8e1" stroke="#f59e0b" stroke-width="2.2"/>
+    <rect x="641" y="572" width="68" height="20" rx="10" fill="#fde68a"/>
+    <text x="675" y="586" class="tag" fill="#92400e" text-anchor="middle">DECISION</text>
+    <text x="675" y="614" class="section" text-anchor="middle" font-size="15">All done?</text>
+
+    <!-- "no" loops back to coder loop -->
+    <path d="M 675 546 C 740 480, 1020 480, 1020 540" fill="none" stroke="#ef4444" stroke-width="1.8"
+          stroke-dasharray="6 4" marker-end="url(#arrowLoop)">
+      <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1.6s" repeatCount="indefinite"/>
+    </path>
+    <text x="848" y="476" class="small" fill="#ef4444" font-weight="700" text-anchor="middle">no — next subtask</text>
+
+    <!-- ============================ 8. AI QA LOOP ============================ -->
+    <g filter="url(#panelShadow)">
+      <rect x="310" y="540" width="270" height="160" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+      <rect x="310" y="540" width="8" height="160" rx="4" fill="#0ea5e9"/>
+    </g>
+    <rect x="334" y="556" width="76" height="22" rx="11" fill="#e0f2fe"/>
+    <text x="372" y="571" class="tag" fill="#0369a1" text-anchor="middle">QA LOOP</text>
+    <text x="334" y="601" class="section">Step 8</text>
+    <text x="334" y="621" class="small">Morgan ↔ Riley · ≤ 10 iter</text>
+
+    <!-- Reviewer + Fixer mini -->
+    <g>
+      <rect x="334" y="634" width="104" height="48" rx="8" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.4"/>
+      <text x="386" y="652" class="subtaskTitle" text-anchor="middle">Reviewer</text>
+      <text x="386" y="670" class="subtaskBody" text-anchor="middle">qa_reviewer.md</text>
+
+      <path d="M 438 658 C 462 658, 462 658, 460 658" stroke="#10b981" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+      <text x="468" y="654" class="small" fill="#047857" font-weight="700">yes</text>
+      <text x="468" y="668" class="small" fill="#475569">approve</text>
+
+      <rect x="460" y="634" width="104" height="48" rx="8" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.4" opacity="0"/>
+
+      <rect x="334" y="634" width="104" height="48" rx="8" fill="none" stroke="none"/>
+
+      <!-- Fixer -->
+      <rect x="334" y="694" width="104" height="22" rx="11" fill="#fee2e2"/>
+      <text x="386" y="709" class="tag" fill="#991b1b" text-anchor="middle">FIXER · qa_fixer.md</text>
+
+      <!-- arrows: reviewer ↔ fixer -->
+      <path d="M 386 682 L 386 692" stroke="#ef4444" stroke-width="1.4" stroke-dasharray="4 3" fill="none">
+        <animate attributeName="stroke-dashoffset" from="0" to="-14" dur="1.2s" repeatCount="indefinite"/>
+      </path>
+      <path d="M 320 705 L 308 705 L 308 658 L 332 658" stroke="#ef4444" stroke-width="1.4" stroke-dasharray="4 3" fill="none" marker-end="url(#arrowLoop)">
+        <animate attributeName="stroke-dashoffset" from="0" to="-14" dur="1.2s" repeatCount="indefinite"/>
+      </path>
+    </g>
+
+    <!-- ============================ 9. REVIEW & MERGE (human gate) ============================ -->
+    <polygon points="220,546 310,610 220,674 130,610" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2.2"/>
+    <rect x="179" y="574" width="82" height="20" rx="10" fill="#ddd6fe"/>
+    <text x="220" y="588" class="tag" fill="#5b21b6" text-anchor="middle">HUMAN GATE</text>
+    <text x="220" y="616" class="section" text-anchor="middle" font-size="15">Review &amp; merge</text>
+    <text x="220" y="634" class="small" text-anchor="middle">review · merge · discard</text>
+
+    <!-- ============================ 10. DONE ============================ -->
+    <g filter="url(#softShadow)">
+      <circle cx="84" cy="610" r="42" fill="#d1fae5" stroke="#10b981" stroke-width="2.5"/>
+      <circle cx="84" cy="610" r="42" fill="none" stroke="#10b981" stroke-width="2.5">
+        <animate attributeName="r" from="42" to="56" dur="2.4s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" from="0.5" to="0" dur="2.4s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <text x="84" y="616" class="doneTag" text-anchor="middle">DONE</text>
+
+    <!-- ============================ FOOTER STRIP ============================ -->
+    <text x="84" y="828" class="small" fill="#64748b">Artifacts persist under .magestic-ai/specs/&lt;id&gt;/  ·  WebSocket events stream live to the UI  ·  See annex below for prompts, subtask schema, and logs.</text>
+
+  </svg>
+</main>
+
+<section class="annex">
+
+  <!-- ============= PROMPTS ============= -->
+  <div class="card">
+    <h2>Prompts &amp; what each asks the model</h2>
+    <table>
+      <tr><td>spec_gatherer.md</td><td><span class="ask">"Understand what the user wants → structured requirements.json. Ask smart questions, produce valid JSON."</span></td></tr>
+      <tr><td>spec_researcher.md</td><td><span class="ask">"Validate external integrations and dependencies. Verify everything. Document findings."</span></td></tr>
+      <tr><td>architecture.md</td><td><span class="ask">"You are Winston, Principal Architect. Design ERD, OpenAPI, ADRs, Mermaid diagrams."</span></td></tr>
+      <tr><td>spec_writer.md</td><td><span class="ask">"Read gathered context, write complete spec.md. Synthesize into actionable spec."</span></td></tr>
+      <tr><td>spec_critic.md</td><td><span class="ask">"Critically review spec.md. Extended thinking max. Find problems before implementation."</span></td></tr>
+      <tr><td>complexity_assessor.md</td><td><span class="ask">"Determine the task's true complexity. Wrong complexity → failed implementation."</span></td></tr>
+      <tr><td>planner.md</td><td><span class="ask">"Create subtask-based implementation plan. Implementation order matters."</span></td></tr>
+      <tr><td>coder.md</td><td><span class="ask">"You are Alex. FRESH context. ONE subtask at a time. Complete. Verify. Move on."</span></td></tr>
+      <tr><td>coder_recovery.md</td><td><span class="ask">"Previous attempts failed. Try a different approach — don't repeat the same fix."</span></td></tr>
+      <tr><td>qa_reviewer.md</td><td><span class="ask">"You are Morgan. Verify acceptance criteria via real commands. If approved, the feature ships."</span></td></tr>
+      <tr><td>qa_fixer.md</td><td><span class="ask">"You are Riley. Fix exactly what QA found. Don't introduce new issues."</span></td></tr>
+      <tr><td>validation_fixer.md</td><td><span class="ask">"Artifact failed schema validation. Repair it. Return only valid JSON."</span></td></tr>
+    </table>
+  </div>
+
+  <!-- ============= SUBTASKS ============= -->
+  <div class="card">
+    <h2>Subtasks — implementation_plan.json</h2>
+    <pre><span class="c">// stories → subtasks, statuses track per-attempt</span>
+{
+  <span class="k">"stories"</span>: [{
+    <span class="k">"id"</span>: <span class="s">"story-1"</span>,
+    <span class="k">"title"</span>: <span class="s">"User authentication"</span>,
+    <span class="k">"acceptance_criteria"</span>: [
+      <span class="s">"User can sign up with email"</span>,
+      <span class="s">"Session persists across reload"</span>
+    ],
+    <span class="k">"tech_context"</span>: {
+      <span class="k">"stack"</span>: <span class="s">"Next.js · NextAuth"</span>
+    },
+    <span class="k">"subtasks"</span>: [{
+      <span class="k">"id"</span>: <span class="s">"sub-1.1"</span>,
+      <span class="k">"title"</span>: <span class="s">"Add /api/auth route"</span>,
+      <span class="k">"files"</span>: [<span class="s">"app/api/auth/*"</span>],
+      <span class="k">"verification"</span>: {
+        <span class="k">"type"</span>: <span class="s">"command"</span>,
+        <span class="k">"run"</span>: <span class="s">"npm test auth"</span>
+      },
+      <span class="k">"status"</span>: <span class="s">"completed"</span>,
+      <span class="k">"attempts"</span>: 1
+    }]
+  }]
+}</pre>
+    <p style="margin:10px 0 0; font-size:11.8px; color:#64748b;">
+      <strong style="color:#0f172a;">Status:</strong>
+      <code style="color:#0284c7;">pending</code> →
+      <code style="color:#b45309;">in_progress</code> →
+      <code style="color:#047857;">completed</code> ·
+      or → <code style="color:#b91c1c;">stuck</code> after 3 failed attempts.
+    </p>
+  </div>
+
+  <!-- ============= LOGS / ARTIFACTS ============= -->
+  <div class="card">
+    <h2>Logs &amp; artifacts</h2>
+    <ul class="logs">
+      <li><code>spec.md</code><span class="desc">Spec document written by spec_writer.</span></li>
+      <li><code>requirements.json</code><span class="desc">Structured user requirements + acceptance.</span></li>
+      <li><code>context.json</code><span class="desc">Relevant files / patterns / imports.</span></li>
+      <li><code>architecture.json</code><span class="desc">ERD · OpenAPI · ADRs · Mermaid (Lv 3+ only).</span></li>
+      <li><code>implementation_plan.json</code><span class="desc">Stories + subtasks + statuses (single source of truth).</span></li>
+      <li><code>build-progress.txt</code><span class="desc">Append-only line per completed subtask. Streamed to UI.</span></li>
+      <li><code>memory/attempt_history.json</code><span class="desc">Per-subtask attempt log — feeds coder_recovery.md.</span></li>
+      <li><code>qa_report.md</code><span class="desc">QA reviewer verdict (approved / rejected + issues).</span></li>
+      <li><code>QA_FIX_REQUEST.md</code><span class="desc">Issues for the fixer (consumed, then deleted).</span></li>
+      <li><code>QA_ESCALATION.md</code><span class="desc">Same issue recurs 3× → human escalation.</span></li>
+      <li><code>complexity_assessment.json</code><span class="desc">bmad_level · track · phases_to_run.</span></li>
+      <li style="border-top:1px solid #f1f5f9; padding-top:8px; margin-top:4px;"><strong style="color:#0f172a;">WebSocket events</strong><span class="desc"><code>phase:*</code>, <code>task:status</code>, <code>build:progress</code> — live UI updates.</span></li>
+    </ul>
+  </div>
+
+</section>
+
+</body>
+</html>

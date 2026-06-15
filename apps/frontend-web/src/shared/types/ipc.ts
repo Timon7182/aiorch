@@ -600,6 +600,7 @@ export interface API {
   checkGitStatus: (projectPath: string) => Promise<IPCResult<GitStatus>>;
   getGitRepos: (projectPath: string) => Promise<IPCResult<GitRepoInfo[]>>;
   initializeGit: (projectPath: string) => Promise<IPCResult<InitializationResult>>;
+  cloneGitRepo: (projectPath: string, url: string) => Promise<IPCResult<InitializationResult>>;
 
   // Ollama model detection operations
   checkOllamaStatus: (baseUrl?: string) => Promise<IPCResult<{
