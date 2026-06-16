@@ -177,8 +177,12 @@ class MultiRepoWorkspace:
 
     @staticmethod
     def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        # safe.directory=* so git works on repos owned by a different uid than
+        # the process (dockerized deploy: the web/agent runs as one uid while a
+        # bind-mounted child repo like cts/frontend is owned by another). Without
+        # it git aborts with "detected dubious ownership" and worktree add fails.
         return subprocess.run(
-            ["git", *args],
+            ["git", "-c", "safe.directory=*", *args],
             cwd=str(cwd),
             capture_output=True,
             text=True,

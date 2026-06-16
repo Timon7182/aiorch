@@ -110,9 +110,12 @@ def resolve_task(task_id: str) -> TaskRef:
 
 
 def _git(args: list[str], cwd: Path) -> str | None:
+    # safe.directory=* — bind-mounted child repos can be owned by a different uid
+    # than this process; without it git aborts with "dubious ownership".
     try:
         r = subprocess.run(
-            ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=20
+            ["git", "-c", "safe.directory=*", *args],
+            cwd=str(cwd), capture_output=True, text=True, timeout=20,
         )
     except Exception:
         return None
@@ -160,29 +163,11 @@ def _composite_worktrees(worktree_path: Path) -> list[dict[str, Any]]:
 
 
 def _branch_of(path: Path) -> str:
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(path), capture_output=True, text=True, timeout=10,
-        )
-        if r.returncode == 0:
-            return r.stdout.strip()
-    except Exception:
-        pass
-    return ""
+    return _git(["rev-parse", "--abbrev-ref", "HEAD"], path) or ""
 
 
 def _short_sha(path: Path) -> str:
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(path), capture_output=True, text=True, timeout=10,
-        )
-        if r.returncode == 0:
-            return r.stdout.strip()
-    except Exception:
-        pass
-    return ""
+    return _git(["rev-parse", "--short", "HEAD"], path) or ""
 
 
 # ---------------------------------------------------------------------------

@@ -1888,7 +1888,7 @@ async def get_worktree_merge_preview(task_id: str):
         repo_conflicts: list[str] = []
         try:
             mt = _sp.run(
-                ["git", "merge-tree", "--write-tree", base, branch],
+                ["git", "-c", "safe.directory=*", "merge-tree", "--write-tree", base, branch],
                 cwd=str(repo), capture_output=True, text=True,
             )
             out = (mt.stdout or "") + (mt.stderr or "")
@@ -3398,12 +3398,18 @@ async def promote_preview(task_id: str, options: PromoteOptions = None):
 
 
 def _git_out(args: list[str], cwd: Path) -> str | None:
-    """Run a git command, return stripped stdout or None on failure."""
+    """Run a git command, return stripped stdout or None on failure.
+
+    Uses safe.directory=* so git works on bind-mounted repos owned by a
+    different uid than the web process (dockerized deploy) — without it git
+    aborts with "detected dubious ownership".
+    """
     import subprocess
 
     try:
         res = subprocess.run(
-            ["git", *args], cwd=str(cwd), capture_output=True, text=True
+            ["git", "-c", "safe.directory=*", *args],
+            cwd=str(cwd), capture_output=True, text=True,
         )
     except OSError:
         return None
@@ -3557,7 +3563,7 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
                 except OSError:
                     pass
 
-        merge_cmd = ["git", "merge", branch]
+        merge_cmd = ["git", "-c", "safe.directory=*", "merge", branch]
         if options.noCommit:
             merge_cmd.append("--no-commit")
         try:
@@ -3585,12 +3591,12 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
         worktree_deleted = branch_deleted = False
         if not options.noCommit:
             cleanup = subprocess.run(
-                ["git", "worktree", "remove", str(worktree), "--force"],
+                ["git", "-c", "safe.directory=*", "worktree", "remove", str(worktree), "--force"],
                 cwd=str(repo), capture_output=True, text=True,
             )
             worktree_deleted = cleanup.returncode == 0
             br = subprocess.run(
-                ["git", "branch", "-d", branch],
+                ["git", "-c", "safe.directory=*", "branch", "-d", branch],
                 cwd=str(repo), capture_output=True, text=True,
             )
             branch_deleted = br.returncode == 0

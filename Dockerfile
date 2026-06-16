@@ -130,7 +130,13 @@ RUN /home/projects/MagesticAI/.venv/bin/pip install --no-cache-dir \
 # the user who started the task) so commits ship under the human's identity,
 # not this placeholder.
 RUN git config --global user.name "Magestic Agent" && \
-    git config --global user.email "agent@magestic.local"
+    git config --global user.email "agent@magestic.local" && \
+    git config --system --add safe.directory '*'
+
+# Bind-mounted project repos can be owned by a different uid than the runtime
+# user (host saya/ubuntu vs container magesticai). safe.directory=* (system-wide
+# so it applies to every user) stops git aborting with "detected dubious
+# ownership" on worktree add / merge — essential for multi-repo composite builds.
 
 # Create data directory for persistent state
 RUN mkdir -p /home/magesticai/.magestic-ai
