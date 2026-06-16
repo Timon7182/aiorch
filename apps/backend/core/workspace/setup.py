@@ -262,7 +262,7 @@ def setup_workspace(
     # repo_dir always wins (honor the user's deliberate single-repo choice);
     # otherwise >1 explicit repo_dirs, or (nothing chosen) a project that
     # resolves to multiple repos, triggers the composite path.
-    from multi_repo import discover_repos
+    from core.multi_repo import discover_repos
 
     multi_set: list[Path] | None = None
     if repo_dirs and len(repo_dirs) > 1:
@@ -345,7 +345,7 @@ def _setup_multi_repo_workspace(
     manager is a :class:`MultiRepoWorkspace` that duck-types the slice of
     ``WorktreeManager`` finalization needs.
     """
-    from multi_repo import MultiRepoWorkspace
+    from core.multi_repo import MultiRepoWorkspace
 
     print()
     print_status(
