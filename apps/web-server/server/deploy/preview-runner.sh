@@ -312,11 +312,19 @@ EOF
   if [[ -n "${ARG_FRONTEND_SRC:-}" && "$front_changed" == "true" ]]; then
     log "frontend changed — building SPA from $ARG_FRONTEND_SRC"
     need npm
-    ( cd "$ARG_FRONTEND_SRC" \
+    # The composite worktree is owned by the container user (which creates it),
+    # but the runner builds as a different user — so copy the source into a
+    # runner-owned dir before npm install / vite build (which write node_modules
+    # and dist). Built with RELATIVE API URLs so the SPA is same-origin behind
+    # the nginx /v1,/v2 proxy below.
+    local fbuild="${sdir}/frontend-build"
+    rm -rf "$fbuild"; mkdir -p "$fbuild"
+    cp -a "${ARG_FRONTEND_SRC}/." "$fbuild/"
+    ( cd "$fbuild" \
         && npm install \
         && VITE_SERVER_URL=/v1 VITE_SERVER_URL_V2=/v2 VITE_FILE_URL=/v1/files/upload npx vite build ) >&2 \
-      || die "frontend build failed in $ARG_FRONTEND_SRC"
-    serve_dist="${ARG_FRONTEND_SRC}/dist"
+      || die "frontend build failed in $fbuild"
+    serve_dist="${fbuild}/dist"
   fi
   [[ -d "$serve_dist" ]] || die "frontend dist not found: $serve_dist (build it: npm install && VITE_SERVER_URL=/v1 npx vite build)"
 
