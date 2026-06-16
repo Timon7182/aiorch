@@ -27,6 +27,93 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def fetch_base_start_point(repo_dir: Path, base_branch: str) -> str:
+    """Pull the latest remote state of ``base_branch`` into the local ref, then
+    return ``base_branch`` (the start point a new worktree is cut from).
+
+    So a new task starts from the latest pushed state of its base branch (main,
+    or whatever branch the task selected) instead of a possibly-stale local
+    checkout — and the local base stays a single consistent ref, so change
+    detection (``base..HEAD``) and merge-back remain correct.
+
+    How it "pulls" without disturbing work:
+      * If the base branch is the one checked out in the repo's main worktree,
+        fast-forward it (``merge --ff-only``) — only when the tree is clean, so
+        local edits are never touched. A non-fast-forward (diverged) base is left
+        alone.
+      * Otherwise the base isn't checked out here, so its ref is moved straight
+        to the remote tip (only when that's a fast-forward).
+
+    Best-effort by design: no remote, fetch failure, missing credentials, a dirty
+    tree, or a diverged base all fall back to the existing local base so a task
+    is never blocked. ``GIT_TERMINAL_PROMPT=0`` + a timeout make a private repo
+    without cached credentials fail fast instead of hanging on a prompt. Set
+    ``MAGESTIC_FETCH_BEFORE_BUILD=0`` to skip the fetch entirely.
+    """
+    if os.getenv("MAGESTIC_FETCH_BEFORE_BUILD", "1").lower() in ("0", "false", "no"):
+        return base_branch
+
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+    def _git(args: list[str]):
+        try:
+            return subprocess.run(
+                ["git", "-c", "safe.directory=*", *args],
+                cwd=str(repo_dir), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", env=env, timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+
+    # Pick a remote: prefer origin, else the first configured one.
+    remote = "origin"
+    got = _git(["remote", "get-url", "origin"])
+    if got is None or got.returncode != 0:
+        remotes_res = _git(["remote"])
+        remotes = remotes_res.stdout.split() if remotes_res else []
+        if not remotes:
+            return base_branch  # no remote — local-only repo
+        remote = remotes[0]
+
+    fetched = _git(["fetch", remote, base_branch])
+    if fetched is None or fetched.returncode != 0:
+        detail = (fetched.stderr or "").strip()[:200] if fetched else "timeout"
+        logger.info(
+            "[worktree] fetch %s %s failed (%s); using local base",
+            remote, base_branch, detail,
+        )
+        return base_branch
+
+    tracking = f"{remote}/{base_branch}"
+    if not _git(["rev-parse", "--verify", "--quiet", f"refs/remotes/{tracking}"]) \
+            or _git(["rev-parse", "--verify", "--quiet", f"refs/remotes/{tracking}"]).returncode != 0:
+        return base_branch  # remote doesn't have this branch
+
+    current = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    current_branch = current.stdout.strip() if current else ""
+
+    if current_branch == base_branch:
+        # Base is checked out here: fast-forward it, but only on a clean tree.
+        dirty = _git(["status", "--porcelain"])
+        if dirty is not None and not dirty.stdout.strip():
+            ff = _git(["merge", "--ff-only", tracking])
+            if ff and ff.returncode == 0:
+                logger.info("[worktree] fast-forwarded %s to %s", base_branch, tracking)
+            else:
+                logger.info("[worktree] %s not fast-forwardable; using local base", base_branch)
+        else:
+            logger.info("[worktree] %s tree dirty; not pulling, using local base", base_branch)
+    else:
+        # Base not checked out here — move its ref to the remote tip if that's a
+        # fast-forward (never rewrite a diverged local base).
+        anc = _git(["merge-base", "--is-ancestor", base_branch, tracking])
+        if anc is not None and anc.returncode == 0:
+            _git(["update-ref", f"refs/heads/{base_branch}", tracking])
+            logger.info("[worktree] advanced ref %s to %s", base_branch, tracking)
+
+    return base_branch
+
+
 class WorktreeError(Exception):
     """Error during worktree operations."""
 
@@ -438,9 +525,13 @@ class WorktreeManager:
         # Delete branch if it exists (from previous attempt)
         self._run_git(["branch", "-D", branch_name])
 
-        # Create worktree with new branch from base
+        # Cut from the latest remote state of the base branch when reachable
+        # (falls back to the local base if there's no remote / fetch fails).
+        start_point = fetch_base_start_point(self.project_dir, self.base_branch)
+
+        # Create worktree with new branch from the resolved start point
         result = self._run_git(
-            ["worktree", "add", "-b", branch_name, str(worktree_path), self.base_branch]
+            ["worktree", "add", "-b", branch_name, str(worktree_path), start_point]
         )
 
         if result.returncode != 0:

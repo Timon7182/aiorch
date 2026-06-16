@@ -39,7 +39,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from worktree import WorktreeInfo
+from worktree import WorktreeInfo, fetch_base_start_point
 
 logger = logging.getLogger(__name__)
 
@@ -296,8 +296,12 @@ class MultiRepoWorkspace:
         # Drop a leftover branch from a crashed run so -b doesn't collide.
         self._run_git(["branch", "-D", branch_name], repo_path)
 
+        # Cut from the latest remote state of this repo's base branch when
+        # reachable (falls back to local base if no remote / fetch fails).
+        start_point = fetch_base_start_point(repo_path, base)
+
         res = self._run_git(
-            ["worktree", "add", "-b", branch_name, str(wt_path), base], repo_path
+            ["worktree", "add", "-b", branch_name, str(wt_path), start_point], repo_path
         )
         if res.returncode != 0:
             raise MultiRepoError(
