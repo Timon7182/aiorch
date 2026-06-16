@@ -234,6 +234,7 @@ export interface TaskMetadata {
   // Git/Worktree configuration
   baseBranch?: string;  // Override base branch for this task's worktree
   repoPath?: string;    // Target git repo for multi-repo projects (absolute path)
+  repoPaths?: string[]; // Multiple repos a single task spans (composite build); takes precedence over repoPath
   customBranchName?: string;  // Custom branch name for this task's worktree (e.g. "hotfix/32_task"); defaults to "feature/{spec}"
 
   // Execution mode
@@ -511,4 +512,5 @@ export interface TaskStartOptions {
   model?: string;
   baseBranch?: string; // Override base branch for worktree creation
   repoPath?: string; // Target git repo for multi-repo projects (absolute path)
+  repoPaths?: string[]; // Multiple repos a single task spans (composite build)
 }

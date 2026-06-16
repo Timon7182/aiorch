@@ -93,6 +93,10 @@ export function TaskCreationWizard({
   // Git options state
   // Use a special value to represent "use project default" since Radix UI Select doesn't allow empty string values
   const PROJECT_DEFAULT_BRANCH = '__project_default__';
+  // Sentinel for "build every repo in this project" (the default for multi-repo
+  // projects). Sends repoPaths=[all child repos] so one task spans backend +
+  // frontend together; any other value targets that single repo via repoPath.
+  const ALL_REPOS = '__all__';
   const [branches, setBranches] = useState<string[]>([]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string>(PROJECT_DEFAULT_BRANCH);
@@ -244,11 +248,14 @@ export function TaskCreationWizard({
         // child repos), default the selection to the first child so branches
         // load for a real repo instead of the empty parent.
         const isRootRepo = result.data.length === 1 && result.data[0].isRoot;
-        if (result.data.length > 0 && !isRootRepo) {
+        if (result.data.length > 1) {
+          // Multi-repo project: default to building ALL repos together so a
+          // cross-cutting feature lands backend + frontend in one task. Surface
+          // the picker up front so the choice is visible.
+          setSelectedRepo(ALL_REPOS);
+          setShowGitOptions(true);
+        } else if (result.data.length > 0 && !isRootRepo) {
           setSelectedRepo(result.data[0].path);
-          // Surface the repo/branch picker up front for multi-repo projects so
-          // the choice is visible instead of hidden behind the collapsed toggle.
-          if (result.data.length > 1) setShowGitOptions(true);
         }
       }
     } catch (err) {
@@ -256,8 +263,16 @@ export function TaskCreationWizard({
     }
   };
 
+  // The concrete repo to read branches from. For the "all repos" selection
+  // there's no single repo, so fall back to the first child for branch display.
+  const gitRepoForBranches = (): string => {
+    if (selectedRepo && selectedRepo !== ALL_REPOS) return selectedRepo;
+    const firstChild = repos.find((r) => !r.isRoot);
+    return firstChild?.path || projectPath || '';
+  };
+
   const fetchBranches = async () => {
-    const repoPath = selectedRepo || projectPath;
+    const repoPath = gitRepoForBranches();
     if (!repoPath) return;
 
     setIsLoadingBranches(true);
@@ -274,7 +289,7 @@ export function TaskCreationWizard({
   };
 
   const fetchProjectDefaultBranch = async () => {
-    const repoPath = selectedRepo || projectPath;
+    const repoPath = gitRepoForBranches();
     if (!repoPath) return;
 
     try {
@@ -718,9 +733,15 @@ export function TaskCreationWizard({
       if (baseBranch && baseBranch !== PROJECT_DEFAULT_BRANCH) metadata.baseBranch = baseBranch;
       // Optional custom worktree branch name (e.g. "hotfix/32_task").
       if (customBranchName.trim()) metadata.customBranchName = customBranchName.trim();
-      // For multi-repo projects, record which repo this task targets so the
-      // build creates its worktree from the right repository.
-      if (selectedRepo) metadata.repoPath = selectedRepo;
+      // For multi-repo projects, record which repo(s) this task targets so the
+      // build creates worktrees from the right repositories. "All repos" sends a
+      // repoPaths list (composite build spanning every child repo); a single
+      // choice sends repoPath as before.
+      if (selectedRepo === ALL_REPOS) {
+        metadata.repoPaths = repos.filter((r) => !r.isRoot).map((r) => r.path);
+      } else if (selectedRepo) {
+        metadata.repoPath = selectedRepo;
+      }
       // Execution mode: 'quick' uses simplified prompts (~70% fewer tokens)
       if (mode) metadata.mode = mode;
       // Skills: inject selected skills for AI context during execution
@@ -1286,6 +1307,9 @@ export function TaskCreationWizard({
                       <SelectValue placeholder="Select repository" />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value={ALL_REPOS}>
+                        All repositories ({repos.filter((r) => !r.isRoot).map((r) => r.name).join(' + ')})
+                      </SelectItem>
                       {repos.map((repo) => (
                         <SelectItem key={repo.path} value={repo.path}>
                           {repo.name}
@@ -1294,7 +1318,8 @@ export function TaskCreationWizard({
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    This project contains multiple git repositories. Choose which one this task should change.
+                    This project contains multiple git repositories. Build them all together
+                    (the task spans every repo) or pick a single one.
                   </p>
                 </div>
               )}

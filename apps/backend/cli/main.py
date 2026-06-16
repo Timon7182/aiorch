@@ -412,6 +412,15 @@ def main() -> None:
     resolved_repo = args.repo_path or task_meta.get("repoPath")
     resolved_repo_dir = Path(resolved_repo) if resolved_repo else None
 
+    # Multi-repo: a task may span several repos. ``repoPaths`` (set at creation
+    # for multi-repo projects) takes precedence; an explicit single ``repoPath``
+    # forces single-repo mode. When neither is set, setup_workspace auto-detects
+    # the project's repos and goes composite only if there's more than one.
+    repo_paths_meta = task_meta.get("repoPaths")
+    resolved_repo_dirs = None
+    if repo_paths_meta and isinstance(repo_paths_meta, list) and not resolved_repo:
+        resolved_repo_dirs = [Path(p) for p in repo_paths_meta if p]
+
     # Normal build flow
     handle_build_command(
         project_dir=project_dir,
@@ -426,6 +435,7 @@ def main() -> None:
         force_bypass_approval=args.force,
         base_branch=resolved_base_branch,
         repo_dir=resolved_repo_dir,
+        repo_dirs=resolved_repo_dirs,
     )
 
 

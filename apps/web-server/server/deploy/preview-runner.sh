@@ -94,15 +94,23 @@ psql_admin() { PGDATABASE="${PGADMIN_DB:-postgres}" psql -v ON_ERROR_STOP=1 -qtA
 # Arg parsing
 # ---------------------------------------------------------------------------
 ARG_TASK=""; ARG_LANE=""; ARG_SRC=""; ARG_CONFIG=""; ARG_REF=""; ARG_TTL=""
+# Multi-repo / change-aware deploy: per-repo source paths + "did it change" flags.
+# When a half didn't change, the cts recipe reuses the static lane's artifact
+# instead of rebuilding it. Empty/unset means "single-repo, treat as changed".
+ARG_BACKEND_SRC=""; ARG_FRONTEND_SRC=""; ARG_BACKEND_CHANGED=""; ARG_FRONTEND_CHANGED=""
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --task)       ARG_TASK="${2:-}"; shift 2;;
-      --lane)       ARG_LANE="${2:-}"; shift 2;;
-      --src)        ARG_SRC="${2:-}"; shift 2;;
-      --config)     ARG_CONFIG="${2:-}"; shift 2;;
-      --ref)        ARG_REF="${2:-}"; shift 2;;
-      --ttl-hours)  ARG_TTL="${2:-}"; shift 2;;
+      --task)              ARG_TASK="${2:-}"; shift 2;;
+      --lane)              ARG_LANE="${2:-}"; shift 2;;
+      --src)               ARG_SRC="${2:-}"; shift 2;;
+      --config)            ARG_CONFIG="${2:-}"; shift 2;;
+      --ref)               ARG_REF="${2:-}"; shift 2;;
+      --ttl-hours)         ARG_TTL="${2:-}"; shift 2;;
+      --backend-src)       ARG_BACKEND_SRC="${2:-}"; shift 2;;
+      --frontend-src)      ARG_FRONTEND_SRC="${2:-}"; shift 2;;
+      --backend-changed)   ARG_BACKEND_CHANGED="${2:-}"; shift 2;;
+      --frontend-changed)  ARG_FRONTEND_CHANGED="${2:-}"; shift 2;;
       *) die "unknown argument: $1";;
     esac
   done
@@ -249,53 +257,91 @@ cmd_deploy_cts() {
   net="${PREVIEW_DOCKER_NETWORK:-cts-static}"
   front_dist=$(jq -r '.cts.frontendDist // "/home/saya/projects/cts/frontend/dist"' "$ARG_CONFIG")
   back_df=$(jq -r '.cts.backendDockerfile // "Dockerfile"' "$ARG_CONFIG")
-  [[ -d "$front_dist" ]] || die "frontend dist not found: $front_dist (build it: npm install && VITE_SERVER_URL=/v1 npx vite build)"
-  [[ -f "${ARG_SRC}/${back_df}" ]] || die "backend Dockerfile not found: ${ARG_SRC}/${back_df}"
 
-  # 1. own main DB cloned from the lane golden; Identity/Hangfire shared with the lane.
-  db_clone_from_golden "$dbname" "$golden"
+  # Change-aware inputs. For a single-repo task the per-repo flags are unset, so
+  # both halves default to "changed" and the recipe behaves exactly as before.
+  # For a composite task the service passes the backend/frontend worktree paths
+  # and whether each changed — unchanged halves reuse the static lane's artifact.
+  local backend_src back_changed front_changed serve_dist backend_target
+  backend_src="${ARG_BACKEND_SRC:-$ARG_SRC}"
+  back_changed="${ARG_BACKEND_CHANGED:-true}"
+  front_changed="${ARG_FRONTEND_CHANGED:-true}"
 
-  # 2. build the task's backend from the worktree, stripping the corporate proxy ENV
-  #    (unreachable off the corp network; the host reaches nuget.org/telerik directly).
-  log "building backend image preview-${ARG_TASK}-backend from $ARG_SRC"
-  sed -E '/ENV (HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)/d' "${ARG_SRC}/${back_df}" > "${sdir}/backend.Dockerfile"
-  docker build -f "${sdir}/backend.Dockerfile" -t "preview-${ARG_TASK}-backend:latest" "$ARG_SRC" >&2
+  # ---- Backend: rebuild from source if it changed, else reuse the lane's. ----
+  if [[ "$back_changed" == "false" ]]; then
+    backend_target="cts-static-${lane_lc}-backend"
+    if docker inspect "$backend_target" >/dev/null 2>&1; then
+      log "backend unchanged — reusing lane backend container $backend_target (sharing lane DB)"
+      dbname="cts_static_${lane_lc}"   # reuse the lane's main DB; nothing to clone
+      bport=""
+    else
+      log "backend marked unchanged but lane backend $backend_target not running — building from source"
+      back_changed="true"
+    fi
+  fi
 
-  # 3. run backend (connection strings via env-file; password never on argv).
-  bport=$(alloc_port)
-  cat > "${sdir}/backend.env" <<EOF
+  if [[ "$back_changed" != "false" ]]; then
+    [[ -f "${backend_src}/${back_df}" ]] || die "backend Dockerfile not found: ${backend_src}/${back_df}"
+    # own main DB cloned from the lane golden; Identity/Hangfire shared with the lane.
+    db_clone_from_golden "$dbname" "$golden"
+    # build the task's backend from the worktree, stripping the corporate proxy ENV
+    # (unreachable off the corp network; the host reaches nuget.org/telerik directly).
+    log "building backend image preview-${ARG_TASK}-backend from $backend_src"
+    sed -E '/ENV (HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)/d' "${backend_src}/${back_df}" > "${sdir}/backend.Dockerfile"
+    docker build -f "${sdir}/backend.Dockerfile" -t "preview-${ARG_TASK}-backend:latest" "$backend_src" >&2
+    # run backend (connection strings via env-file; password never on argv).
+    bport=$(alloc_port)
+    cat > "${sdir}/backend.env" <<EOF
 ASPNETCORE_ENVIRONMENT=pre-prod.server
 ASPNETCORE_URLS=http://+:8080
 ConnectionStrings__DefaultConnection=Host=cts-preview-pg;Port=5432;Database=${dbname};Username=${PGUSER};Password=${PGPASSWORD};CommandTimeout=60
 ConnectionStrings__IdentityConnection=Host=cts-preview-pg;Port=5432;Database=${identity_db};Username=${PGUSER};Password=${PGPASSWORD}
 ConnectionStrings__HangfireConnection=Host=cts-preview-pg;Port=5432;Database=${hangfire_db};Username=${PGUSER};Password=${PGPASSWORD}
 EOF
-  chmod 600 "${sdir}/backend.env"
-  docker rm -f "${proj}-backend" >/dev/null 2>&1 || true
-  docker run -d --name "${proj}-backend" --restart unless-stopped --network "$net" \
-    --env-file "${sdir}/backend.env" -p "${bport}:8080" "preview-${ARG_TASK}-backend:latest" >&2
+    chmod 600 "${sdir}/backend.env"
+    docker rm -f "${proj}-backend" >/dev/null 2>&1 || true
+    docker run -d --name "${proj}-backend" --restart unless-stopped --network "$net" \
+      --env-file "${sdir}/backend.env" -p "${bport}:8080" "preview-${ARG_TASK}-backend:latest" >&2
+    backend_target="${proj}-backend"
+  fi
 
-  # 4. frontend: prebuilt SPA + nginx proxy /v1,/v2 -> this preview's backend (same-origin).
+  # ---- Frontend: rebuild the SPA from source if it changed, else serve the
+  #      lane's prebuilt dist. Built with RELATIVE API URLs so it's same-origin
+  #      behind the nginx /v1,/v2 proxy below. ----
+  serve_dist="$front_dist"
+  if [[ -n "${ARG_FRONTEND_SRC:-}" && "$front_changed" == "true" ]]; then
+    log "frontend changed — building SPA from $ARG_FRONTEND_SRC"
+    need npm
+    ( cd "$ARG_FRONTEND_SRC" \
+        && npm install \
+        && VITE_SERVER_URL=/v1 VITE_SERVER_URL_V2=/v2 VITE_FILE_URL=/v1/files/upload npx vite build ) >&2 \
+      || die "frontend build failed in $ARG_FRONTEND_SRC"
+    serve_dist="${ARG_FRONTEND_SRC}/dist"
+  fi
+  [[ -d "$serve_dist" ]] || die "frontend dist not found: $serve_dist (build it: npm install && VITE_SERVER_URL=/v1 npx vite build)"
+
+  # frontend: SPA + nginx proxy /v1,/v2 -> the resolved backend (preview's own,
+  # or the lane's when backend was unchanged).
   fport=$(alloc_port)
   cat > "${sdir}/frontend.conf" <<EOF
 server {
   listen 5000; root /usr/share/nginx/html; index index.html;
-  location /v1 { proxy_pass http://${proj}-backend:8080; proxy_set_header Host \$host; }
-  location /v2 { proxy_pass http://${proj}-backend:8080; }
+  location /v1 { proxy_pass http://${backend_target}:8080; proxy_set_header Host \$host; }
+  location /v2 { proxy_pass http://${backend_target}:8080; }
   location / { try_files \$uri \$uri/ /index.html; }
 }
 EOF
   docker rm -f "${proj}-frontend" >/dev/null 2>&1 || true
   docker run -d --name "${proj}-frontend" --restart unless-stopped --network "$net" -p "${fport}:5000" \
-    -v "${front_dist}:/usr/share/nginx/html:ro" -v "${sdir}/frontend.conf:/etc/nginx/conf.d/default.conf:ro" \
+    -v "${serve_dist}:/usr/share/nginx/html:ro" -v "${sdir}/frontend.conf:/etc/nginx/conf.d/default.conf:ro" \
     nginx:alpine >&2
 
   local url="http://${PUBLIC_HOST}:${fport}"
   local now; now=$(date +%s)
   cat > "${sdir}/meta.json" <<EOF
-{"task":$(json_str "$ARG_TASK"),"lane":$(json_str "$ARG_LANE"),"recipe":"cts","port":$fport,"backendPort":$bport,"url":$(json_str "$url"),"db":$(json_str "$dbname"),"created_at":$now,"ref":$(json_str "$ARG_REF")}
+{"task":$(json_str "$ARG_TASK"),"lane":$(json_str "$ARG_LANE"),"recipe":"cts","port":$fport,"backendPort":$(json_str "$bport"),"backendChanged":$(json_str "$back_changed"),"frontendChanged":$(json_str "$front_changed"),"url":$(json_str "$url"),"db":$(json_str "$dbname"),"created_at":$now,"ref":$(json_str "$ARG_REF")}
 EOF
-  emit_json "{\"ok\":true,\"task\":$(json_str "$ARG_TASK"),\"lane\":$(json_str "$ARG_LANE"),\"url\":$(json_str "$url"),\"ip\":$(json_str "$PUBLIC_HOST"),\"port\":$fport,\"db\":$(json_str "$dbname")}"
+  emit_json "{\"ok\":true,\"task\":$(json_str "$ARG_TASK"),\"lane\":$(json_str "$ARG_LANE"),\"url\":$(json_str "$url"),\"ip\":$(json_str "$PUBLIC_HOST"),\"port\":$fport,\"db\":$(json_str "$dbname"),\"backendChanged\":$(json_str "$back_changed"),\"frontendChanged\":$(json_str "$front_changed")}"
 }
 
 # ---------------------------------------------------------------------------

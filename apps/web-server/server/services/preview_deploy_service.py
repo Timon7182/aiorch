@@ -109,6 +109,56 @@ def resolve_task(task_id: str) -> TaskRef:
     )
 
 
+def _git(args: list[str], cwd: Path) -> str | None:
+    try:
+        r = subprocess.run(
+            ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=20
+        )
+    except Exception:
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _composite_worktrees(worktree_path: Path) -> list[dict[str, Any]]:
+    """For a composite task dir, return per-repo sub-worktrees with change flags.
+
+    A composite task dir is a plain folder whose children are git worktrees
+    (``backend/``, ``frontend/``). Returns ``[{name, path, changed}]`` where
+    ``changed`` means the repo gained commits (or has uncommitted edits) on the
+    task branch vs its base. Returns ``[]`` for a classic single worktree (the
+    task dir is itself a git worktree).
+    """
+    if (worktree_path / ".git").exists():
+        return []  # classic single worktree
+    out: list[dict[str, Any]] = []
+    try:
+        children = sorted(worktree_path.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return out
+    for child in children:
+        try:
+            if not (child.is_dir() and (child / ".git").exists()):
+                continue
+        except OSError:
+            continue
+        # Base = ref checked out in the repo's main worktree (first list entry).
+        base = None
+        wl = _git(["worktree", "list", "--porcelain"], child)
+        if wl:
+            for ln in wl.split("\n\n")[0].splitlines():
+                if ln.startswith("branch "):
+                    base = ln.split(" ", 1)[1].strip().replace("refs/heads/", "")
+                    break
+        changed = True
+        if base:
+            cnt = _git(["rev-list", "--count", f"{base}..HEAD"], child)
+            if cnt is not None and cnt == "0":
+                dirty = _git(["status", "--porcelain"], child)
+                changed = bool(dirty)
+        out.append({"name": child.name, "path": child, "changed": changed})
+    return out
+
+
 def _branch_of(path: Path) -> str:
     try:
         r = subprocess.run(
@@ -244,11 +294,16 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
             f"server {profile.get('name')!r} has no deploys.{RUNNER_KEY} script (preview-runner.sh)"
         )
 
-    branch = _branch_of(ref.worktree_path)
+    # Composite (multi-repo) task? Children of the task dir are per-repo
+    # worktrees. For change-aware deploy we read git from one of them.
+    composite = _composite_worktrees(ref.worktree_path)
+    branch_probe = composite[0]["path"] if composite else ref.worktree_path
+
+    branch = _branch_of(branch_probe)
     lane = (lane_override or dc.lane_for_branch(config, branch)).upper()
     if lane not in ("A", "B"):
         raise PreviewError(f"invalid lane: {lane}")
-    sha = _short_sha(ref.worktree_path)
+    sha = _short_sha(branch_probe)
 
     # Persist the fully-merged config next to the spec so the host (bind-mounted)
     # can read it; pass its host path to the runner.
@@ -257,6 +312,21 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
 
     host_src = _to_host_path(ref.worktree_path, profile)
     host_cfg = _to_host_path(resolved_cfg, profile)
+
+    # Per-repo source paths + change flags drive the change-aware cts recipe:
+    # the runner rebuilds only the half (backend / frontend) that actually
+    # changed and reuses the static lane's artifact for the other.
+    repo_args: list[str] = []
+    if composite:
+        changed_names = [r["name"] for r in composite if r["changed"]]
+        for r in composite:
+            host_repo_src = _to_host_path(r["path"], profile)
+            flag = "true" if r["changed"] else "false"
+            if r["name"] == "backend":
+                repo_args += ["--backend-src", host_repo_src, "--backend-changed", flag]
+            elif r["name"] == "frontend":
+                repo_args += ["--frontend-src", host_repo_src, "--frontend-changed", flag]
+        _write_preview_state(ref.spec_dir, {"changedRepos": changed_names})
 
     state = _write_preview_state(ref.spec_dir, {
         "status": "building",
@@ -278,6 +348,7 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
         "--src", host_src,
         "--config", host_cfg,
     ]
+    args += repo_args
     if sha:
         args += ["--ref", sha]
 

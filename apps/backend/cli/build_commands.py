@@ -62,6 +62,7 @@ def handle_build_command(
     force_bypass_approval: bool,
     base_branch: str | None = None,
     repo_dir: Path | None = None,
+    repo_dirs: list[Path] | None = None,
 ) -> None:
     """
     Handle the main build command.
@@ -80,6 +81,8 @@ def handle_build_command(
         base_branch: Base branch for worktree creation (default: current branch)
         repo_dir: Git repository to build in for multi-repo projects (default:
             project_dir). The worktree still lives under project_dir.
+        repo_dirs: Explicit set of repos a single task should span. >1 entry
+            triggers a composite multi-repo worktree (see setup_workspace).
     """
     # Lazy imports to avoid loading heavy modules
     from agent import run_autonomous_agent, sync_plan_to_source
@@ -218,6 +221,7 @@ def handle_build_command(
             source_spec_dir=spec_dir,
             base_branch=base_branch,
             repo_dir=repo_dir,
+            repo_dirs=repo_dirs,
         )
         # Use the localized spec directory (inside worktree) for AI access
         if localized_spec_dir:

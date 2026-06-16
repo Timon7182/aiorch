@@ -1179,19 +1179,38 @@ async def create_project_task(project_id: str, task_data: TaskCreateRequest):
         # Also include selectedSkills so agent_service.py can inject skill context
         # baseBranch/repoPath persisted here so the build honors the user's git
         # choices even though the "Start" request doesn't re-send them.
-        model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "baseBranch", "repoPath"]
+        model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "baseBranch", "repoPath", "repoPaths"]
         for field in model_fields:
             if field in task_data.metadata:
                 task_metadata[field] = task_data.metadata[field]
 
-        # Validate repoPath against the project's actual git repos so a task can
-        # only target the project's parent folder or one of its child repos.
+        # Validate the git targets against the project's actual repos so a task
+        # can only build the project's parent folder or one of its child repos.
+        from ..services.git_repos import resolve_git_repos
+        repos = resolve_git_repos(str(project_path))
+        allowed = {r["path"] for r in repos}
+
         repo_path = task_metadata.get("repoPath")
-        if repo_path:
-            from ..services.git_repos import resolve_git_repos
-            allowed = {r["path"] for r in resolve_git_repos(str(project_path))}
-            if repo_path not in allowed:
-                task_metadata.pop("repoPath", None)
+        if repo_path and repo_path not in allowed:
+            task_metadata.pop("repoPath", None)
+
+        # Multi-repo: keep only valid repoPaths; an explicit repoPaths list means
+        # the task spans those repos. When the client sent neither a single
+        # repoPath nor a list AND the project has several repos, default to ALL
+        # of them so cross-cutting features (backend + frontend) build together.
+        repo_paths = task_metadata.get("repoPaths")
+        if isinstance(repo_paths, list):
+            repo_paths = [p for p in repo_paths if p in allowed]
+            if repo_paths:
+                task_metadata["repoPaths"] = repo_paths
+            else:
+                task_metadata.pop("repoPaths", None)
+        if (
+            not task_metadata.get("repoPath")
+            and not task_metadata.get("repoPaths")
+            and len([r for r in repos if not r.get("isRoot")]) > 1
+        ):
+            task_metadata["repoPaths"] = [r["path"] for r in repos if not r.get("isRoot")]
 
         if task_metadata:
             (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))

@@ -223,6 +223,7 @@ def setup_workspace(
     source_spec_dir: Path | None = None,
     base_branch: str | None = None,
     repo_dir: Path | None = None,
+    repo_dirs: list[Path] | None = None,
 ) -> tuple[Path, WorktreeManager | None, Path | None]:
     """
     Set up the workspace based on user's choice.
@@ -239,6 +240,11 @@ def setup_workspace(
         repo_dir: Git repository to build in. Defaults to ``project_dir``. For
             multi-repo projects this is the chosen child repo, while worktrees
             still live under ``project_dir`` (see WorktreeManager).
+        repo_dirs: Explicit list of repos a single task should span. When it has
+            more than one entry (or is omitted and the project resolves to >1
+            repo) the build uses a composite multi-repo worktree instead of a
+            single one. A single explicit ``repo_dir`` always forces single-repo
+            mode, so existing behavior is preserved.
 
     Returns:
         Tuple of (working_directory, worktree_manager or None, localized_spec_dir or None)
@@ -252,9 +258,31 @@ def setup_workspace(
     # projects; a child repo when the caller selected one in a multi-repo project.
     git_root = repo_dir or project_dir
 
+    # Decide whether this is a composite multi-repo build. An explicit single
+    # repo_dir always wins (honor the user's deliberate single-repo choice);
+    # otherwise >1 explicit repo_dirs, or (nothing chosen) a project that
+    # resolves to multiple repos, triggers the composite path.
+    from multi_repo import discover_repos
+
+    multi_set: list[Path] | None = None
+    if repo_dirs and len(repo_dirs) > 1:
+        multi_set = [Path(p) for p in repo_dirs]
+    elif repo_dirs and len(repo_dirs) == 1:
+        git_root = Path(repo_dirs[0])
+    elif repo_dir is None:
+        discovered = discover_repos(project_dir)
+        if len(discovered) > 1:
+            multi_set = discovered
+
     if mode == WorkspaceMode.DIRECT:
-        # Work directly in the repo - spec_dir stays as-is
-        return git_root, None, source_spec_dir
+        # Work directly in the repo(s) - spec_dir stays as-is. For multi-repo the
+        # agent's cwd is the project root, which already shows every repo.
+        return (project_dir if multi_set else git_root), None, source_spec_dir
+
+    if multi_set:
+        return _setup_multi_repo_workspace(
+            project_dir, spec_name, multi_set, source_spec_dir, base_branch
+        )
 
     # Create isolated workspace using per-spec worktree
     print()
@@ -300,6 +328,63 @@ def setup_workspace(
     )
 
     return worktree_info.path, manager, localized_spec_dir
+
+
+def _setup_multi_repo_workspace(
+    project_dir: Path,
+    spec_name: str,
+    repo_paths: list[Path],
+    source_spec_dir: Path | None,
+    base_branch: str | None,
+):
+    """Set up a composite worktree spanning several repos.
+
+    Returns the same ``(working_dir, manager, localized_spec_dir)`` shape as the
+    single-repo path. ``working_dir`` is the composite root (the agent's cwd),
+    which mirrors the project layout (one sub-folder per repo). The returned
+    manager is a :class:`MultiRepoWorkspace` that duck-types the slice of
+    ``WorktreeManager`` finalization needs.
+    """
+    from multi_repo import MultiRepoWorkspace
+
+    print()
+    print_status(
+        f"Setting up multi-repo workspace ({len(repo_paths)} repos)...", "progress"
+    )
+
+    mrw = MultiRepoWorkspace(
+        project_dir=project_dir,
+        spec_name=spec_name,
+        repo_paths=repo_paths,
+        base_branch=base_branch,
+        worktrees_root=project_dir,
+    )
+    composite_root = mrw.setup()
+
+    # Install the timeline hook + copy .env into each repo's worktree so each
+    # half can run on its own.
+    for wt in mrw.worktrees:
+        ensure_timeline_hook_installed(wt.repo_path)
+        copied = copy_env_files_to_worktree(wt.repo_path, wt.worktree_path)
+        if copied:
+            print_status(
+                f"  {wt.relname}: env files copied: {', '.join(copied)}", "success"
+            )
+
+    # Spec files live at the composite root (same relative location the web UI
+    # syncs from for a single-repo task), not inside any one repo's worktree.
+    localized_spec_dir = None
+    if source_spec_dir and source_spec_dir.exists():
+        localized_spec_dir = copy_spec_to_worktree(
+            source_spec_dir, composite_root, spec_name
+        )
+        print_status("Spec files copied to workspace", "success")
+
+    names = ", ".join(wt.relname for wt in mrw.worktrees)
+    print_status(f"Multi-repo workspace ready: {names}", "success")
+    print()
+
+    return composite_root, mrw, localized_spec_dir
 
 
 def ensure_timeline_hook_installed(project_dir: Path) -> None:
