@@ -5,6 +5,7 @@ Handles CRUD operations for tasks (specs) within projects.
 """
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .projects import load_projects
 from ..paths import get_data_dir, get_data_file
@@ -60,9 +61,18 @@ class Subtask(BaseModel):
     id: str
     title: str
     description: str | None = None
-    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    # "blocked" is set by the coder agent when a subtask can't proceed (e.g. its
+    # target repo isn't writable from this task's worktree). It must be accepted
+    # here or load_spec_metadata raises ValidationError and the whole task list
+    # 500s — see SUBTASK_STATUSES coercion below.
+    status: Literal["pending", "in_progress", "completed", "failed", "blocked"] = "pending"
     files: list[str] = Field(default_factory=list)  # Files affected by this subtask
     verification: SubtaskVerification | None = None  # How to verify completion
+
+
+# Valid per-subtask statuses, used to coerce unknown values from the plan JSON
+# before constructing a Subtask (see load_spec_metadata).
+SUBTASK_STATUSES = {"pending", "in_progress", "completed", "failed", "blocked"}
 
 
 class TaskBase(BaseModel):
@@ -584,15 +594,22 @@ def load_spec_metadata(spec_dir: Path) -> dict:
                     elif st.get("verification_method"):
                         verification = SubtaskVerification(type="command", run=st["verification_method"])
 
+                    # Coerce any status the Subtask model doesn't know about down
+                    # to "pending" so a plan written with a novel status (the coder
+                    # agent has used "blocked", "skipped", etc.) can never raise a
+                    # ValidationError that crashes the entire task-list endpoint.
+                    raw_status = st.get("status", "pending")
+                    safe_status = raw_status if raw_status in SUBTASK_STATUSES else "pending"
+
                     metadata["subtasks"].append(Subtask(
                         id=st.get("id", str(i)),
                         title=st.get("title") or st.get("description", f"Subtask {i+1}")[:80],
                         description=st.get("description") or st.get("notes"),
-                        status=st.get("status", "pending"),
+                        status=safe_status,
                         files=files,
                         verification=verification,
                     ))
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, ValidationError):
             pass
 
     # Check for worktree
@@ -954,7 +971,15 @@ async def list_tasks(
         project_path = Path(projects[pid]["path"])
         spec_dirs = get_spec_dirs(project_path)
         for spec_dir in spec_dirs:
-            task = spec_to_task(pid, spec_dir)
+            # Never let one malformed spec take down the whole board — skip it
+            # and keep listing the rest.
+            try:
+                task = spec_to_task(pid, spec_dir)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "[tasks] failed to load spec %s; skipping", spec_dir.name
+                )
+                continue
             if status is None or task.status == status:
                 all_tasks.append(task)
 
