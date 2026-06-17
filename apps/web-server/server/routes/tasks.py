@@ -1678,12 +1678,21 @@ async def submit_review(
     )
 
     # Reset plan status to in_progress and clear the review gate so the build resumes.
+    # Crucially, also clear any prior QA approval: should_run_qa() returns False while
+    # qa_signoff.status == "approved", which makes run.py skip the QA loop entirely — and
+    # the QA loop is the only thing that consumes QA_FIX_REQUEST.md. Without this reset an
+    # already-approved build restarts, exits in <1s without touching the feedback, and
+    # bounces straight back to human_review.
     if plan_file.exists():
         try:
             plan = json.loads(plan_file.read_text())
             plan["status"] = "in_progress"
             plan["planStatus"] = "in_progress"
             plan.pop("reviewReason", None)
+            qa_signoff = plan.get("qa_signoff")
+            if isinstance(qa_signoff, dict):
+                qa_signoff["status"] = "rejected"
+                qa_signoff["ready_for_qa_revalidation"] = False
             plan_file.write_text(json.dumps(plan, indent=2))
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"[SubmitReview] Failed to reset plan status for {task_id}: {e}")
