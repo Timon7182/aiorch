@@ -20,7 +20,12 @@
     "promotedTo": "Promoted to",
     "deployFailed": "Deploy failed",
     "stopFailed": "Stop failed",
-    "promoteFailed": "Promote failed"
+    "promoteFailed": "Promote failed",
+    "expiresIn": "expires in {{time}}",
+    "expiresSoon": "Expires soon — need more time?",
+    "expired": "Expired",
+    "extend": "+1 hour",
+    "extendFailed": "Extend failed"
   },
   "usage": {
     "title": "Token usage",

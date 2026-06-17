@@ -20,7 +20,12 @@
     "promotedTo": "Promu vers",
     "deployFailed": "Échec du déploiement",
     "stopFailed": "Échec de l'arrêt",
-    "promoteFailed": "Échec de la promotion"
+    "promoteFailed": "Échec de la promotion",
+    "expiresIn": "expire dans {{time}}",
+    "expiresSoon": "Expire bientôt — besoin de plus de temps ?",
+    "expired": "Expiré",
+    "extend": "+1 heure",
+    "extendFailed": "Échec de l'extension"
   },
   "usage": {
     "title": "Consommation de tokens",

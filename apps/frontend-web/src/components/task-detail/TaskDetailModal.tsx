@@ -309,9 +309,14 @@ function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInb
       return;
     }
     state.setIsSubmitting(true);
-    await submitReview(task.id, false, state.feedback);
+    const ok = await submitReview(task.id, false, state.feedback);
     state.setIsSubmitting(false);
-    state.setFeedback('');
+    if (ok) {
+      state.setFeedback('');
+      toast({ title: 'Changes requested', description: 'The AI will continue working on it.' });
+    } else {
+      toast({ variant: 'destructive', title: 'Failed to request changes', description: 'Could not submit feedback. Please try again.' });
+    }
   };
 
   const handleDelete = async () => {

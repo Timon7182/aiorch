@@ -473,6 +473,36 @@ export async function cloneProject(
 }
 
 /**
+ * Clone several repos side-by-side into one multi-repo project.
+ *
+ * The project folder is a non-git parent holding each repo as a child, so the
+ * build machinery treats it as a multi-repo project (one worktree per repo).
+ * Throws on failure so the caller can surface a meaningful error.
+ */
+export async function cloneMultiProject(
+  name: string,
+  repos: { url: string; name?: string }[],
+  targetDir?: string,
+): Promise<Project | null> {
+  const store = useProjectStore.getState();
+
+  try {
+    const result = await window.API.cloneMultiProject(name, repos, targetDir);
+    if (result.success && result.data) {
+      store.addProject(result.data);
+      store.selectProject(result.data.id);
+      store.openProjectTab(result.data.id);
+      return result.data;
+    }
+    throw new Error(result.error || 'Failed to clone project');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    store.setError(message);
+    throw error instanceof Error ? error : new Error(message);
+  }
+}
+
+/**
  * Create a brand-new project from a natural-language prompt.
  *
  * Backend scaffolds the directory, runs git init, drops a README with the

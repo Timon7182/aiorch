@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FolderOpen, Search, Loader2, GitBranch, Package, FileCode, CheckCircle, FileText, FolderPlus, Upload, X, Wand2 } from 'lucide-react';
+import { FolderOpen, Search, Loader2, GitBranch, Package, FileCode, CheckCircle, FileText, FolderPlus, Upload, X, Wand2, Plus, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -15,11 +15,17 @@ import {
   DialogTitle
 } from './ui/dialog';
 import { cn } from '../lib/utils';
-import { addProject, cloneProject, createProjectFromPrompt } from '../stores/project-store';
+import { addProject, cloneProject, cloneMultiProject, createProjectFromPrompt } from '../stores/project-store';
 import { getAuthHeaders } from '../lib/auth';
 import type { Project } from '../shared/types';
 
 type AddMode = 'discover' | 'custom' | 'clone' | 'prompt';
+
+type CloneRepo = { url: string; name: string; nameTouched: boolean };
+
+function emptyRepo(): CloneRepo {
+  return { url: '', name: '', nameTouched: false };
+}
 
 function deriveCloneName(url: string): string {
   let name = url.trim().replace(/\/+$/, '');
@@ -88,9 +94,11 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<AddMode>('discover');
-  const [cloneUrl, setCloneUrl] = useState('');
-  const [cloneName, setCloneName] = useState('');
-  const cloneNameTouched = useRef(false);
+  // Clone mode supports one or more repos. A single repo clones as a normal
+  // project; two or more clone side-by-side into one multi-repo project folder.
+  const [cloneRepos, setCloneRepos] = useState<CloneRepo[]>([emptyRepo()]);
+  const [projectName, setProjectName] = useState('');
+  const projectNameTouched = useRef(false);
   const [promptText, setPromptText] = useState('');
   const [promptName, setPromptName] = useState('');
   const [showClaudeReadyOnly, setShowClaudeReadyOnly] = useState(false);
@@ -152,9 +160,9 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
       setCustomPath('');
       setSelectedProject(null);
       setMode('discover');
-      setCloneUrl('');
-      setCloneName('');
-      cloneNameTouched.current = false;
+      setCloneRepos([emptyRepo()]);
+      setProjectName('');
+      projectNameTouched.current = false;
       setPromptText('');
       setPromptName('');
       setShowClaudeReadyOnly(false);
@@ -167,12 +175,35 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
     }
   }, [open, scanProjects]);
 
-  // Auto-derive folder name from URL while the user hasn't customized it.
-  useEffect(() => {
-    if (!cloneNameTouched.current) {
-      setCloneName(deriveCloneName(cloneUrl));
+  // True once the user has entered 2+ repo URLs — then it's a multi-repo project.
+  const filledRepos = cloneRepos.filter((r) => r.url.trim());
+  const isMultiRepo = filledRepos.length > 1;
+
+  // Update a repo row's URL, auto-deriving its folder name until the user edits it.
+  const setRepoUrl = (index: number, url: string) => {
+    setCloneRepos((prev) =>
+      prev.map((r, i) => {
+        if (i !== index) return r;
+        const name = r.nameTouched ? r.name : deriveCloneName(url);
+        return { ...r, url, name };
+      }),
+    );
+    // Suggest a parent project name from the first repo until the user edits it.
+    if (index === 0 && !projectNameTouched.current) {
+      setProjectName(deriveCloneName(url));
     }
-  }, [cloneUrl]);
+  };
+
+  const setRepoName = (index: number, name: string) => {
+    setCloneRepos((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, name, nameTouched: true } : r)),
+    );
+  };
+
+  const addRepoRow = () => setCloneRepos((prev) => [...prev, emptyRepo()]);
+
+  const removeRepoRow = (index: number) =>
+    setCloneRepos((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
 
   const completeAdd = (project: Project) => {
     onProjectAdded?.(project, !project.autoBuildPath);
@@ -209,16 +240,28 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
     }
 
     if (mode === 'clone') {
-      const url = cloneUrl.trim();
-      if (!url) {
-        setError('Please enter a git URL');
+      const repos = cloneRepos
+        .map((r) => ({ url: r.url.trim(), name: r.name.trim() || deriveCloneName(r.url) }))
+        .filter((r) => r.url);
+      if (repos.length === 0) {
+        setError('Please enter at least one git URL');
         return;
       }
-      const name = cloneName.trim() || deriveCloneName(url);
+      let pname = '';
+      if (repos.length > 1) {
+        pname = projectName.trim();
+        if (!pname) {
+          setError('Please enter a project name for the multi-repo project');
+          return;
+        }
+      }
       setIsAdding(true);
       setError(null);
       try {
-        const project = await cloneProject(url, name);
+        const project =
+          repos.length === 1
+            ? await cloneProject(repos[0].url, repos[0].name)
+            : await cloneMultiProject(pname, repos);
         if (project) completeAdd(project);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to clone project');
@@ -551,35 +594,79 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
             </div>
           )}
 
-          {/* Clone from Git URL */}
+          {/* Clone from Git URL (one repo, or several for a multi-repo project) */}
           {mode === 'clone' && (
             <div className="space-y-3">
+              {/* Parent project name — only relevant once there are 2+ repos */}
+              {isMultiRepo && (
+                <div className="space-y-2">
+                  <Label htmlFor="project-name">Project name</Label>
+                  <Input
+                    id="project-name"
+                    placeholder="my-multi-repo-project"
+                    value={projectName}
+                    onChange={(e) => {
+                      projectNameTouched.current = true;
+                      setProjectName(e.target.value);
+                    }}
+                    onKeyDown={handleKeyDown}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The repos below are cloned side-by-side into this folder — one
+                    multi-repo project a single task can build across.
+                  </p>
+                </div>
+              )}
+
               <div className="space-y-2">
-                <Label htmlFor="clone-url">Git URL</Label>
-                <Input
-                  id="clone-url"
-                  placeholder="https://gitlab.com/group/repo.git"
-                  value={cloneUrl}
-                  onChange={(e) => setCloneUrl(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  autoFocus
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="clone-name">Folder name</Label>
-                <Input
-                  id="clone-name"
-                  placeholder="my-repo"
-                  value={cloneName}
-                  onChange={(e) => {
-                    cloneNameTouched.current = true;
-                    setCloneName(e.target.value);
-                  }}
-                  onKeyDown={handleKeyDown}
-                />
+                <Label>{isMultiRepo ? 'Repositories' : 'Git URL'}</Label>
+                {cloneRepos.map((repo, i) => (
+                  <div key={i} className="space-y-2 rounded-md border border-border p-2">
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="https://gitlab.com/group/repo.git"
+                        value={repo.url}
+                        onChange={(e) => setRepoUrl(i, e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        autoFocus={i === 0}
+                      />
+                      {cloneRepos.length > 1 && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeRepoRow(i)}
+                          title="Remove repository"
+                          className="shrink-0 text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                    {repo.url.trim() && (
+                      <Input
+                        placeholder="folder name"
+                        value={repo.name}
+                        onChange={(e) => setRepoName(i, e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        className="text-xs"
+                      />
+                    )}
+                  </div>
+                ))}
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={addRepoRow}
+                  className="w-full"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1.5" />
+                  Add another repository
+                </Button>
+
                 <p className="text-xs text-muted-foreground">
-                  Will be cloned into the server's projects directory.
-                  Uses the configured GitHub / GitLab / Bitbucket tokens — no prompt.
+                  Cloned into the server's projects directory using the configured
+                  GitHub / GitLab / Bitbucket tokens — no prompt.
                 </p>
               </div>
             </div>
@@ -644,7 +731,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
               isScanning ||
               (mode === 'discover' && !selectedProject) ||
               (mode === 'custom' && !customPath.trim()) ||
-              (mode === 'clone' && !cloneUrl.trim()) ||
+              (mode === 'clone' && !cloneRepos.some((r) => r.url.trim())) ||
               (mode === 'prompt' && !promptText.trim())
             }
           >

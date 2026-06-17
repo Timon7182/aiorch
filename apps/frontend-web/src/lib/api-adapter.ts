@@ -274,6 +274,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
   addProject: (projectPath: string) => post<Project>('/projects', { path: projectPath }),
   cloneProject: (url: string, name?: string, targetDir?: string) =>
     post<Project>('/projects/clone', { url, name, target_dir: targetDir }),
+  cloneMultiProject: (name: string, repos: { url: string; name?: string }[], targetDir?: string) =>
+    post<Project>('/projects/clone-multi', { name, repos, target_dir: targetDir }),
   createProjectFromPrompt: (prompt: string, name?: string, parentDir?: string) =>
     post<Project>('/projects/from-prompt', { prompt, name, parent_dir: parentDir }),
   removeProject: (projectId: string) => del(`/projects/${projectId}`),
@@ -360,6 +362,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
     post(`/tasks/${taskId}/deploy-preview`, options || {}),
   getPreview: (taskId: string) => get(`/tasks/${taskId}/deploy-preview`),
   stopPreview: (taskId: string) => del(`/tasks/${taskId}/deploy-preview`),
+  extendPreview: (taskId: string, options?: { hours?: number }) =>
+    post(`/tasks/${taskId}/deploy-preview/extend`, options || {}),
   promotePreview: (taskId: string, options?: { lane?: string }) =>
     post(`/tasks/${taskId}/promote`, options || {}),
   // ========== Databases (chat DB connection) ==========

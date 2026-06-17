@@ -153,12 +153,19 @@ export interface PreviewState {
   error?: string | null;
   startedAt?: number;
   updatedAt?: number;
+  /** Epoch seconds when the reaper will tear this preview down (extendable). */
+  expiresAt?: number | null;
 }
 
 export interface API {
   // Project operations
   addProject: (projectPath: string) => Promise<IPCResult<Project>>;
   cloneProject: (url: string, name?: string, targetDir?: string) => Promise<IPCResult<Project>>;
+  cloneMultiProject: (
+    name: string,
+    repos: { url: string; name?: string }[],
+    targetDir?: string,
+  ) => Promise<IPCResult<Project>>;
   createProjectFromPrompt: (
     prompt: string,
     name?: string,
@@ -210,6 +217,7 @@ export interface API {
   deployPreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
   getPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
   stopPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
+  extendPreview: (taskId: string, options?: { hours?: number }) => Promise<IPCResult<PreviewState>>;
   promotePreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
   // Databases (chat DB connection)
   listDatabases: () => Promise<IPCResult<import('./insights').DatabaseProfileSummary[]>>;

@@ -1585,6 +1585,167 @@ async def approve_plan(
     }
 
 
+class SubmitReviewRequest(BaseModel):
+    """Human review decision for a task awaiting review (merge/QA sign-off)."""
+
+    approved: bool = Field(..., description="True to approve, False to request changes")
+    feedback: Optional[str] = Field(
+        None, description="Change request feedback (required when rejecting)"
+    )
+
+
+@router.post("/{task_id}/review")
+async def submit_review(
+    task_id: str,
+    raw_request: Request,
+    request: SubmitReviewRequest,
+):
+    """Submit a human review decision for a task in human_review.
+
+    - ``approved=True``: marks the build approved (the user merges separately).
+    - ``approved=False``: writes the feedback to ``QA_FIX_REQUEST.md`` and restarts the
+      build. ``setup_workspace`` copies the main spec dir into the build worktree on
+      start, so the QA loop detects the file as pending human feedback and runs the QA
+      fixer before re-validating. This backs the "Request Changes" UI button.
+    """
+    logger = logging.getLogger(__name__)
+
+    if ":" not in task_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid task ID format",
+        )
+
+    project_id, spec_id = task_id.split(":", 1)
+    projects = load_projects()
+
+    if project_id not in projects:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    project_path = Path(projects[project_id]["path"])
+    spec_dir = project_path / ".magestic-ai" / "specs" / spec_id
+
+    if not spec_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    from ..websockets.events import emit_task_status
+
+    plan_file = spec_dir / "implementation_plan.json"
+
+    # ----- Approve path -----
+    if request.approved:
+        if plan_file.exists():
+            try:
+                plan = json.loads(plan_file.read_text())
+                plan["status"] = "done"
+                plan.pop("reviewReason", None)
+                plan_file.write_text(json.dumps(plan, indent=2))
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"[SubmitReview] Failed to mark plan done for {task_id}: {e}")
+        await emit_task_status(task_id, "done")
+        return {
+            "success": True,
+            "task_id": task_id,
+            "approved": True,
+            "message": "Build approved",
+        }
+
+    # ----- Request changes path -----
+    feedback = (request.feedback or "").strip()
+    if not feedback:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Feedback is required when requesting changes",
+        )
+
+    # Persist the human feedback as a QA fix request. The QA loop treats the presence
+    # of this file as pending human feedback and runs the fixer before re-validating
+    # (see apps/backend/qa/loop.py).
+    fix_request = spec_dir / "QA_FIX_REQUEST.md"
+    fix_request.write_text(
+        "# QA Fix Request\n\n"
+        "**Source**: Human reviewer (web UI)\n"
+        f"**Submitted**: {datetime.now().isoformat()}\n\n"
+        "## Requested Changes\n\n"
+        f"{feedback}\n",
+        encoding="utf-8",
+    )
+
+    # Reset plan status to in_progress and clear the review gate so the build resumes.
+    if plan_file.exists():
+        try:
+            plan = json.loads(plan_file.read_text())
+            plan["status"] = "in_progress"
+            plan["planStatus"] = "in_progress"
+            plan.pop("reviewReason", None)
+            plan_file.write_text(json.dumps(plan, indent=2))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"[SubmitReview] Failed to reset plan status for {task_id}: {e}")
+
+    await emit_task_status(task_id, "in_progress")
+
+    # Restart the build so the QA fixer picks up the feedback.
+    auto_restarted = False
+    try:
+        from ..services.agent_service import get_agent_service
+
+        agent_service = get_agent_service()
+
+        # Clean up any stale running process before restarting (start_task_execution
+        # raises if the task is still tracked as running).
+        if agent_service.is_running(task_id):
+            logger.info(f"[SubmitReview] Cleaning up stale process for {task_id}")
+            try:
+                await agent_service.stop_task(task_id)
+            except Exception as stop_err:
+                logger.warning(f"[SubmitReview] Failed to stop stale process: {stop_err}")
+                agent_service.running_tasks.pop(task_id, None)
+
+        # Read mode from task_metadata.json. Force "full" so QA runs — quick mode skips
+        # QA (--skip-qa) and would never process the human feedback file.
+        mode = "full"
+        task_metadata_file = spec_dir / "task_metadata.json"
+        if task_metadata_file.exists():
+            try:
+                if json.loads(task_metadata_file.read_text()).get("mode") == "quick":
+                    logger.info(
+                        f"[SubmitReview] Overriding quick mode to full for {task_id} "
+                        "so QA processes the human feedback"
+                    )
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        _user = getattr(raw_request.state, "user", None)
+        _user_id = _user["id"] if isinstance(_user, dict) and _user.get("id") else ""
+        await agent_service.start_task_execution(
+            task_id=task_id,
+            project_path=project_path,
+            spec_id=spec_id,
+            auto_continue=True,
+            mode=mode,
+            force=True,  # Plan review already cleared; bypass the gate.
+            user_id=_user_id,
+        )
+        auto_restarted = True
+    except Exception as e:
+        logger.warning(f"[SubmitReview] Auto-restart failed for {task_id}: {e}")
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "approved": False,
+        "autoRestarted": auto_restarted,
+        "message": "Changes requested"
+        + (" and build restarted" if auto_restarted else ""),
+    }
+
+
 @router.get("/{task_id}/plan-html")
 async def get_plan_html(task_id: str):
     """Generate and return HTML view of the implementation plan.
@@ -3337,6 +3498,10 @@ class PromoteOptions(BaseModel):
     lane: Optional[str] = Field(None, description="Override target static lane (A or B)")
 
 
+class ExtendPreviewOptions(BaseModel):
+    hours: int = Field(1, ge=1, le=24, description="Hours to add to the preview's expiry")
+
+
 @router.post("/{task_id}/deploy-preview")
 async def deploy_preview(task_id: str, options: DeployPreviewOptions = None):
     """Start an isolated preview deploy of the task's worktree. Returns immediately;
@@ -3377,6 +3542,22 @@ async def stop_deploy_preview(task_id: str):
         return {"success": False, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
         return {"success": False, "error": f"teardown failed: {exc}"}
+    return {"success": True, "data": state}
+
+
+@router.post("/{task_id}/deploy-preview/extend")
+async def extend_deploy_preview(task_id: str, options: ExtendPreviewOptions = None):
+    """Extend a running preview's lifetime (default +1h) so the reaper keeps it."""
+    from ..services import preview_deploy_service as pds
+
+    if options is None:
+        options = ExtendPreviewOptions()
+    try:
+        state = pds.extend_preview(task_id, hours=options.hours)
+    except pds.PreviewError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"extend failed: {exc}"}
     return {"success": True, "data": state}
 
 

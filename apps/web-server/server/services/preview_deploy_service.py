@@ -352,6 +352,7 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
                 "ip": data.get("ip"),
                 "port": data.get("port"),
                 "db": data.get("db"),
+                "expiresAt": data.get("expiresAt"),
                 "error": None,
             })
         except Exception as exc:  # noqa: BLE001 — record failure for the UI
@@ -372,6 +373,19 @@ def stop_preview(task_id: str) -> dict[str, Any]:
             "status": "stopped", "url": None, "ip": None, "port": None, "db": None,
         })
     return state
+
+
+def extend_preview(task_id: str, hours: int = 1) -> dict[str, Any]:
+    """Bump a live preview's expiry by `hours` so the reaper keeps it around longer."""
+    if hours < 1:
+        raise PreviewError("hours must be >= 1")
+    ref = resolve_task(task_id)
+    config = dc.load_deploy_config(ref.project_path)
+    profile = find_target(config.get("target", ""))
+    data = _run_runner(
+        profile, ["extend", "--task", ref.slug, "--hours", str(int(hours))], timeout=120,
+    )
+    return _write_preview_state(ref.spec_dir, {"expiresAt": data.get("expiresAt")})
 
 
 def promote(task_id: str, *, lane_override: str | None = None) -> dict[str, Any]:

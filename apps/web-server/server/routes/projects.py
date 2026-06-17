@@ -539,6 +539,151 @@ async def clone_project(payload: ProjectClone):
 
 
 # --------------------------------------------------------------------------
+# Clone multiple repos into one multi-repo project
+# --------------------------------------------------------------------------
+
+
+class RepoSpec(BaseModel):
+    """One repository to clone inside a multi-repo project."""
+
+    url: str = Field(..., description="HTTPS git URL to clone")
+    name: str | None = Field(None, description="Child folder name (defaults to repo name from URL)")
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("URL is required")
+        if not v.startswith(("https://", "http://")):
+            raise ValueError("Only https:// or http:// URLs are supported")
+        return v
+
+
+class ProjectCloneMulti(BaseModel):
+    """Clone several repos side-by-side into one composite project folder.
+
+    The project folder itself is intentionally NOT a git repo: each repo is
+    cloned into a child folder, so ``core.multi_repo.discover_repos`` sees a
+    multi-repo project and the build machinery cuts one worktree per repo.
+    """
+
+    name: str = Field(..., description="Project folder name (the non-git parent)")
+    repos: list[RepoSpec] = Field(..., min_length=1, description="Repos to clone as children")
+    target_dir: str | None = Field(
+        None,
+        description="Absolute parent directory for the project (defaults to PROJECTS_CLONE_DIR)",
+    )
+
+
+async def _git_clone(url: str, target: Path) -> tuple[bool, str]:
+    """Clone ``url`` into ``target``. Returns (ok, stderr)."""
+    # GIT_TERMINAL_PROMPT=0 makes git fail fast on auth instead of hanging.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    proc = await asyncio.create_subprocess_exec(
+        "git", "clone", "--", url, str(target),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return False, "git clone timed out after 10 minutes"
+    if proc.returncode != 0:
+        return False, stderr.decode("utf-8", "replace").strip()[:500]
+    return True, ""
+
+
+@router.post("/clone-multi", status_code=status.HTTP_201_CREATED)
+async def clone_multi_project(payload: ProjectCloneMulti):
+    """Clone multiple repos into one multi-repo project and register it.
+
+    Layout created (mirrors what ``discover_repos`` expects):
+
+        <parent>/<name>/            <- project root (NOT a git repo)
+        <parent>/<name>/<repo-a>/   <- clone of repo a
+        <parent>/<name>/<repo-b>/   <- clone of repo b
+
+    Cloning runs as the web-server process (the container's ``magesticai``
+    user), so the worktree-ownership chown gotcha of host-side clones is
+    avoided. Returns the same shape as POST /projects/clone.
+    """
+    project_name = payload.name.strip()
+    if not _SAFE_FOLDER_RE.match(project_name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project name may only contain letters, digits, '.', '_' and '-' "
+                   "(and may not start with a dot).",
+        )
+
+    # Resolve each repo's child folder name up front, rejecting bad/duplicate names.
+    child_names: list[str] = []
+    seen: set[str] = set()
+    for spec in payload.repos:
+        child = (spec.name or _derive_repo_name(spec.url)).strip()
+        if not _SAFE_FOLDER_RE.match(child):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid repository folder name: {child!r}",
+            )
+        if child in seen:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Duplicate repository folder name: {child!r}",
+            )
+        seen.add(child)
+        child_names.append(child)
+
+    parent = Path(payload.target_dir).expanduser() if payload.target_dir else _DEFAULT_CLONE_PARENT
+    if not parent.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target_dir must be an absolute path",
+        )
+    project_root = parent / project_name
+    if project_root.exists() and any(project_root.iterdir()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Target path exists and is not empty: {project_root}",
+        )
+    project_root.mkdir(parents=True, exist_ok=True)
+
+    # Clone each repo; on any failure tear down the whole project folder so we
+    # never register a half-cloned multi-repo project.
+    for spec, child in zip(payload.repos, child_names):
+        ok, err = await _git_clone(spec.url, project_root / child)
+        if not ok:
+            shutil.rmtree(project_root, ignore_errors=True)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"git clone failed for {child}: {err}",
+            )
+
+    resolved = str(project_root.resolve())
+    projects = load_projects()
+    for pid, pdata in projects.items():
+        if pdata["path"] == resolved:
+            return project_to_response(pid, pdata)
+
+    project_id = str(uuid4())
+    now = datetime.now().isoformat()
+    project_data = {
+        "path": resolved,
+        "name": project_name,
+        "created_at": now,
+        "updated_at": now,
+    }
+    projects[project_id] = project_data
+    save_projects(projects)
+
+    response = project_to_response(project_id, project_data)
+    response["createdDirectory"] = True
+    return response
+
+
+# --------------------------------------------------------------------------
 # Create from prompt
 # --------------------------------------------------------------------------
 
