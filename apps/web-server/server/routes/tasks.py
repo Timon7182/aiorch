@@ -1689,6 +1689,19 @@ async def submit_review(
 
             phases = plan.get("phases")
             if isinstance(phases, list):
+                # Drop any prior *unstarted* feedback phases (e.g. a malformed earlier
+                # attempt) so re-clicking is self-healing and doesn't pile up duplicates.
+                # Keep feedback phases that actually completed work.
+                phases[:] = [
+                    ph for ph in phases
+                    if not (
+                        str(ph.get("id", "")).startswith("phase-feedback-")
+                        and all(
+                            s.get("status") != "completed"
+                            for s in ph.get("subtasks", [])
+                        )
+                    )
+                ]
                 existing_fb = sum(
                     1 for ph in phases
                     if str(ph.get("id", "")).startswith("phase-feedback-")
@@ -1716,10 +1729,17 @@ async def submit_review(
                         "files_to_modify": [],
                         "files_to_create": [],
                         "patterns_from": [],
-                        "verification": (
-                            "Confirm the reviewer's requested change is implemented and "
-                            "visible in the running app."
-                        ),
+                        # NOTE: verification must be a dict ({type, command, expected}) —
+                        # the build code calls .get() on it; a string crashes run.py with
+                        # "'str' object has no attribute 'get'".
+                        "verification": {
+                            "type": "manual",
+                            "command": "",
+                            "expected": (
+                                "The reviewer's requested change is implemented and "
+                                "visible in the running app."
+                            ),
+                        },
                         "status": "pending",
                         "notes": "Added from the web UI 'Request Changes' action.",
                     }],
