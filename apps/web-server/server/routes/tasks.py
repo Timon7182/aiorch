@@ -1664,28 +1664,67 @@ async def submit_review(
             detail="Feedback is required when requesting changes",
         )
 
-    # Persist the human feedback as a QA fix request. The QA loop treats the presence
-    # of this file as pending human feedback and runs the fixer before re-validating
-    # (see apps/backend/qa/loop.py).
-    fix_request = spec_dir / "QA_FIX_REQUEST.md"
-    fix_request.write_text(
-        "# QA Fix Request\n\n"
-        "**Source**: Human reviewer (web UI)\n"
-        f"**Submitted**: {datetime.now().isoformat()}\n\n"
-        "## Requested Changes\n\n"
-        f"{feedback}\n",
-        encoding="utf-8",
-    )
+    # Remove any stale QA fix-request file so the QA fixer doesn't also act on this
+    # feedback — we route it to the coder instead.
+    stale_fix = spec_dir / "QA_FIX_REQUEST.md"
+    if stale_fix.exists():
+        try:
+            stale_fix.unlink()
+        except OSError:
+            pass
 
-    # Reset plan status to in_progress and clear the review gate so the build resumes.
-    # Crucially, also clear any prior QA approval: should_run_qa() returns False while
-    # qa_signoff.status == "approved", which makes run.py skip the QA loop entirely — and
-    # the QA loop is the only thing that consumes QA_FIX_REQUEST.md. Without this reset an
-    # already-approved build restarts, exits in <1s without touching the feedback, and
-    # bounces straight back to human_review.
+    # Route the change request to the CODER, not the QA fixer. We append a new pending
+    # subtask (in its own phase) describing the reviewer's request; on restart the coder
+    # implements it and QA re-validates afterwards. Routing to the QA fixer instead is
+    # unreliable: it is geared to fixing QA-flagged defects and no-ops feature-style change
+    # requests (it just re-approves without editing anything).
+    #
+    # We also reset the plan/QA state so the build actually resumes: mark it in_progress,
+    # clear reviewReason, and drop any prior qa_signoff approval (should_run_qa() returns
+    # False while qa_signoff.status == "approved", which would otherwise skip QA and bounce
+    # straight back to human_review).
     if plan_file.exists():
         try:
             plan = json.loads(plan_file.read_text())
+
+            phases = plan.get("phases")
+            if isinstance(phases, list):
+                existing_fb = sum(
+                    1 for ph in phases
+                    if str(ph.get("id", "")).startswith("phase-feedback-")
+                )
+                n = existing_fb + 1
+                depends_on = (
+                    [phases[-1]["id"]] if phases and phases[-1].get("id") else []
+                )
+                phases.append({
+                    "id": f"phase-feedback-{n}",
+                    "name": "Human Change Request",
+                    "type": "implementation",
+                    "depends_on": depends_on,
+                    "parallel_safe": False,
+                    "subtasks": [{
+                        "id": f"subtask-feedback-{n}-1",
+                        "description": (
+                            "HUMAN CHANGE REQUEST — implement exactly as described by the "
+                            "reviewer. This is a required change, not optional. Explore the "
+                            "codebase to locate the relevant code, make the change, and "
+                            "verify it:\n\n"
+                            f"{feedback}"
+                        ),
+                        "service": "frontend",
+                        "files_to_modify": [],
+                        "files_to_create": [],
+                        "patterns_from": [],
+                        "verification": (
+                            "Confirm the reviewer's requested change is implemented and "
+                            "visible in the running app."
+                        ),
+                        "status": "pending",
+                        "notes": "Added from the web UI 'Request Changes' action.",
+                    }],
+                })
+
             plan["status"] = "in_progress"
             plan["planStatus"] = "in_progress"
             plan.pop("reviewReason", None)
@@ -1694,8 +1733,10 @@ async def submit_review(
                 qa_signoff["status"] = "rejected"
                 qa_signoff["ready_for_qa_revalidation"] = False
             plan_file.write_text(json.dumps(plan, indent=2))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"[SubmitReview] Failed to reset plan status for {task_id}: {e}")
+        except (json.JSONDecodeError, OSError, KeyError, IndexError) as e:
+            logger.warning(
+                f"[SubmitReview] Failed to append feedback subtask for {task_id}: {e}"
+            )
 
     await emit_task_status(task_id, "in_progress")
 
@@ -1716,8 +1757,8 @@ async def submit_review(
                 logger.warning(f"[SubmitReview] Failed to stop stale process: {stop_err}")
                 agent_service.running_tasks.pop(task_id, None)
 
-        # Read mode from task_metadata.json. Force "full" so QA runs — quick mode skips
-        # QA (--skip-qa) and would never process the human feedback file.
+        # Read mode from task_metadata.json. Force "full" so QA validates the coder's work
+        # — quick mode skips QA (--skip-qa), which would land the change with no re-review.
         mode = "full"
         task_metadata_file = spec_dir / "task_metadata.json"
         if task_metadata_file.exists():
@@ -1725,7 +1766,7 @@ async def submit_review(
                 if json.loads(task_metadata_file.read_text()).get("mode") == "quick":
                     logger.info(
                         f"[SubmitReview] Overriding quick mode to full for {task_id} "
-                        "so QA processes the human feedback"
+                        "so QA re-validates the coder's change"
                     )
             except (json.JSONDecodeError, OSError):
                 pass
