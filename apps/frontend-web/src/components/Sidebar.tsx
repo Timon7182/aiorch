@@ -25,6 +25,7 @@ import {
   Check,
   Library,
   Coins,
+  ShieldCheck,
   X
 } from 'lucide-react';
 import { Button } from './ui/button';
@@ -57,12 +58,13 @@ import {
 } from '../stores/project-store';
 import { useSettingsStore } from '../stores/settings-store';
 import { useAuthStore } from '../stores/auth-store';
+import { useAccessStore } from '../stores/access-store';
 import { AddProjectModal } from './AddProjectModal';
 import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from '../shared/types';
 
-export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts' | 'docs' | 'usage';
+export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts' | 'docs' | 'usage' | 'admin';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -108,6 +110,16 @@ const githubNavItems: NavItem[] = [
   { id: 'github-prs', labelKey: 'navigation:items.githubPRs', icon: GitPullRequest }
 ];
 
+// Admin-only nav item (global view, not scoped to a project).
+const adminNavItem: NavItem = { id: 'admin', labelKey: 'Admin', icon: ShieldCheck };
+
+// Project-scoped views eligible for per-user page filtering. Global views
+// (hermes, members, transcripts, admin) are not filtered by project grants.
+const PROJECT_SCOPED_VIEWS = new Set<SidebarView>([
+  'kanban', 'editor', 'insights', 'terminals', 'agent-tools', 'skills', 'docs',
+  'changelog', 'usage', 'worktrees', 'context', 'github-issues', 'github-prs',
+]);
+
 export function Sidebar({
   onSettingsClick,
   onNewTaskClick,
@@ -126,6 +138,11 @@ export function Sidebar({
   const setActiveRepo = useProjectStore((state) => state.setActiveRepo);
   const settings = useSettingsStore((state) => state.settings);
   const logout = useAuthStore((state) => state.logout);
+  const userRole = useAuthStore((state) => state.user?.role);
+  // Subscribe to access state so nav items re-filter once grants load.
+  const accessUnrestricted = useAccessStore((state) => state.unrestricted);
+  const accessProjects = useAccessStore((state) => state.projects);
+  const isAdmin = userRole === 'admin';
 
   const [showAddProjectModal, setShowAddProjectModal] = useState(false);
   const [showInitDialog, setShowInitDialog] = useState(false);
@@ -193,16 +210,33 @@ export function Sidebar({
     loadEnvConfig();
   }, [selectedProject?.id, selectedProject?.autoBuildPath]);
 
-  // Compute visible nav items based on GitHub enabled state
+  // Compute visible nav items based on GitHub enabled state, the admin role,
+  // and per-user page grants (frontend access filtering).
   const visibleNavItems = useMemo(() => {
-    const items = [...baseNavItems];
+    let items = [...baseNavItems];
 
     if (envConfig?.githubEnabled) {
       items.push(...githubNavItems);
     }
 
+    // Restricted (non-admin) users only see the project-scoped pages granted
+    // for the currently selected project. Global views are always shown.
+    if (!accessUnrestricted && selectedProjectId) {
+      const pages = accessProjects[selectedProjectId];
+      items = items.filter((item) => {
+        if (!PROJECT_SCOPED_VIEWS.has(item.id)) return true;
+        if (pages === undefined) return false; // project not granted
+        if (pages === null) return true; // all pages granted
+        return pages.includes(item.id);
+      });
+    }
+
+    if (isAdmin) {
+      items.push(adminNavItem);
+    }
+
     return items;
-  }, [envConfig?.githubEnabled]);
+  }, [envConfig?.githubEnabled, isAdmin, accessUnrestricted, accessProjects, selectedProjectId]);
 
   // Check git status when project changes
   // Use selectedProjectId instead of selectedProject to avoid re-running on every render
@@ -332,7 +366,7 @@ export function Sidebar({
   const renderNavItem = (item: NavItem) => {
     const isActive = activeView === item.id;
     const Icon = item.icon;
-    const alwaysEnabled = item.id === 'hermes' || item.id === 'members';
+    const alwaysEnabled = item.id === 'hermes' || item.id === 'members' || item.id === 'admin';
 
     return (
       <button

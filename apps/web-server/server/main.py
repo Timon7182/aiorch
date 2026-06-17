@@ -23,6 +23,7 @@ from .database.engine import init_db
 from .logging_config import setup_logging
 from .services.skills_service import init_skills_service
 from .routes import (
+    admin,
     agent_prompts,
     api_keys,
     audit,
@@ -174,6 +175,10 @@ def create_app() -> FastAPI:
 
     # Notification routes (prefix defined in router: /api/notifications)
     app.include_router(notifications.router)
+
+    # Admin routes — global user & access management (prefix /api/admin,
+    # each route gated by require_admin internally).
+    app.include_router(admin.router)
 
     # Routers exposing project data require an *approved* (non-pending) account.
     # A freshly self-registered user is "pending" and gets 403 here until an

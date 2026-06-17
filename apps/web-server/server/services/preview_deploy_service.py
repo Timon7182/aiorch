@@ -246,15 +246,20 @@ def _parse_runner_json(stdout: str) -> dict[str, Any]:
 def _run_runner(profile: dict[str, Any], args: list[str], *, timeout: int = 1800) -> dict[str, Any]:
     res = ssh_service.run_script(profile, RUNNER_KEY, args, timeout=timeout)
     if res.exit_code != 0:
-        # Try to surface the runner's JSON error, else the stderr tail.
+        # Prefer the runner's own JSON error (emitted by its `die`); otherwise the
+        # runner was killed mid-step (set -e) without printing JSON, so surface the
+        # stderr tail — never the opaque "no parseable JSON result".
         try:
             data = _parse_runner_json(res.stdout)
-            raise PreviewError(data.get("error") or f"runner exited {res.exit_code}")
         except PreviewError:
-            raise
-        except Exception:
-            tail = (res.stderr or res.stdout).strip()[-600:]
-            raise PreviewError(f"runner exited {res.exit_code}: {tail}")
+            data = None
+        if data is not None and data.get("error"):
+            raise PreviewError(str(data["error"]))
+        tail = (res.stderr or res.stdout).strip()[-600:]
+        raise PreviewError(
+            f"runner exited {res.exit_code}: {tail}" if tail
+            else f"runner exited {res.exit_code} with no output"
+        )
     return _parse_runner_json(res.stdout)
 
 

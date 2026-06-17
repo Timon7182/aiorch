@@ -336,6 +336,21 @@ export async function loadProjects(): Promise<void> {
     });
 
     if (result.success && result.data) {
+      // Frontend access filtering: non-admin/restricted users only see the
+      // projects an admin granted them. Admins and ungranted users are
+      // unrestricted. Loaded here so the entire app only ever knows about
+      // visible projects.
+      try {
+        const { loadAccess, useAccessStore } = await import('./access-store');
+        await loadAccess();
+        const access = useAccessStore.getState();
+        if (!access.unrestricted) {
+          result.data = result.data.filter((p) => access.canSeeProject(p.id));
+        }
+      } catch (e) {
+        console.warn('[ProjectStore] access filtering skipped:', e);
+      }
+
       store.setProjects(result.data);
 
       // Get current tab state (may have been loaded from IPC)

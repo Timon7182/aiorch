@@ -32,6 +32,7 @@ import { HermesPage } from './pages/HermesPage';
 import { PendingApprovalScreen } from './pages/PendingApprovalScreen';
 import { MembersPage } from './pages/MembersPage';
 import { TranscriptsPage } from './pages/TranscriptsPage';
+import { AdminPage } from './pages/AdminPage';
 import { ViewStateProvider } from './contexts/ViewStateContext';
 import { useProjectStore, loadProjects } from './stores/project-store';
 import { useTaskStore, loadTasks } from './stores/task-store';
@@ -403,6 +404,8 @@ function AuthenticatedApp() {
                 <HermesPage />
               ) : activeView === 'members' ? (
                 <MembersPage />
+              ) : activeView === 'admin' ? (
+                <AdminPage />
               ) : activeView === 'transcripts' ? (
                 <TranscriptsPage />
               ) : selectedProject ? (

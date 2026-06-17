@@ -199,7 +199,8 @@ build_images() {
     root="${src_override:-$src}"
     [[ -d "$root" ]] || die "build root not found for component $name: $root"
     log "building image preview-${task}-${name} (root=$root dockerfile=$dockerfile context=$context)"
-    docker build -t "preview-${task}-${name}:latest" -f "${root}/${dockerfile}" "${root}/${context}" >&2
+    docker build -t "preview-${task}-${name}:latest" -f "${root}/${dockerfile}" "${root}/${context}" >&2 \
+      || die "docker build failed for component $name (${root}/${dockerfile})"
   done
 }
 
@@ -287,8 +288,10 @@ cmd_deploy_cts() {
     # build the task's backend from the worktree, stripping the corporate proxy ENV
     # (unreachable off the corp network; the host reaches nuget.org/telerik directly).
     log "building backend image preview-${ARG_TASK}-backend from $backend_src"
-    sed -E '/ENV (HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)/d' "${backend_src}/${back_df}" > "${sdir}/backend.Dockerfile"
-    docker build -f "${sdir}/backend.Dockerfile" -t "preview-${ARG_TASK}-backend:latest" "$backend_src" >&2
+    sed -E '/ENV (HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)/d' "${backend_src}/${back_df}" > "${sdir}/backend.Dockerfile" \
+      || die "failed to prepare backend Dockerfile from ${backend_src}/${back_df}"
+    docker build -f "${sdir}/backend.Dockerfile" -t "preview-${ARG_TASK}-backend:latest" "$backend_src" >&2 \
+      || die "backend docker build failed (see runner stderr for the dotnet/docker error)"
     # run backend (connection strings via env-file; password never on argv).
     bport=$(alloc_port)
     cat > "${sdir}/backend.env" <<EOF
@@ -301,7 +304,8 @@ EOF
     chmod 600 "${sdir}/backend.env"
     docker rm -f "${proj}-backend" >/dev/null 2>&1 || true
     docker run -d --name "${proj}-backend" --restart unless-stopped --network "$net" \
-      --env-file "${sdir}/backend.env" -p "${bport}:8080" "preview-${ARG_TASK}-backend:latest" >&2
+      --env-file "${sdir}/backend.env" -p "${bport}:8080" "preview-${ARG_TASK}-backend:latest" >&2 \
+      || die "failed to start backend container ${proj}-backend on network $net"
     backend_target="${proj}-backend"
   fi
 
@@ -319,7 +323,8 @@ EOF
     # the nginx /v1,/v2 proxy below.
     local fbuild="${sdir}/frontend-build"
     rm -rf "$fbuild"; mkdir -p "$fbuild"
-    cp -a "${ARG_FRONTEND_SRC}/." "$fbuild/"
+    [[ -d "$ARG_FRONTEND_SRC" ]] || die "frontend src not found on host: $ARG_FRONTEND_SRC"
+    cp -a "${ARG_FRONTEND_SRC}/." "$fbuild/" || die "failed to copy frontend src from $ARG_FRONTEND_SRC"
     ( cd "$fbuild" \
         && npm install \
         && VITE_SERVER_URL=/v1 VITE_SERVER_URL_V2=/v2 VITE_FILE_URL=/v1/files/upload npx vite build ) >&2 \
@@ -342,7 +347,8 @@ EOF
   docker rm -f "${proj}-frontend" >/dev/null 2>&1 || true
   docker run -d --name "${proj}-frontend" --restart unless-stopped --network "$net" -p "${fport}:5000" \
     -v "${serve_dist}:/usr/share/nginx/html:ro" -v "${sdir}/frontend.conf:/etc/nginx/conf.d/default.conf:ro" \
-    nginx:alpine >&2
+    nginx:alpine >&2 \
+    || die "failed to start frontend container ${proj}-frontend on network $net"
 
   local url="http://${PUBLIC_HOST}:${fport}"
   local now; now=$(date +%s)
@@ -391,7 +397,8 @@ cmd_deploy() {
   render_compose "$ARG_TASK" "$port" "$dbname" "$ARG_CONFIG" "$compose"
 
   log "starting compose project $proj on port $port"
-  docker compose -p "$proj" -f "$compose" up -d >&2
+  docker compose -p "$proj" -f "$compose" up -d >&2 \
+    || die "docker compose up failed for project $proj"
 
   local vhost_url; vhost_url=$(write_vhost "$ARG_TASK" "$port" || true)
   local url="${vhost_url:-http://${PUBLIC_HOST}:${port}}"

@@ -12,12 +12,14 @@ from .models import (
     AuditLog,
     Base,
     EmailAccount,
+    IntegrationSetting,
     LLMEndpoint,
     Organization,
     OrgMember,
     Project,
     Task,
     User,
+    UserProjectAccess,
 )
 
 __all__ = [
@@ -36,4 +38,6 @@ __all__ = [
     "EmailAccount",
     "LLMEndpoint",
     "AgentPrompt",
+    "UserProjectAccess",
+    "IntegrationSetting",
 ]

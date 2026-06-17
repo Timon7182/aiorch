@@ -35,6 +35,7 @@ const VIEW_TITLES: Record<SidebarView, string> = {
   transcripts: 'Transcripts',
   docs: 'Docs',
   usage: 'Usage',
+  admin: 'Administration',
 };
 
 export function MobileTopBar({

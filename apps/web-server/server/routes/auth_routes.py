@@ -9,6 +9,7 @@ Provides:
 - GET  /api/auth/me        - Retrieve current user profile
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -21,7 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
-from ..database import Organization, OrgMember, User
+from ..database import Organization, OrgMember, User, UserProjectAccess
 from ..database.engine import get_db
 
 logger = logging.getLogger(__name__)
@@ -415,6 +416,54 @@ async def logout():
 async def me(current_user: User = Depends(get_current_user)):
     """Return the profile of the currently authenticated user."""
     return UserResponse.model_validate(current_user)
+
+
+class MyAccessResponse(BaseModel):
+    is_admin: bool
+    # True when the user has no grants and therefore sees everything.
+    unrestricted: bool
+    # project_id -> list of allowed page ids, or None meaning "all pages".
+    projects: dict[str, list[str] | None]
+
+
+@router.get(
+    "/my-access",
+    response_model=MyAccessResponse,
+    summary="Get the current user's project/page access grants",
+)
+async def my_access(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Tell the client which projects/pages to show this user.
+
+    Admins and users with no grants are ``unrestricted`` (the client shows
+    everything). Otherwise ``projects`` maps each granted project id to its
+    allowed page ids (or ``null`` for all pages). This is advisory: the client
+    filters its UI, the server does not yet hard-enforce per-project routes.
+    """
+    if current_user.role == "admin":
+        return MyAccessResponse(is_admin=True, unrestricted=True, projects={})
+
+    result = await db.execute(
+        select(UserProjectAccess).where(
+            UserProjectAccess.user_id == current_user.id
+        )
+    )
+    rows = list(result.scalars().all())
+    if not rows:
+        return MyAccessResponse(is_admin=False, unrestricted=True, projects={})
+
+    projects: dict[str, list[str] | None] = {}
+    for row in rows:
+        pages: list[str] | None = None
+        if row.pages_json:
+            try:
+                pages = json.loads(row.pages_json)
+            except (ValueError, TypeError):
+                pages = None
+        projects[row.project_id] = pages
+    return MyAccessResponse(is_admin=False, unrestricted=False, projects=projects)
 
 
 # ---------------------------------------------------------------------------
