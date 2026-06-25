@@ -5,6 +5,21 @@ import type { Project, ProjectSettings, AutoBuildVersionInfo, InitializationResu
 const LAST_SELECTED_PROJECT_KEY = 'lastSelectedProjectId';
 // Per-project active git repo (for multi-repo projects). Maps projectId -> repo path.
 const ACTIVE_REPO_KEY = 'activeRepoByProject';
+// Per-project chat grounding (multi-repo). Maps projectId -> repo path | ALL_REPOS.
+const CHAT_GROUND_KEY = 'chatGroundByProject';
+
+// Sentinel meaning "ground the chat in the whole project root" (all repos) so
+// the assistant can read/search every repo + the docs and decide where to look.
+export const ALL_REPOS = '__all__';
+
+function loadMap(key: string): Record<string, string> {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
 
 function loadActiveRepoMap(): Record<string, string> {
   try {
@@ -33,6 +48,11 @@ interface ProjectState {
   // Multi-repo state: detected git repos and the active one per project
   reposByProject: Record<string, GitRepoInfo[]>;
   activeRepoByProject: Record<string, string>; // projectId -> repo path
+  // Chat-only grounding (multi-repo): which repo the insights chat is scoped
+  // to, or ALL_REPOS for the whole project. Kept separate from
+  // activeRepoByProject (shared by worktrees/changelog/docs) so chat can default
+  // to all-repos without disturbing those features.
+  chatGroundByProject: Record<string, string>; // projectId -> repo path | ALL_REPOS
 
   // Actions
   setProjects: (projects: Project[]) => void;
@@ -54,6 +74,7 @@ interface ProjectState {
   // Multi-repo actions
   setProjectRepos: (projectId: string, repos: GitRepoInfo[]) => void;
   setActiveRepo: (projectId: string, repoPath: string) => void;
+  setChatGround: (projectId: string, value: string) => void;
   getActiveRepoPath: (projectId: string) => string | undefined;
 
   // Selectors
@@ -78,6 +99,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // Multi-repo state
   reposByProject: {},
   activeRepoByProject: loadActiveRepoMap(),
+  chatGroundByProject: loadMap(CHAT_GROUND_KEY),
 
   setProjects: (projects) => set({ projects }),
 
@@ -239,6 +261,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         localStorage.setItem(ACTIVE_REPO_KEY, JSON.stringify(activeRepoByProject));
       } catch { /* ignore quota errors */ }
       return { activeRepoByProject };
+    }),
+
+  setChatGround: (projectId, value) =>
+    set((state) => {
+      const chatGroundByProject = { ...state.chatGroundByProject, [projectId]: value };
+      try {
+        localStorage.setItem(CHAT_GROUND_KEY, JSON.stringify(chatGroundByProject));
+      } catch { /* ignore quota errors */ }
+      return { chatGroundByProject };
     }),
 
   getActiveRepoPath: (projectId) => {

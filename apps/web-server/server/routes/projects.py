@@ -6,6 +6,7 @@ Handles CRUD operations for projects (git repositories that Magestic AI manages)
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,7 +29,31 @@ from ..config import get_settings
 from . import changelog, context, files, git, github
 from .git import run_git_command
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _kickoff_codegraph_index(project_path: str) -> None:
+    """Fire-and-forget: build the CodeGraphContext index for a newly registered
+    project so the planner/coder/QA agents get CGC's code-graph MCP tools
+    without a manual indexing step.
+
+    No-ops when CGC auto-indexing is disabled (CGC_AUTO_INDEX=false /
+    CODEGRAPH_DISABLED=true) or the `codegraphcontext` CLI isn't installed.
+    Never raises into the request path — project registration must succeed
+    regardless of indexing.
+    """
+    try:
+        from ..services.docs_generator_service import get_docs_generator_service
+
+        backend_path = Path(get_settings().BACKEND_PATH)
+        svc = get_docs_generator_service(backend_path)
+        if not svc.auto_index_enabled():
+            return
+        asyncio.create_task(svc.index_codegraph(Path(project_path)))
+    except Exception:
+        logger.debug("Failed to kick off CGC index for %s", project_path, exc_info=True)
 
 # Include project-specific sub-routers
 # These will be available under /api/projects/{projectId}/...
@@ -401,6 +426,7 @@ async def add_project(project: ProjectCreate):
 
     projects[project_id] = project_data
     save_projects(projects)
+    _kickoff_codegraph_index(project_data["path"])
 
     response = project_to_response(project_id, project_data)
     if created_directory:
@@ -532,6 +558,7 @@ async def clone_project(payload: ProjectClone):
     }
     projects[project_id] = project_data
     save_projects(projects)
+    _kickoff_codegraph_index(resolved)
 
     response = project_to_response(project_id, project_data)
     response["createdDirectory"] = True
@@ -677,6 +704,7 @@ async def clone_multi_project(payload: ProjectCloneMulti):
     }
     projects[project_id] = project_data
     save_projects(projects)
+    _kickoff_codegraph_index(resolved)
 
     response = project_to_response(project_id, project_data)
     response["createdDirectory"] = True

@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..websockets.events import broadcast_event
+from . import chat_memory
 from .branch_worktree import ensure_branch_worktree
 from .insights_providers import get_provider
 
@@ -96,6 +97,11 @@ class InsightsSession:
     model_config: dict | None = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    # The Claude CLI's own conversation id for this chat. Persisted so each turn
+    # can `--resume` the prior one: the CLI keeps the full transcript on disk and
+    # we only pass the new message, instead of re-feeding the whole history.
+    # Re-captured every turn (the CLI may fork to a new id on resume).
+    claude_session_id: str | None = None
 
 
 class InsightsService:
@@ -104,6 +110,9 @@ class InsightsService:
     def __init__(self):
         self._running_tasks: dict[str, asyncio.Task] = {}  # projectId -> running asyncio task
         self._sessions: dict[str, InsightsSession] = {}  # Cache
+        # Strong refs to fire-and-forget memory-store tasks so they aren't GC'd
+        # mid-flight (asyncio only holds weak references to bare tasks).
+        self._memory_tasks: set[asyncio.Task] = set()
 
     def _get_sessions_dir(self, project_path: Path) -> Path:
         """Get the directory for storing insight sessions."""
@@ -143,6 +152,7 @@ class InsightsService:
                 for msg in session.messages
             ],
             "modelConfig": session.model_config,
+            "claudeSessionId": session.claude_session_id,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
         }
@@ -184,6 +194,7 @@ class InsightsService:
                     for msg in data.get("messages", [])
                 ],
                 model_config=data.get("modelConfig"),
+                claude_session_id=data.get("claudeSessionId"),
                 created_at=data.get("createdAt", datetime.now().isoformat()),
                 updated_at=data.get("updatedAt", datetime.now().isoformat()),
             )
@@ -513,6 +524,25 @@ class InsightsService:
                     final_message = "Please review the attached file(s) and respond."
                 final_message = final_message + suffix
 
+            # Long-term memory recall (Graphiti): prepend any facts relevant to
+            # this turn so the model carries context across separate chats. A
+            # no-op (returns "") unless Graphiti is enabled for this deployment.
+            # Bounded by a timeout so a slow embedding search / first-call DB
+            # init never stalls the reply — we'd rather skip recall than make
+            # the user wait before the model starts streaming.
+            recalled = ""
+            if chat_memory.is_enabled():
+                try:
+                    recalled = await asyncio.wait_for(
+                        chat_memory.recall(project_path, message), timeout=2.5
+                    )
+                except asyncio.TimeoutError:
+                    logger.info("[InsightsService] memory recall timed out; skipping")
+                except Exception as e:
+                    logger.info(f"[InsightsService] memory recall skipped: {e}")
+            if recalled:
+                final_message = f"{recalled}\n\n---\n\n{final_message}"
+
             # Build conversation history for stateless providers
             conversation_history = [
                 {"role": msg.role, "content": msg.content}
@@ -545,6 +575,17 @@ class InsightsService:
             provider = get_provider(provider_id)
             logger.info(f"[InsightsService] Routing to provider: {provider_id} (model: {provider_model})")
 
+            # Claude-only extras: attachment access, and native session resume so
+            # the CLI carries the history itself (we pass only the new message).
+            # `session_capture` is an in/out dict the provider fills with the
+            # CLI's session id for this turn, which we persist for the next one.
+            claude_extras: dict = {}
+            session_capture: dict = {}
+            if provider_id == "claude":
+                claude_extras["attachment_dir"] = attachment_dir
+                claude_extras["resume_session_id"] = session.claude_session_id
+                claude_extras["session_capture"] = session_capture
+
             response_content = await provider.send_message(
                 project_path=project_path,
                 project_id=project_id,
@@ -553,10 +594,13 @@ class InsightsService:
                 model_config=model_config,
                 conversation_history=conversation_history if provider_id != "claude" else None,
                 working_dir=working_dir,
-                # Only the Claude provider reads attachment files via --add-dir;
-                # other providers' signatures are left untouched.
-                **({"attachment_dir": attachment_dir} if provider_id == "claude" else {}),
+                **claude_extras,
             )
+
+            # Persist the CLI session id so the next turn resumes this thread.
+            captured_sid = session_capture.get("session_id")
+            if captured_sid and captured_sid != session.claude_session_id:
+                session.claude_session_id = captured_sid
 
             # Persist the assistant response to disk
             if response_content and response_content.strip():
@@ -570,6 +614,17 @@ class InsightsService:
                 )
                 session.messages.append(assistant_msg)
                 self._save_session(project_path, session)
+
+                # Persist this exchange to long-term memory (Graphiti) in the
+                # background so the next chat can recall it. Fire-and-forget:
+                # ingestion runs an LLM extraction and must not block the reply.
+                # A no-op unless Graphiti is enabled.
+                if chat_memory.is_enabled():
+                    task = asyncio.create_task(
+                        chat_memory.store(project_path, message, response_content)
+                    )
+                    self._memory_tasks.add(task)
+                    task.add_done_callback(self._memory_tasks.discard)
 
         except asyncio.CancelledError:
             logger.info(f"[InsightsService] Chat cancelled for project {project_id}")

@@ -19,7 +19,8 @@ import {
   PanelLeft,
   Network,
   Paperclip,
-  Brain
+  Brain,
+  Download
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -45,9 +46,10 @@ import {
   setupInsightsListeners
 } from '../stores/insights-store';
 import { loadTasks } from '../stores/task-store';
-import { useProjectStore } from '../stores/project-store';
+import { useProjectStore, ALL_REPOS } from '../stores/project-store';
 import { useIsMobile } from '../hooks/use-media-query';
 import { useTranslation } from 'react-i18next';
+import { toast } from '../hooks/use-toast';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
 import { RepoSwitcher } from './RepoSwitcher';
 import { CreateTaskFromChatDialog } from './CreateTaskFromChatDialog';
@@ -165,11 +167,17 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // active child repo; single-repo projects use the project root. Repos are
   // loaded into the store by the sidebar when a project is selected.
   const reposByProject = useProjectStore((state) => state.reposByProject);
-  const activeRepoByProject = useProjectStore((state) => state.activeRepoByProject);
+  const chatGroundByProject = useProjectStore((state) => state.chatGroundByProject);
   const repos = reposByProject[projectId] ?? [];
   const isMultiRepo = repos.length > 1;
+  // Chat grounding: a multi-repo project defaults to ALL_REPOS (the whole
+  // project root) so the assistant can read/search every repo + the docs and
+  // decide where to look; picking a specific repo narrows it. activeRepoPath is
+  // null in all-repos mode, which makes the send/codegraph logic below pass
+  // repo=undefined → the backend grounds the chat in the project root.
+  const chatGround = isMultiRepo ? (chatGroundByProject[projectId] ?? ALL_REPOS) : null;
   const activeRepoPath = isMultiRepo
-    ? (activeRepoByProject[projectId] ?? repos[0]?.path ?? null)
+    ? (chatGround === ALL_REPOS ? null : chatGround)
     : projectPath;
   const [branches, setBranches] = useState<string[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string>('');
@@ -588,6 +596,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
               <MessageBubble
                 key={message.id}
                 message={message}
+                projectPath={projectPath}
                 onCreateTask={() => handleCreateTask(message)}
                 isCreatingTask={creatingTask === message.id}
                 taskCreated={taskCreated.has(message.id)}
@@ -792,8 +801,106 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   );
 }
 
+/**
+ * Pull file paths the assistant mentions out of its message text so we can
+ * offer one-click downloads. Matches tokens with at least one `/` that end in a
+ * file extension (e.g. `.magestic-ai/specs/003-x/CHECKLIST.md`), optionally
+ * wrapped in backticks/quotes/parens. URLs and extension-less API routes (like
+ * `/v1/permissions/role-permissions-matrix`) are skipped. Deduped, capped at 12.
+ */
+function extractDownloadableFiles(content: string): string[] {
+  if (!content) return [];
+  const out = new Set<string>();
+  const re = /(?:^|[\s`("'])((?:\.{1,2}\/|\/)?(?:[\w.@-]+\/)+[\w.@-]+\.[A-Za-z0-9]{1,8})/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    const p = m[1].replace(/[.,;:)\]'"`]+$/, '');
+    if (/^[a-z][\w+.-]*:\/\//i.test(p) || p.startsWith('//')) continue; // skip URLs
+    out.add(p);
+    if (out.size >= 12) break;
+  }
+  return Array.from(out);
+}
+
+/**
+ * Download chips shown under an assistant message for any files it references.
+ * Resolves relative paths against the project root and pulls content through the
+ * existing `/files/read` endpoint, then triggers a browser download.
+ */
+function MessageFileDownloads({
+  projectPath,
+  content,
+}: {
+  projectPath: string | null;
+  content: string;
+}) {
+  const { t } = useTranslation(['common']);
+  const [busy, setBusy] = useState<string | null>(null);
+  const files = useMemo(() => extractDownloadableFiles(content), [content]);
+  if (files.length === 0) return null;
+
+  const handleDownload = async (rel: string) => {
+    const name = rel.split('/').pop() || 'file';
+    const abs = rel.startsWith('/')
+      ? rel
+      : projectPath
+        ? `${projectPath.replace(/\/+$/, '')}/${rel}`
+        : rel;
+    setBusy(rel);
+    try {
+      const res = await window.API.readFile(abs);
+      if (!res.success || typeof res.data?.content !== 'string') {
+        toast({ variant: 'destructive', title: t('common:chatFiles.downloadFailed', { name }) });
+        return;
+      }
+      const url = URL.createObjectURL(
+        new Blob([res.data.content], { type: 'text/plain;charset=utf-8' })
+      );
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ variant: 'destructive', title: t('common:chatFiles.downloadFailed', { name }) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+      <span className="text-xs text-muted-foreground">{t('common:chatFiles.heading')}:</span>
+      {files.map((f) => {
+        const name = f.split('/').pop() || f;
+        return (
+          <Button
+            key={f}
+            variant="outline"
+            size="sm"
+            className="h-6 gap-1 px-2 text-xs font-normal"
+            disabled={busy === f}
+            title={t('common:chatFiles.download', { name })}
+            onClick={() => handleDownload(f)}
+          >
+            {busy === f ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Download className="h-3 w-3" />
+            )}
+            <span className="max-w-[180px] truncate">{name}</span>
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
 interface MessageBubbleProps {
   message: InsightsChatMessage;
+  projectPath: string | null;
   onCreateTask: () => void;
   isCreatingTask: boolean;
   taskCreated: boolean;
@@ -801,6 +908,7 @@ interface MessageBubbleProps {
 
 function MessageBubble({
   message,
+  projectPath,
   onCreateTask,
   isCreatingTask,
   taskCreated
@@ -835,6 +943,11 @@ function MessageBubble({
               {message.content}
             </ReactMarkdown>
           </div>
+        )}
+
+        {/* Download chips for files the assistant references on disk */}
+        {!isUser && message.content && (
+          <MessageFileDownloads projectPath={projectPath} content={message.content} />
         )}
 
         {/* Attachments sent with this message (read-only) */}

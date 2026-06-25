@@ -31,6 +31,7 @@ interface DocsStatus {
   has_site: boolean;
   has_graph?: boolean;
   has_codegraph?: boolean;
+  codegraph_indexing?: boolean;
   last_run?: string;
   last_build?: string;
   last_build_ok?: boolean;
@@ -66,7 +67,9 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   const [files, setFiles] = useState<DocFile[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [content, setContent] = useState<string>('');
-  const [busy, setBusy] = useState<'generate' | 'build' | 'stop' | 'restart' | null>(null);
+  const [busy, setBusy] = useState<
+    'generate' | 'build' | 'stop' | 'restart' | 'codegraph' | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   // Optimistic flag: set true the instant the user clicks Generate/Restart,
   // cleared once the server confirms (status=running) or the request fails.
@@ -158,9 +161,11 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
   }, [files, selectedPath]);
 
-  // Poll while a generation is running; refresh tree once it finishes.
+  // Poll while a generation OR a code-graph index is running; refresh the
+  // tree once generation finishes (the CGC panel reacts to has_codegraph on
+  // its own, so indexing just needs the status to keep updating).
   useEffect(() => {
-    if (!status || status.state !== 'running') return;
+    if (!status || (status.state !== 'running' && !status.codegraph_indexing)) return;
     const id = setInterval(async () => {
       const r = await get<DocsStatus>(`/projects/${projectId}/docs/status${repoSuffix(false)}`);
       if (r.success && r.data) {
@@ -203,6 +208,19 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     await loadStatus();
     await loadTree();
   }, [projectId, activeRepoPath, loadStatus, loadTree]);
+
+  const handleIndexCodegraph = useCallback(async () => {
+    setBusy('codegraph');
+    setError(null);
+    const r = await post<{ state?: string; error?: string }>(
+      `/projects/${projectId}/docs/codegraph/index${repoSuffix(false)}`,
+    );
+    setBusy(null);
+    if (!r.success) {
+      setError(r.error ?? 'Failed to start code-graph indexing');
+    }
+    await loadStatus();
+  }, [projectId, activeRepoPath, loadStatus]);
 
   const handleStop = useCallback(async () => {
     setBusy('stop');
@@ -329,6 +347,25 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
               <>
                 <Hammer className="mr-2 h-4 w-4" />
                 Rebuild site
+              </>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={handleIndexCodegraph}
+            disabled={isRunning || busy === 'codegraph' || status?.codegraph_indexing}
+            title="Build/refresh the CodeGraphContext code index — powers caller/callee, dead-code and complexity tools for the agents"
+          >
+            {busy === 'codegraph' || status?.codegraph_indexing ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Indexing code...
+              </>
+            ) : (
+              <>
+                <Network className="mr-2 h-4 w-4" />
+                {status?.has_codegraph ? 'Refresh code graph' : 'Build code graph'}
               </>
             )}
           </Button>

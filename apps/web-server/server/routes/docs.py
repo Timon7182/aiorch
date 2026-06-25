@@ -178,6 +178,37 @@ async def build_docs(project_id: str, repo: str | None = None):
     return {"log": log[-4000:]}
 
 
+@router.post("/{project_id}/docs/codegraph/index", status_code=status.HTTP_202_ACCEPTED)
+async def index_codegraph(project_id: str, repo: str | None = None):
+    """Build/refresh the CodeGraphContext index for the project (background).
+
+    Runs `codegraphcontext index <path> --force`, creating `.codegraphcontext/`
+    — the folder that gates the CGC MCP tools (find_code,
+    analyze_code_relationships, find_dead_code, complexity, ...) for the
+    planner/coder/QA agents. Tree-sitter only: no LLM, no API key. Returns
+    immediately; poll /docs/status (codegraph_indexing → has_codegraph /
+    last_codegraph) for progress. This is an explicit user action and so runs
+    regardless of the CGC_AUTO_INDEX flag.
+    """
+    project_path = _resolve_docs_base(project_id, repo)
+    svc = get_docs_generator_service(_backend_path())
+
+    if svc.is_indexing(project_path):
+        return {
+            "success": False,
+            "error": "Code graph indexing is already in progress for this project.",
+        }
+
+    async def _run():
+        try:
+            await svc.index_codegraph(project_path)
+        except Exception:
+            logger.exception(f"[docs] codegraph index crashed for {project_id}")
+
+    asyncio.create_task(_run())
+    return {"state": "started"}
+
+
 @router.get("/{project_id}/docs/status")
 async def docs_status(project_id: str, repo: str | None = None):
     project_path = _resolve_docs_base(project_id, repo)
@@ -205,6 +236,7 @@ async def docs_status(project_id: str, repo: str | None = None):
         "has_site": (site_dir / "index.html").exists(),
         "has_graph": (graphify_out / "graph.json").exists(),
         "has_codegraph": (project_path / ".codegraphcontext").is_dir(),
+        "codegraph_indexing": svc.is_indexing(project_path),
         "last_run": meta.get("last_run"),
         "last_build": meta.get("last_build"),
         "last_build_ok": meta.get("last_build_ok"),

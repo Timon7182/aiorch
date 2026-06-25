@@ -298,5 +298,10 @@
     "failedLabel": "Failed",
     "starting": "Starting..."
   },
+  "chatFiles": {
+    "heading": "Files",
+    "download": "Download {{name}}",
+    "downloadFailed": "Couldn't download {{name}}"
+  },
   "lastChecked": "Last checked"
 }

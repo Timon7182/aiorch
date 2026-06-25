@@ -247,6 +247,33 @@ class GraphitiQueries:
             logger.warning(f"Failed to save task outcome: {e}")
             return False
 
+    async def add_chat_episode(self, text: str, name_hint: str = "chat") -> bool:
+        """Persist a single chat exchange as an episode for long-term recall.
+
+        Stored as plain text so Graphiti's own ingestion extracts entities and
+        facts. Scoped to this memory's group_id (project-wide for chat).
+        """
+        if not text or not text.strip():
+            return True
+        try:
+            from graphiti_core.nodes import EpisodeType
+
+            now = datetime.now(timezone.utc)
+            await self.client.graphiti.add_episode(
+                name=f"chat_{name_hint}_{now.strftime('%Y%m%d_%H%M%S%f')}",
+                episode_body=text,
+                source=EpisodeType.text,
+                source_description="Insights chat exchange",
+                reference_time=now,
+                group_id=self.group_id,
+            )
+            return True
+        except Exception as e:
+            if "duplicate_facts" in str(e):
+                return True
+            logger.debug(f"Failed to save chat episode: {e}")
+            return False
+
     async def add_structured_insights(self, insights: dict) -> bool:
         """
         Save extracted insights as multiple focused episodes.

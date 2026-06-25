@@ -305,6 +305,12 @@ class GraphitiMemory:
 
         return result
 
+    async def save_chat_episode(self, text: str, name_hint: str = "chat") -> bool:
+        """Persist a chat exchange as an episode for cross-session recall."""
+        if not await self._ensure_initialized():
+            return False
+        return await self._queries.add_chat_episode(text, name_hint)
+
     # Delegate methods to search module
 
     async def get_relevant_context(

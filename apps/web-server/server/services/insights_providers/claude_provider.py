@@ -237,6 +237,74 @@ class ClaudeProvider(ProviderStrategy):
             ),
         }
 
+    def _build_custom_mcp_config(self, project_path: Path) -> dict | None:
+        """Build the inline --mcp-config payload for project-defined custom MCP
+        servers (the same CUSTOM_MCP_SERVERS the build agents read from
+        .magestic-ai/.env), so chat can reach them too — e.g. an HTTP DB gateway.
+
+        Only HTTP servers are wired into chat; command servers are skipped here
+        (those are spawned only in the sandboxed build path). Returns None when
+        the project defines no usable HTTP custom MCP server.
+        """
+        env_path = project_path / ".magestic-ai" / ".env"
+        if not env_path.exists():
+            return None
+        raw: str | None = None
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("CUSTOM_MCP_SERVERS="):
+                    raw = line.split("=", 1)[1].strip().strip("\"'")
+                    break
+        except Exception:
+            return None
+        if not raw:
+            return None
+        try:
+            servers = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("[ClaudeProvider] CUSTOM_MCP_SERVERS is not valid JSON; skipping")
+            return None
+        if not isinstance(servers, list):
+            return None
+
+        mcp_servers: dict = {}
+        lines: list[str] = []
+        for s in servers:
+            if not isinstance(s, dict) or s.get("type") != "http":
+                continue
+            sid, url = s.get("id"), s.get("url")
+            if not (isinstance(sid, str) and sid and isinstance(url, str) and url):
+                continue
+            cfg: dict = {"type": "http", "url": url}
+            headers = s.get("headers")
+            if isinstance(headers, dict) and all(
+                isinstance(k, str) and isinstance(v, str) for k, v in headers.items()
+            ):
+                cfg["headers"] = headers
+            mcp_servers[sid] = cfg
+            # One bullet per server: its name, tool prefix, and — crucially — the
+            # user-provided description, so the model knows what each server is
+            # for and picks the right one instead of guessing (e.g. two DBs).
+            name = s.get("name") or sid
+            desc = s.get("description")
+            line = f"- {name} (tools: mcp__{sid}__*)"
+            if isinstance(desc, str) and desc.strip():
+                line += f" — {desc.strip()}"
+            lines.append(line)
+        if not mcp_servers:
+            return None
+        return {
+            "mcpServers": mcp_servers,
+            "allowedTools": [f"mcp__{sid}__*" for sid in mcp_servers],
+            "systemPrompt": (
+                "You have these project-configured MCP servers available. Use the "
+                "matching mcp__<server>__* tools when the user's question relates to "
+                "what a server provides; pick the server whose description fits best:\n"
+                + "\n".join(lines)
+            ),
+        }
+
     # ------------------------------------------------------------------
     # Message sending (extracted from InsightsService.send_message)
     # ------------------------------------------------------------------
@@ -251,10 +319,15 @@ class ClaudeProvider(ProviderStrategy):
         conversation_history: list[dict] | None,
         working_dir: Path | None = None,
         attachment_dir: Path | None = None,
+        resume_session_id: str | None = None,
+        session_capture: dict | None = None,
     ) -> str:
         # Run the CLI in the branch worktree when one was selected; usage and
         # token resolution below still key off the main project_path.
         run_dir = working_dir or project_path
+        # Keep the untouched prompt: `message` gets reused as a loop variable
+        # below, so a retry must reference this copy, not the mutated name.
+        original_message = message
         claude_bin = self._resolve_claude_path()
         cmd = [
             claude_bin,
@@ -267,6 +340,12 @@ class ClaudeProvider(ProviderStrategy):
             # the whole assistant turn to land at once.
             "--include-partial-messages",
         ]
+
+        # Resume the prior turn's conversation so the CLI restores the full
+        # transcript from disk and we only send the new message. The id is
+        # re-captured each turn (resume may fork to a fresh id).
+        if resume_session_id:
+            cmd.extend(["--resume", resume_session_id])
 
         if model_config:
             model_value = model_config.get("model") or model
@@ -312,6 +391,18 @@ class ClaudeProvider(ProviderStrategy):
                 logger.info("[ClaudeProvider] Postgres MCP enabled (db profile %s)", db_profile_id)
             else:
                 logger.info("[ClaudeProvider] DB profile %s not usable; skipping", db_profile_id)
+
+        # Project-defined custom MCP servers (CUSTOM_MCP_SERVERS in .env) — the
+        # same HTTP servers the build agents use, so chat can reach them too.
+        custom_cfg = self._build_custom_mcp_config(project_path)
+        if custom_cfg:
+            mcp_servers.update(custom_cfg["mcpServers"])
+            allowed_tools.extend(custom_cfg["allowedTools"])
+            sys_prompt_appends.append(custom_cfg["systemPrompt"])
+            logger.info(
+                "[ClaudeProvider] Custom MCP enabled for chat: %s",
+                ", ".join(custom_cfg["mcpServers"].keys()),
+            )
 
         if mcp_servers:
             # --allowedTools is variadic, so it must be followed by another flag
@@ -363,6 +454,11 @@ class ClaudeProvider(ProviderStrategy):
 
             accumulated_content = ""
             tools_used = []
+            captured_session_id: str | None = None
+            # Set when the CLI reports a failed turn via the `result` event. A
+            # failed --resume (e.g. the session isn't on disk for this cwd) lands
+            # here with exit code 0, so we can't rely on returncode alone.
+            result_is_error = False
             stream_start = time.monotonic()
             # Tracks whether the CLI is emitting `stream_event` deltas (i.e.
             # `--include-partial-messages` is in effect). When true, we
@@ -381,6 +477,12 @@ class ClaudeProvider(ProviderStrategy):
                     try:
                         data = json.loads(line)
                         event_type = data.get("type", "")
+
+                        # The CLI stamps its session id on the init/result
+                        # events; keep the latest so we can resume next turn.
+                        sid = data.get("session_id")
+                        if isinstance(sid, str) and sid:
+                            captured_session_id = sid
 
                         # ----- Live deltas (preferred path) -------------
                         if event_type == "stream_event":
@@ -498,6 +600,10 @@ class ClaudeProvider(ProviderStrategy):
                             continue
 
                         if event_type == "result":
+                            if data.get("is_error") or data.get("subtype") not in (
+                                None, "success"
+                            ):
+                                result_is_error = True
                             # When streaming via deltas the body is already in
                             # accumulated_content; broadcasting `result` again
                             # would duplicate the whole answer in the UI. Only
@@ -557,7 +663,30 @@ class ClaudeProvider(ProviderStrategy):
                 stderr_text = stderr_output.decode("utf-8", errors="replace").strip()
                 logger.warning(f"[ClaudeProvider] stderr: {stderr_text}")
 
-            if proc.returncode != 0 and not accumulated_content.strip():
+            turn_failed = (proc.returncode != 0 or result_is_error) and not accumulated_content.strip()
+            if turn_failed:
+                # A resume can fail if the prior session isn't on disk for this
+                # cwd (e.g. the chat moved to a different branch/worktree). The
+                # CLI reports this via the result event with exit code 0, so we
+                # check result_is_error too. Retry once as a fresh conversation.
+                if resume_session_id:
+                    logger.warning(
+                        "[ClaudeProvider] resume of %s failed (%s); "
+                        "retrying without resume",
+                        resume_session_id, stderr_text or f"rc={proc.returncode}",
+                    )
+                    return await self.send_message(
+                        project_path=project_path,
+                        project_id=project_id,
+                        message=original_message,
+                        model=model,
+                        model_config=model_config,
+                        conversation_history=conversation_history,
+                        working_dir=working_dir,
+                        attachment_dir=attachment_dir,
+                        resume_session_id=None,
+                        session_capture=session_capture,
+                    )
                 error_msg = stderr_text or f"Claude CLI exited with code {proc.returncode}"
                 logger.error(f"[ClaudeProvider] CLI failed: {error_msg}")
                 await broadcast_event("insights:chunk", {
@@ -566,6 +695,10 @@ class ClaudeProvider(ProviderStrategy):
                     "error": error_msg,
                 })
                 return ""
+
+            # Hand the captured session id back so the next turn can resume it.
+            if session_capture is not None and captured_session_id:
+                session_capture["session_id"] = captured_session_id
 
             elapsed = time.monotonic() - stream_start
             # Estimate tokens: ~4 chars per token for English text

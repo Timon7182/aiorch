@@ -68,6 +68,17 @@ class DocsGeneratorService:
         # Project IDs we deliberately cancelled — used to suppress the
         # "exit code != 0" error in the post-run result.
         self._cancelled: set[str] = set()
+        # CodeGraphContext (CGC) auto-indexing state, keyed by resolved project
+        # path so two triggers for the same repo (e.g. the on-create hook and
+        # the startup sweep) don't index it concurrently. The semaphore caps
+        # how many repos index at once so a startup sweep over many projects
+        # doesn't peg the CPU. Override the cap with CGC_INDEX_CONCURRENCY.
+        self._cgc_indexing: set[str] = set()
+        try:
+            _cap = int(os.environ.get("CGC_INDEX_CONCURRENCY", "2") or "2")
+        except ValueError:
+            _cap = 2
+        self._cgc_sema = asyncio.Semaphore(max(1, _cap))
 
     def is_running(self, project_id: str) -> bool:
         if project_id in self._starting:
@@ -552,6 +563,73 @@ class DocsGeneratorService:
             marker.write_text(json.dumps(existing, indent=2))
         except OSError:
             pass
+
+    @staticmethod
+    def auto_index_enabled() -> bool:
+        """Whether CGC auto-indexing runs (on project create + startup sweep).
+
+        Off when CODEGRAPH_DISABLED=true (the same global kill-switch the agent
+        MCP gating honors, see agents/tools_pkg/models.py) or when CGC_AUTO_INDEX
+        is explicitly falsey. Defaults on. The on-demand /docs/codegraph/index
+        endpoint ignores this flag — it's an explicit user action.
+        """
+        if str(os.environ.get("CODEGRAPH_DISABLED", "")).lower() == "true":
+            return False
+        return str(os.environ.get("CGC_AUTO_INDEX", "true")).lower() not in (
+            "false",
+            "0",
+            "no",
+        )
+
+    def is_indexing(self, project_path: Path) -> bool:
+        """True while a CGC index is in flight (or queued) for this project."""
+        return str(Path(project_path).resolve()) in self._cgc_indexing
+
+    async def index_codegraph(self, project_path: Path) -> None:
+        """Concurrency-guarded wrapper around refresh_codegraph.
+
+        Dedups concurrent triggers for the same repo and caps how many repos
+        index at once (CGC_INDEX_CONCURRENCY, default 2). Safe to fire-and-
+        forget: refresh_codegraph no-ops cleanly when the CLI isn't installed.
+        """
+        key = str(Path(project_path).resolve())
+        if key in self._cgc_indexing:
+            logger.info(f"[DocsGenerator] CGC index already running for {key}; skipping")
+            return
+        self._cgc_indexing.add(key)
+        try:
+            async with self._cgc_sema:
+                await self.refresh_codegraph(project_path)
+        finally:
+            self._cgc_indexing.discard(key)
+
+    async def sweep_index_missing(self, project_paths: list[Path]) -> None:
+        """Index every project that has no `.codegraphcontext/` graph yet.
+
+        Drives the startup sweep. Already-indexed projects are skipped so
+        repeated restarts are cheap; the per-repo concurrency cap in
+        index_codegraph throttles the fan-out. No-ops when auto-indexing is
+        disabled.
+        """
+        if not self.auto_index_enabled():
+            return
+        scheduled = 0
+        for p in project_paths:
+            try:
+                path = Path(p)
+            except TypeError:
+                continue
+            if not path.is_dir():
+                continue
+            if (path / ".codegraphcontext").is_dir():
+                continue  # already indexed
+            asyncio.create_task(self.index_codegraph(path))
+            scheduled += 1
+        if scheduled:
+            logger.info(
+                f"[DocsGenerator] CGC startup sweep scheduled indexing for "
+                f"{scheduled} project(s)"
+            )
 
     async def codegraph_report(self, repo_path: Path, *, refresh: bool = False) -> str | None:
         """Return CodeGraphContext's CGC_REPORT.md for a repo, as markdown.

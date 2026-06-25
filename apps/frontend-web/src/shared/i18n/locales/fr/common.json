@@ -298,5 +298,10 @@
     "failedLabel": "Échoué",
     "starting": "Démarrage..."
   },
+  "chatFiles": {
+    "heading": "Fichiers",
+    "download": "Télécharger {{name}}",
+    "downloadFailed": "Impossible de télécharger {{name}}"
+  },
   "lastChecked": "Dernière vérification"
 }

@@ -329,6 +329,10 @@ class ClaudeTokenService:
             while True:
                 await asyncio.sleep(PERIODIC_REFRESH_INTERVAL_SECONDS)
                 try:
+                    # Re-adopt a fresher host seed if our own creds have gone
+                    # bad (e.g. refresh token lost / rotated out by the host),
+                    # so the container self-heals without a manual restart.
+                    self._seed_if_needed()
                     await self.get_access_token()
                 except Exception:
                     logger.exception("[ClaudeToken] periodic refresh raised")

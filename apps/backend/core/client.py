@@ -376,6 +376,7 @@ def load_project_mcp_config(project_dir: Path) -> dict:
 
     Returns a dict of MCP-related env vars:
     - CONTEXT7_ENABLED (default: true)
+    - CODE_GRAPH_PROVIDER (default: codegraph) — exclusive code-graph layer: codegraph | graphify
     - PLAYWRIGHT_MCP_ENABLED (default: false) [also accepts legacy PUPPETEER_MCP_ENABLED]
     - AGENT_MCP_<agent>_ADD (per-agent MCP additions)
     - AGENT_MCP_<agent>_REMOVE (per-agent MCP removals)
@@ -396,6 +397,7 @@ def load_project_mcp_config(project_dir: Path) -> dict:
         "CONTEXT7_ENABLED",
         "PLAYWRIGHT_MCP_ENABLED",
         "PUPPETEER_MCP_ENABLED",  # backward compat: mapped to PLAYWRIGHT_MCP_ENABLED
+        "CODE_GRAPH_PROVIDER",  # exclusive code-graph selection: codegraph (default) | graphify
     }
 
     try:
@@ -872,6 +874,7 @@ def create_client(
 
     # Add custom MCP servers from project config
     custom_servers = mcp_config.get("CUSTOM_MCP_SERVERS", [])
+    custom_server_notes: list[str] = []
     for custom in custom_servers:
         server_id = custom.get("id")
         if not server_id:
@@ -893,6 +896,13 @@ def create_client(
             if custom.get("headers"):
                 server_config["headers"] = custom["headers"]
             mcp_servers[server_id] = server_config
+        # Record the user-provided description so the agent knows what each
+        # server is for and reaches for the right one (mirrors the chat path).
+        note = f"- {custom.get('name') or server_id} (tools: mcp__{server_id}__*)"
+        desc = custom.get("description")
+        if isinstance(desc, str) and desc.strip():
+            note += f" — {desc.strip()}"
+        custom_server_notes.append(note)
 
     # Build system prompt
     base_prompt = (
@@ -905,6 +915,16 @@ def create_client(
         f"your work through thorough testing. You communicate progress through Git commits "
         f"and build-progress.txt updates."
     )
+
+    # Tell the agent what each wired custom MCP server is for, so it picks the
+    # right one (e.g. distinct databases) instead of guessing.
+    if custom_server_notes:
+        base_prompt = (
+            f"{base_prompt}\n\n# Connected MCP servers\n"
+            "Use the matching mcp__<server>__* tools when a task relates to what a "
+            "server provides; pick the server whose description fits best:\n"
+            + "\n".join(custom_server_notes)
+        )
 
     # Include CLAUDE.md if enabled and present
     if should_use_claude_md():

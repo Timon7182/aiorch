@@ -121,6 +121,26 @@ async def lifespan(app: FastAPI):
     from .services import preview_reaper
     preview_reaper.start()
 
+    # Build/refresh the CodeGraphContext index for any registered project that
+    # doesn't have one yet, so the planner/coder/QA agents get CGC's code-graph
+    # MCP tools without a manual index step. Idempotent (skips already-indexed
+    # projects) and concurrency-capped; gated by CGC_AUTO_INDEX / CODEGRAPH_DISABLED.
+    try:
+        import asyncio
+
+        from .services.docs_generator_service import get_docs_generator_service
+        from .routes.projects import load_projects
+
+        docs_svc = get_docs_generator_service(backend_path)
+        if docs_svc.auto_index_enabled():
+            project_paths = [
+                Path(p["path"]) for p in load_projects().values() if p.get("path")
+            ]
+            asyncio.create_task(docs_svc.sweep_index_missing(project_paths))
+            logger.info("CGC startup sweep scheduled (%d project(s))", len(project_paths))
+    except Exception:
+        logger.warning("CGC startup sweep failed to schedule", exc_info=True)
+
     yield
 
     # Shutdown

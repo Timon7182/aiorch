@@ -460,6 +460,12 @@
     "projectNotInitializedDescription": "Initialize MagesticAI for this project to configure MCP servers.",
     "browserAutomation": "Browser Automation (QA agents only)",
     "alwaysEnabled": "always enabled",
+    "codeGraph": {
+      "name": "Code Graph Provider",
+      "description": "Code-knowledge graph agents query. One layer runs at a time; CodeGraphContext is the default.",
+      "codegraph": "CodeGraphContext",
+      "graphify": "graphify"
+    },
     "addServer": "Add Server",
     "addMcpTo": "Add MCP Server to {{agent}}",
     "addMcpDescription": "Select an MCP server to add to this agent",
@@ -503,7 +509,7 @@
     "serverName": "Name",
     "serverNamePlaceholder": "My MCP Server",
     "serverDescription": "Description",
-    "serverDescriptionPlaceholder": "What this server does",
+    "serverDescriptionPlaceholder": "What this server is for — the AI uses this to choose it",
     "command": "Command",
     "args": "Arguments",
     "argsHint": "Space-separated arguments",
