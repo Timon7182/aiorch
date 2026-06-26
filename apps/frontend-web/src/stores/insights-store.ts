@@ -48,6 +48,7 @@ interface InsightsState {
   clearStreamingThinking: () => void;
   setCurrentTool: (tool: ToolUsage | null) => void;
   addToolUsage: (tool: ToolUsage) => void;
+  updateLastTool: (patch: Partial<InsightsToolUsage>) => void;
   clearToolsUsed: () => void;
   setLastMetrics: (metrics: InsightsStreamMetrics | null) => void;
   finalizeStreamingMessage: (suggestedTask?: InsightsChatMessage['suggestedTask']) => void;
@@ -164,6 +165,17 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
         }
       ]
     })),
+
+  updateLastTool: (patch) =>
+    set((state) => {
+      if (state.toolsUsed.length === 0) return {};
+      const toolsUsed = [...state.toolsUsed];
+      toolsUsed[toolsUsed.length - 1] = {
+        ...toolsUsed[toolsUsed.length - 1],
+        ...patch,
+      };
+      return { toolsUsed };
+    }),
 
   clearToolsUsed: () => set({ toolsUsed: [] }),
 
@@ -483,7 +495,26 @@ export function setupInsightsListeners(): () => void {
             });
           }
           break;
+        case 'tool_input':
+          // Full tool arguments arrived (e.g. the SQL query) once the tool's
+          // input block closed — backfill them onto the live indicator + history.
+          if (chunk.tool) {
+            store().setCurrentTool({
+              name: chunk.tool.name,
+              input: chunk.tool.input
+            });
+            store().updateLastTool({ input: chunk.tool.input });
+          }
+          break;
         case 'tool_end':
+          // Attach the tool's output to the last recorded tool, then clear the
+          // live indicator.
+          if (chunk.result !== undefined || chunk.isError !== undefined) {
+            store().updateLastTool({
+              result: chunk.result,
+              isError: chunk.isError
+            });
+          }
           store().setCurrentTool(null);
           break;
         case 'task_suggestion':

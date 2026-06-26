@@ -18,6 +18,7 @@ import {
   GitBranch,
   PanelLeft,
   Network,
+  Database,
   Paperclip,
   Brain,
   Download
@@ -1039,12 +1040,55 @@ interface ToolUsageHistoryProps {
   tools: Array<{
     name: string;
     input?: string;
+    result?: string;
+    isError?: boolean;
     timestamp: Date;
   }>;
 }
 
+// `mcp__db__query` -> `db: query` so MCP steps read cleanly in the history.
+function prettyToolName(name: string): string {
+  if (name.startsWith('mcp__')) {
+    const parts = name.split('__');
+    if (parts.length >= 3) return `${parts[1]}: ${parts.slice(2).join('__')}`;
+  }
+  return name;
+}
+
+function getToolIcon(toolName: string) {
+  if (toolName.startsWith('mcp__db__')) return Database;
+  if (toolName.startsWith('mcp__')) return Network; // codegraph + any other MCP
+  switch (toolName) {
+    case 'Read':
+      return FileText;
+    case 'Glob':
+      return FolderSearch;
+    case 'Grep':
+      return Search;
+    default:
+      return FileText;
+  }
+}
+
+function getToolColor(toolName: string) {
+  if (toolName.startsWith('mcp__db__')) return 'text-cyan-500';
+  if (toolName.startsWith('mcp__')) return 'text-purple-500';
+  switch (toolName) {
+    case 'Read':
+      return 'text-blue-500';
+    case 'Glob':
+      return 'text-amber-500';
+    case 'Grep':
+      return 'text-green-500';
+    default:
+      return 'text-muted-foreground';
+  }
+}
+
 function ToolUsageHistory({ tools }: ToolUsageHistoryProps) {
-  const [expanded, setExpanded] = useState(false);
+  // Expanded by default so the agent's tool/MCP steps (e.g. the SQL it ran and
+  // what came back) are visible without an extra click.
+  const [expanded, setExpanded] = useState(true);
 
   if (tools.length === 0) return null;
 
@@ -1053,34 +1097,6 @@ function ToolUsageHistory({ tools }: ToolUsageHistoryProps) {
     acc[tool.name] = (acc[tool.name] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
-
-  const getToolIcon = (toolName: string) => {
-    if (toolName.startsWith('mcp__codegraph__')) return Network;
-    switch (toolName) {
-      case 'Read':
-        return FileText;
-      case 'Glob':
-        return FolderSearch;
-      case 'Grep':
-        return Search;
-      default:
-        return FileText;
-    }
-  };
-
-  const getToolColor = (toolName: string) => {
-    if (toolName.startsWith('mcp__codegraph__')) return 'text-purple-500';
-    switch (toolName) {
-      case 'Read':
-        return 'text-blue-500';
-      case 'Glob':
-        return 'text-amber-500';
-      case 'Grep':
-        return 'text-green-500';
-      default:
-        return 'text-muted-foreground';
-    }
-  };
 
   return (
     <div className="mt-2">
@@ -1104,20 +1120,32 @@ function ToolUsageHistory({ tools }: ToolUsageHistoryProps) {
       </button>
 
       {expanded && (
-        <div className="mt-2 space-y-1 rounded-md border border-border bg-muted/30 p-2">
+        <div className="mt-2 space-y-2 rounded-md border border-border bg-muted/30 p-2">
           {tools.map((tool, index) => {
             const Icon = getToolIcon(tool.name);
             return (
-              <div
-                key={`${tool.name}-${index}`}
-                className="flex items-center gap-2 text-xs"
-              >
-                <Icon className={cn('h-3 w-3 shrink-0', getToolColor(tool.name))} />
-                <span className="font-medium">{tool.name}</span>
+              <div key={`${tool.name}-${index}`} className="text-xs">
+                <div className="flex items-center gap-2">
+                  <Icon className={cn('h-3 w-3 shrink-0', getToolColor(tool.name))} />
+                  <span className="font-medium">{prettyToolName(tool.name)}</span>
+                  {tool.isError && (
+                    <span className="text-[10px] font-medium text-red-500">error</span>
+                  )}
+                </div>
                 {tool.input && (
-                  <span className="text-muted-foreground truncate max-w-[250px]">
+                  <pre className="mt-1 ml-5 overflow-x-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2 py-1 font-mono text-[11px] text-muted-foreground">
                     {tool.input}
-                  </span>
+                  </pre>
+                )}
+                {tool.result && (
+                  <pre
+                    className={cn(
+                      'mt-1 ml-5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2 py-1 font-mono text-[11px]',
+                      tool.isError ? 'text-red-500' : 'text-muted-foreground'
+                    )}
+                  >
+                    {tool.result}
+                  </pre>
                 )}
               </div>
             );
@@ -1141,6 +1169,20 @@ function ToolIndicator({ name, input }: ToolIndicatorProps) {
       return {
         icon: Network,
         label: 'Querying code graph',
+        color: 'text-purple-500 bg-purple-500/10'
+      };
+    }
+    if (toolName.startsWith('mcp__db__')) {
+      return {
+        icon: Database,
+        label: 'Querying database',
+        color: 'text-cyan-500 bg-cyan-500/10'
+      };
+    }
+    if (toolName.startsWith('mcp__')) {
+      return {
+        icon: Network,
+        label: prettyToolName(toolName),
         color: 'text-purple-500 bg-purple-500/10'
       };
     }

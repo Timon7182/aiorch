@@ -20,9 +20,56 @@ from .base import ProviderInfo, ProviderModel, ProviderStrategy
 
 logger = logging.getLogger(__name__)
 
+
+def _summarize_tool_input(raw_json: str, limit: int = 400) -> str:
+    """Turn accumulated `input_json_delta` text into a short, human-readable
+    summary of a tool call's arguments (e.g. the SQL/Cypher query or file path),
+    so the chat UI can show *what* the agent actually did, not just the tool name.
+    """
+    raw = (raw_json or "").strip()
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw[:limit]
+    if isinstance(data, dict):
+        # Prefer the single most informative field for common tools.
+        for key in ("sql", "query", "cypher", "command", "pattern",
+                    "file_path", "path", "url", "prompt"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()[:limit]
+        return json.dumps(data, ensure_ascii=False)[:limit]
+    return str(data)[:limit]
+
+
+def _summarize_tool_result(blocks: list, limit: int = 600) -> tuple[str, bool]:
+    """Extract a short text summary + error flag from `tool_result` content
+    blocks so the chat UI can show the MCP/tool output (e.g. returned rows)."""
+    parts: list[str] = []
+    is_error = False
+    for b in blocks:
+        if not isinstance(b, dict) or b.get("type") != "tool_result":
+            continue
+        if b.get("is_error"):
+            is_error = True
+        content = b.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    parts.append(c.get("text", ""))
+                elif isinstance(c, str):
+                    parts.append(c)
+    text = "\n".join(p for p in parts if p).strip()
+    return text[:limit], is_error
+
+
 # Claude models (static — CLI supports these shorthands)
 CLAUDE_MODELS = [
-    ProviderModel(id="opus", label="Claude Opus 4.7"),
+    ProviderModel(id="opus", label="Claude Opus 4.8"),
     ProviderModel(id="sonnet", label="Claude Sonnet 4.6"),
     ProviderModel(id="haiku", label="Claude Haiku 4.5"),
 ]
@@ -454,6 +501,10 @@ class ClaudeProvider(ProviderStrategy):
 
             accumulated_content = ""
             tools_used = []
+            # Accumulates streaming `input_json_delta` text per content-block
+            # index so we can surface a tool call's full arguments once its block
+            # closes (content_block_stop).
+            tool_input_buffers: dict = {}
             captured_session_id: str | None = None
             # Set when the CLI reports a failed turn via the `result` event. A
             # failed --resume (e.g. the session isn't on disk for this cwd) lands
@@ -492,7 +543,9 @@ class ClaudeProvider(ProviderStrategy):
                             if sub_type == "content_block_start":
                                 block = sub.get("content_block", {}) or {}
                                 if block.get("type") == "tool_use":
+                                    idx = sub.get("index")
                                     tool_name = block.get("name", "tool")
+                                    tool_input_buffers[idx] = {"name": tool_name, "json": ""}
                                     tools_used.append({
                                         "name": tool_name,
                                         "input": "",
@@ -523,9 +576,26 @@ class ClaudeProvider(ProviderStrategy):
                                             "type": "thinking",
                                             "content": thought,
                                         })
-                                # input_json_delta (streaming tool arguments)
-                                # is intentionally ignored — it's noisy and the
-                                # tool name alone is informative enough.
+                                elif dtype == "input_json_delta":
+                                    # Accumulate streaming tool arguments so we can
+                                    # show the actual query/path once the block ends.
+                                    idx = sub.get("index")
+                                    buf = tool_input_buffers.get(idx)
+                                    if buf is not None:
+                                        buf["json"] += delta.get("partial_json", "") or ""
+                            elif sub_type == "content_block_stop":
+                                # Tool-args block finished — surface the full input.
+                                idx = sub.get("index")
+                                buf = tool_input_buffers.pop(idx, None)
+                                if buf is not None:
+                                    input_str = _summarize_tool_input(buf["json"])
+                                    if tools_used:
+                                        tools_used[-1]["input"] = input_str
+                                    await broadcast_event("insights:chunk", {
+                                        "projectId": project_id,
+                                        "type": "tool_input",
+                                        "tool": {"name": buf["name"], "input": input_str},
+                                    })
                             continue
 
                         # ----- Tool result (closes the tool indicator) ---
@@ -536,9 +606,15 @@ class ClaudeProvider(ProviderStrategy):
                                 isinstance(b, dict) and b.get("type") == "tool_result"
                                 for b in content
                             ):
+                                result_text, tool_is_error = _summarize_tool_result(content)
+                                if tools_used and (result_text or tool_is_error):
+                                    tools_used[-1]["result"] = result_text
+                                    tools_used[-1]["isError"] = tool_is_error
                                 await broadcast_event("insights:chunk", {
                                     "projectId": project_id,
                                     "type": "tool_end",
+                                    "result": result_text,
+                                    "isError": tool_is_error,
                                 })
                             continue
 

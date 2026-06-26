@@ -76,7 +76,9 @@ export interface ChatAttachment {
 // Tool usage record for showing what tools the AI used
 export interface InsightsToolUsage {
   name: string;
-  input?: string;
+  input?: string;        // Arguments the tool was called with (e.g. the SQL query)
+  result?: string;       // Short summary of the tool's output (e.g. returned rows)
+  isError?: boolean;     // True when the tool call returned an error
   timestamp: Date;
 }
 
@@ -136,7 +138,7 @@ export interface InsightsStreamMetrics {
 }
 
 export interface InsightsStreamChunk {
-  type: 'text' | 'thinking' | 'task_suggestion' | 'tool_start' | 'tool_end' | 'done' | 'error';
+  type: 'text' | 'thinking' | 'task_suggestion' | 'tool_start' | 'tool_input' | 'tool_end' | 'done' | 'error';
   content?: string;
   suggestedTask?: {
     title: string;
@@ -145,8 +147,10 @@ export interface InsightsStreamChunk {
   };
   tool?: {
     name: string;
-    input?: string;  // Brief description of what's being searched/read
+    input?: string;  // Brief description of what's being searched/read (full args on tool_input)
   };
+  result?: string;   // Tool output summary (on tool_end)
+  isError?: boolean; // Tool returned an error (on tool_end)
   error?: string;
   metrics?: InsightsStreamMetrics;
 }
