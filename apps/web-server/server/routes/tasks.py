@@ -3733,6 +3733,51 @@ def resolve_task_worktrees(project_path: Path, spec_id: str) -> list[dict]:
     return entries
 
 
+def _docs_refresh_on_merge_enabled() -> bool:
+    """Whether a merge triggers a change-aware docs refresh. Default ON.
+
+    Set DOCS_REFRESH_ON_MERGE to a falsey value to disable. CGC re-indexing
+    (free) always runs regardless of this flag.
+    """
+    import os
+    return str(os.environ.get("DOCS_REFRESH_ON_MERGE", "true")).lower() not in (
+        "false", "0", "no",
+    )
+
+
+async def _post_merge_refresh(repo_paths: list[Path]) -> None:
+    """Background, best-effort post-merge refresh for each merged repo.
+
+    Always re-indexes CodeGraphContext (cheap, no LLM). When DOCS_REFRESH_ON_MERGE
+    is truthy AND the repo already has docs, also runs a change-aware docs
+    regeneration + site rebuild. Failures only log — never surface to the caller.
+    """
+    try:
+        from ..config import get_settings
+        from ..services.docs_generator_service import get_docs_generator_service
+
+        backend_path = Path(get_settings().BACKEND_PATH)
+        svc = get_docs_generator_service(backend_path)
+        do_docs = _docs_refresh_on_merge_enabled()
+        token = await svc.resolve_oauth_token() if do_docs else None
+
+        for repo in repo_paths:
+            try:
+                # (a) Always refresh the code graph (tree-sitter, no tokens).
+                await svc.index_codegraph(repo)
+                # (b) Optionally refresh docs when they exist for this repo.
+                if do_docs and svc.docs_exist(repo):
+                    await svc.refresh_docs_incremental(
+                        project_id=str(repo),
+                        project_path=repo,
+                        oauth_token=token,
+                    )
+            except Exception:
+                logger.warning("[merge] post-merge refresh failed for %s", repo, exc_info=True)
+    except Exception:
+        logger.warning("[merge] post-merge refresh could not start", exc_info=True)
+
+
 @router.post("/{task_id}/worktree/merge")
 async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
     """
@@ -3790,6 +3835,7 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
 
     results: list[dict] = []
     any_conflict = False
+    merged_repo_paths: list[Path] = []
     for entry in entries:
         repo = entry["repo"]
         branch = entry["branch"]
@@ -3858,6 +3904,8 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
             "output": result.stdout,
             "worktreeDeleted": worktree_deleted, "branchDeleted": branch_deleted,
         })
+        # Real (non-skipped) merge landed code into this repo — refresh it below.
+        merged_repo_paths.append(repo)
 
     merged_ok = [r for r in results if r.get("merged")]
     if any_conflict:
@@ -3867,6 +3915,13 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
             "conflicts": True,
             "data": {"repos": results},
         }
+
+    # Code changed → schedule a non-blocking refresh (CGC always; docs when
+    # enabled + present). Guarded so a refresh failure never affects the merge
+    # response. This is the primary "code changed" trigger for auto-refresh.
+    if merged_repo_paths:
+        import asyncio
+        asyncio.create_task(_post_merge_refresh(merged_repo_paths))
 
     all_merged = all(r.get("merged") for r in results)
     return {

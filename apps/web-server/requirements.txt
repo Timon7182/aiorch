@@ -21,6 +21,10 @@ python-dotenv>=1.0.0
 # Async utilities
 aiofiles>=23.0.0
 
+# Optional filesystem watcher for auto-refreshing docs on code changes
+# (server/services/docs_watcher.py). Only imported when DOCS_WATCH_ENABLED=true.
+watchfiles>=0.21
+
 # HTTP client (for OAuth token exchange, MS Graph API)
 httpx>=0.27.0
 

@@ -40,7 +40,39 @@ if sys.platform == "win32":
                 pass
 
 
-async def _run(project_dir: Path, model: str) -> int:
+def _read_changed_files(changed_files: Path | None) -> list[str]:
+    """Read the newline-delimited changed-file list, if provided."""
+    if changed_files is None:
+        return []
+    try:
+        return [
+            line.strip()
+            for line in changed_files.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except OSError:
+        return []
+
+
+def _incremental_prompt_section(changed: list[str]) -> str:
+    """Prompt appendix instructing an incremental (changed-files-only) update."""
+    # Cap the enumerated list so a huge diff doesn't blow the prompt budget.
+    shown = changed[:200]
+    listing = "\n".join(f"- {p}" for p in shown)
+    more = "" if len(changed) <= len(shown) else f"\n- ...and {len(changed) - len(shown)} more"
+    return (
+        "\n\n---\n\n"
+        "## INCREMENTAL UPDATE\n\n"
+        "This is an **INCREMENTAL** update, not a full regeneration. Only these "
+        "source files changed since the docs were last generated:\n\n"
+        f"{listing}{more}\n\n"
+        "Update ONLY the doc pages affected by these files. Do NOT regenerate "
+        "unaffected pages, and do not rewrite hand-authored content. If none of "
+        "the changes are doc-relevant, make no edits and exit.\n"
+    )
+
+
+async def _run(project_dir: Path, model: str, changed_files: Path | None = None) -> int:
     # Resolve through the prompt resolver so per-project overrides
     # (MAGESTIC_PROMPT_OVERRIDE_DIR) take precedence over the bundled default.
     from prompts_pkg.prompt_resolver import resolve_prompt_file
@@ -55,6 +87,11 @@ async def _run(project_dir: Path, model: str) -> int:
         return 2
 
     prompt_text = prompt_path.read_text(encoding="utf-8")
+
+    changed = _read_changed_files(changed_files)
+    if changed:
+        prompt_text = prompt_text + _incremental_prompt_section(changed)
+        print(f"[docs] incremental mode: {len(changed)} changed file(s)", flush=True)
 
     # Lazy-import so the path manipulation above is in effect first.
     from core.client import create_client
@@ -151,10 +188,18 @@ def main() -> int:
         default=os.environ.get("DOCS_MODEL", "claude-sonnet-4-5-20250929"),
         help="Claude model to use for the doc agent (default: sonnet-4-5)",
     )
+    parser.add_argument(
+        "--changed-files",
+        type=Path,
+        default=None,
+        help="Path to a newline-delimited list of source files changed since the "
+             "docs were last generated. Triggers an incremental (affected-pages-"
+             "only) update instead of a full regeneration.",
+    )
     args = parser.parse_args()
 
     try:
-        return asyncio.run(_run(args.project_dir, args.model))
+        return asyncio.run(_run(args.project_dir, args.model, args.changed_files))
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
