@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   MessageSquare,
@@ -21,7 +21,9 @@ import {
   Database,
   Paperclip,
   Brain,
-  Download
+  Download,
+  RefreshCw,
+  X
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -56,7 +58,7 @@ import { RepoSwitcher } from './RepoSwitcher';
 import { CreateTaskFromChatDialog } from './CreateTaskFromChatDialog';
 import { InsightsModelSelector } from './InsightsModelSelector';
 import { ChatAttachmentBar, processChatFiles, CHAT_FILE_ACCEPT } from './insights/ChatAttachmentBar';
-import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider, ChatAttachment } from '../shared/types';
+import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider, ChatAttachment, DocsStatus } from '../shared/types';
 import {
   TASK_CATEGORY_LABELS,
   TASK_CATEGORY_COLORS,
@@ -187,6 +189,12 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // (the selected branch's worktree / active repo). Drives whether the model
   // selector offers the CodeGraph option. Optimistic default avoids flicker.
   const [cgcAvailable, setCgcAvailable] = useState<boolean>(true);
+  // Whether a graphify graph.json exists for the dir the chat runs against.
+  const [graphifyAvailable, setGraphifyAvailable] = useState<boolean>(false);
+  // Documentation freshness for that dir (drives the "docs outdated" banner).
+  const [docsStatus, setDocsStatus] = useState<DocsStatus | null>(null);
+  const [docsBannerDismissed, setDocsBannerDismissed] = useState<boolean>(false);
+  const [refreshingDocs, setRefreshingDocs] = useState<boolean>(false);
 
   // Create Task from Chat state
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
@@ -288,11 +296,36 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     const repo = isMultiRepo && activeRepoPath ? activeRepoPath : undefined;
     window.API.getInsightsCodeSearchAvailability(projectId, branch, repo)
       .then((res) => {
-        if (!cancelled) setCgcAvailable(res.success && res.data ? res.data.cgc : false);
+        if (cancelled) return;
+        const data = res.success ? res.data : undefined;
+        setCgcAvailable(data ? data.cgc : false);
+        setGraphifyAvailable(data ? data.graphify : false);
+        setDocsStatus(data?.docs ?? null);
+        setDocsBannerDismissed(false);
       })
-      .catch(() => { if (!cancelled) setCgcAvailable(false); });
+      .catch(() => {
+        if (cancelled) return;
+        setCgcAvailable(false);
+        setGraphifyAvailable(false);
+        setDocsStatus(null);
+      });
     return () => { cancelled = true; };
   }, [projectId, selectedBranch, activeRepoPath, isMultiRepo]);
+
+  // Kick off a code-graph / docs re-index for the current repo scope, then
+  // dismiss the "docs outdated" banner (freshness will re-fetch on next scope
+  // change or reload).
+  const handleRefreshDocs = useCallback(async () => {
+    setRefreshingDocs(true);
+    try {
+      await window.API.refreshInsightsCodegraph(projectId, activeRepoPath ?? undefined);
+      setDocsBannerDismissed(true);
+    } catch (err) {
+      console.error('Failed to refresh docs/code-graph:', err);
+    } finally {
+      setRefreshingDocs(false);
+    }
+  }, [projectId, activeRepoPath]);
 
   const handleSend = () => {
     const message = inputValue.trim();
@@ -521,6 +554,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
               onConfigChange={handleModelConfigChange}
               disabled={isLoading}
               cgcAvailable={cgcAvailable}
+              graphifyAvailable={graphifyAvailable}
             />
             {messages.length > 0 && !isLoading && (
               <Button
@@ -542,6 +576,37 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
             </Button>
           </div>
         </div>
+
+      {/* Stale documentation banner — docs exist but code moved past them. */}
+      {docsStatus?.hasDocs && !docsStatus.fresh && docsStatus.docsSha && !docsBannerDismissed && (
+        <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm md:px-6">
+          <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span className="min-w-0 flex-1 text-amber-800 dark:text-amber-200">
+            {t('common:insights.docsBanner.message', 'Documentation is outdated — it may not reflect the latest code.')}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0"
+            onClick={handleRefreshDocs}
+            disabled={refreshingDocs}
+          >
+            {refreshingDocs
+              ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+            {t('common:insights.docsBanner.refresh', 'Refresh')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            onClick={() => setDocsBannerDismissed(true)}
+            aria-label={t('common:insights.docsBanner.dismiss', 'Dismiss')}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
       {/* Messages */}
       <ScrollArea className="flex-1 px-6 py-4">

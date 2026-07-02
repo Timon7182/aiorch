@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Sliders, Check, Loader2, Database } from 'lucide-react';
+import { Sliders, Check, Loader2, Database, ScrollText } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   DropdownMenu,
@@ -24,6 +24,9 @@ interface InsightsModelSelectorProps {
   // Whether CodeGraph is indexed for the current branch/repo scope. When false,
   // the CodeGraph option is shown disabled ("not indexed for this branch").
   cgcAvailable?: boolean;
+  // Whether a graphify graph.json exists for the current scope. When false, the
+  // graphify option is shown disabled.
+  graphifyAvailable?: boolean;
 }
 
 export function InsightsModelSelector({
@@ -31,7 +34,8 @@ export function InsightsModelSelector({
   currentConfig,
   onConfigChange,
   disabled,
-  cgcAvailable = true
+  cgcAvailable = true,
+  graphifyAvailable = false
 }: InsightsModelSelectorProps) {
   const { t } = useTranslation(['common', 'dialogs']);
   const [showCustomModal, setShowCustomModal] = useState(false);
@@ -83,7 +87,7 @@ export function InsightsModelSelector({
   }, [onConfigChange, currentConfig]);
 
   const currentCodeSearch: CodeSearchBackend = currentConfig?.codeSearch ?? 'auto';
-  const codeSearchOptions: CodeSearchBackend[] = ['auto', 'cgc', 'files'];
+  const codeSearchOptions: CodeSearchBackend[] = ['auto', 'cgc', 'graphify', 'files'];
 
   // Connect the chat to a registered DB (read-only), preserving provider/model.
   const handleSelectDb = useCallback((dbProfileId: string | null) => {
@@ -93,6 +97,20 @@ export function InsightsModelSelector({
     onConfigChange({ ...base, dbProfileId: dbProfileId ?? undefined });
   }, [onConfigChange, currentConfig]);
   const currentDb = currentConfig?.dbProfileId ?? null;
+
+  // Only offer DB profiles that are global (no projectIds) or scoped to this project.
+  const visibleDatabases = databases.filter(
+    (db) => !db.projectIds?.length || db.projectIds.includes(projectId)
+  );
+
+  // Toggle the read-only logs MCP server for the chat, preserving provider/model.
+  const handleToggleLogs = useCallback(() => {
+    const base: InsightsModelConfig = currentConfig ?? {
+      provider: 'claude', profileId: 'custom', model: 'sonnet', thinkingLevel: 'medium',
+    };
+    onConfigChange({ ...base, logsEnabled: !currentConfig?.logsEnabled });
+  }, [onConfigChange, currentConfig]);
+  const logsEnabled = currentConfig?.logsEnabled ?? false;
 
   // Build display text
   const getDisplayText = () => {
@@ -177,7 +195,9 @@ export function InsightsModelSelector({
           </DropdownMenuLabel>
           {codeSearchOptions.map((opt) => {
             const isSelected = currentCodeSearch === opt;
-            const isUnavailable = opt === 'cgc' && !cgcAvailable;
+            const isUnavailable =
+              (opt === 'cgc' && !cgcAvailable) ||
+              (opt === 'graphify' && !graphifyAvailable);
             return (
               <DropdownMenuItem
                 key={opt}
@@ -218,7 +238,7 @@ export function InsightsModelSelector({
             </div>
             {currentDb === null && <Check className="h-4 w-4 shrink-0 text-primary" />}
           </DropdownMenuItem>
-          {databases.map((db) => (
+          {visibleDatabases.map((db) => (
             <DropdownMenuItem
               key={db.id}
               onClick={() => handleSelectDb(db.id)}
@@ -238,6 +258,25 @@ export function InsightsModelSelector({
             className="flex cursor-pointer items-center gap-2 pl-4 text-primary"
           >
             <div className="text-sm">{t('common:insights.modelSelector.database.add', '+ Add connection…')}</div>
+          </DropdownMenuItem>
+
+          {/* Logs (read-only MCP) */}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="flex items-center gap-1.5">
+            <ScrollText className="h-3.5 w-3.5" />
+            {t('common:insights.modelSelector.logs.label', 'Logs')}
+          </DropdownMenuLabel>
+          <DropdownMenuItem
+            onClick={(e) => { e.preventDefault(); handleToggleLogs(); }}
+            className="flex cursor-pointer items-center gap-2 pl-4"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-sm">{t('common:insights.modelSelector.logs.enable', 'Enable log access')}</div>
+              <div className="text-xs text-muted-foreground">
+                {t('common:insights.modelSelector.logs.desc', 'Read app, server, and container logs (read-only)')}
+              </div>
+            </div>
+            {logsEnabled && <Check className="h-4 w-4 shrink-0 text-primary" />}
           </DropdownMenuItem>
 
           {/* Custom */}
@@ -268,6 +307,7 @@ export function InsightsModelSelector({
       {showAddDb && (
         <AddDatabaseModal
           open={showAddDb}
+          projectId={projectId}
           onClose={() => setShowAddDb(false)}
           onSaved={loadDatabases}
         />

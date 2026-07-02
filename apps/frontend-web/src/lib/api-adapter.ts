@@ -368,7 +368,7 @@ export const webAPI: API & { _isWebMode: boolean } = {
     post(`/tasks/${taskId}/promote`, options || {}),
   // ========== Databases (chat DB connection) ==========
   listDatabases: () => get(`/ext/databases`),
-  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) =>
+  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string; projectIds?: string[] }) =>
     post(`/ext/databases`, profile),
   deleteDatabase: (dbId: string) => del(`/ext/databases/${dbId}`),
   getForkInfo: (projectPath: string) =>
@@ -806,6 +806,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
     const qs = params.toString();
     return get(`/projects/${projectId}/insights/code-search-availability${qs ? `?${qs}` : ''}`);
   },
+  refreshInsightsCodegraph: (projectId: string, repo?: string) =>
+    post(`/projects/${projectId}/docs/codegraph/index${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`),
   stopInsightsMessage: (projectId: string) =>
     post(`/projects/${projectId}/insights/stop`),
   clearInsightsSession: (projectId: string) => del(`/projects/${projectId}/insights`),
