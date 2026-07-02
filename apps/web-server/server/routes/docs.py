@@ -68,6 +68,14 @@ async def _resolve_docs_base(
     build/site/codegraph all operate inside that branch's tree without touching
     the user's working copy. An empty/unknown branch, or one already checked
     out, falls back to the current HEAD — fully backward compatible.
+
+    Note: docs branch-worktrees share the insights worktree pool
+    (.magestic-ai/worktrees/insights/<branch>), which is LRU-capped at 5 per
+    repo (see branch_worktree.cleanup_insights_worktrees). An idle branch's
+    worktree — including any docs generated into it — can therefore be evicted;
+    the next request for that branch transparently recreates the worktree from
+    the branch tip (docs committed to the branch survive; uncommitted generated
+    docs in the worktree do not).
     """
     project_path = _resolve_project(project_id)
     from ..services.git_repos import resolve_repo_cwd
@@ -261,7 +269,7 @@ async def install_docs_hook(project_id: str, repo: str | None = None):
                 # Replace just our marked block so re-install stays idempotent.
                 pre = existing.split(_HOOK_BEGIN, 1)[0].rstrip("\n")
                 post = existing.split(_HOOK_END, 1)[1].lstrip("\n")
-                new_content = f"{pre}\n\n{_HOOK_BLOCK}"
+                new_content = f"{pre}\n\n{_HOOK_BLOCK}" if pre else _HOOK_BLOCK
                 if post:
                     new_content += f"\n{post}"
             else:
@@ -275,11 +283,9 @@ async def install_docs_hook(project_id: str, repo: str | None = None):
         hook_path.write_text(new_content, encoding="utf-8")
         # chmod +x on POSIX; no-op semantics on Windows (git runs it under sh).
         try:
-            import os as _os
             import stat as _stat
             mode = hook_path.stat().st_mode
             hook_path.chmod(mode | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
-            _ = _os  # keep import usage explicit
         except OSError:
             pass
     except OSError as e:

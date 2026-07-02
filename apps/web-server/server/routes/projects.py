@@ -92,6 +92,10 @@ def _kickoff_docs_generation(project_id: str, project_path: str) -> None:
             except Exception:
                 logger.debug("Auto docs generation failed for %s", project_path, exc_info=True)
 
+        # Mirror the interactive /docs/generate route: flag the project as
+        # starting *before* scheduling the task so a /docs/status call that
+        # races the spawn already reports state=running.
+        svc.mark_starting(project_id)
         asyncio.create_task(_run())
     except Exception:
         logger.debug("Failed to kick off docs generation for %s", project_path, exc_info=True)

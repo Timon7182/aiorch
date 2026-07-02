@@ -6,6 +6,7 @@ Handles CRUD operations for tasks (specs) within projects.
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -3739,10 +3740,41 @@ def _docs_refresh_on_merge_enabled() -> bool:
     Set DOCS_REFRESH_ON_MERGE to a falsey value to disable. CGC re-indexing
     (free) always runs regardless of this flag.
     """
-    import os
     return str(os.environ.get("DOCS_REFRESH_ON_MERGE", "true")).lower() not in (
         "false", "0", "no",
     )
+
+
+def _project_id_for_repo(repo: Path) -> str | None:
+    """Resolve the registered project UUID that owns ``repo``.
+
+    The docs single-flight guard (DocsGeneratorService._running) is keyed by
+    the registered project UUID — the same key the interactive /docs/generate
+    route uses. Matching by path (exact, or the repo being a child of a
+    multi-repo project's root) keeps merge-triggered refreshes on that same
+    key so they can't run concurrently with a UI-initiated generation.
+    """
+    try:
+        resolved = repo.resolve()
+        for pid, pdata in load_projects().items():
+            ppath = pdata.get("path")
+            if not ppath:
+                continue
+            try:
+                project_path = Path(ppath).resolve()
+            except OSError:
+                continue
+            if resolved == project_path:
+                return pid
+            # Multi-repo project: the merged repo is a child of the project root.
+            try:
+                resolved.relative_to(project_path)
+                return pid
+            except ValueError:
+                continue
+    except Exception:
+        logger.warning("[merge] project lookup failed for %s", repo, exc_info=True)
+    return None
 
 
 async def _post_merge_refresh(repo_paths: list[Path]) -> None:
@@ -3767,8 +3799,19 @@ async def _post_merge_refresh(repo_paths: list[Path]) -> None:
                 await svc.index_codegraph(repo)
                 # (b) Optionally refresh docs when they exist for this repo.
                 if do_docs and svc.docs_exist(repo):
+                    # The single-flight guard is keyed by the registered project
+                    # UUID (what the interactive route passes). Resolve it so a
+                    # merge refresh and a UI generation can never overlap on the
+                    # same docs/ tree; skip if the repo isn't registered.
+                    project_id = _project_id_for_repo(repo)
+                    if project_id is None:
+                        logger.warning(
+                            "[merge] no registered project found for %s; "
+                            "skipping docs refresh", repo,
+                        )
+                        continue
                     await svc.refresh_docs_incremental(
-                        project_id=str(repo),
+                        project_id=project_id,
                         project_path=repo,
                         oauth_token=token,
                     )
@@ -3904,8 +3947,11 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
             "output": result.stdout,
             "worktreeDeleted": worktree_deleted, "branchDeleted": branch_deleted,
         })
-        # Real (non-skipped) merge landed code into this repo — refresh it below.
-        merged_repo_paths.append(repo)
+        # Real, committed merge landed code into this repo — refresh it below.
+        # --no-commit merges are excluded: HEAD hasn't moved yet, so the doc
+        # agent would run against staged-but-uncommitted content.
+        if not options.noCommit:
+            merged_repo_paths.append(repo)
 
     merged_ok = [r for r in results if r.get("merged")]
     if any_conflict:

@@ -18,6 +18,13 @@ next restart. This is intentional — the watcher is a best-effort convenience,
 not a source of truth; the merge trigger covers the in-app path, and a restart
 picks up new projects.
 
+Branch-worktree note: the watcher only ever refreshes the project's *current
+checkout*. Docs generated for other branches live in branch worktrees that
+share the insights LRU pool (.magestic-ai/worktrees/insights/, capped at 5 per
+repo by branch_worktree.cleanup_insights_worktrees) and can be evicted when
+idle — they are recreated on the next branch-scoped docs request, so the
+watcher deliberately doesn't try to keep them fresh.
+
 All work is best-effort: exceptions are logged, never raised, so a watcher
 hiccup can't take down the server.
 """

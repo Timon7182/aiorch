@@ -104,20 +104,23 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   const branchParam = selectedBranch && selectedBranch !== currentBranch ? selectedBranch : undefined;
 
   // Append the repo (multi-repo scope) and branch params to every docs request
-  // so the backend reads/writes the right repo + branch worktree.
-  const repoSuffix = (hasQuery: boolean) => {
-    const parts: string[] = [];
-    if (activeRepoPath) parts.push(`repo=${encodeURIComponent(activeRepoPath)}`);
-    if (branchParam) parts.push(`branch=${encodeURIComponent(branchParam)}`);
-    if (parts.length === 0) return '';
-    return `${hasQuery ? '&' : '?'}${parts.join('&')}`;
-  };
+  // so the backend reads/writes the right repo + branch worktree. Memoized so
+  // the data-loading callbacks below can depend on it directly.
+  const repoSuffix = useCallback(
+    (hasQuery: boolean) => {
+      const parts: string[] = [];
+      if (activeRepoPath) parts.push(`repo=${encodeURIComponent(activeRepoPath)}`);
+      if (branchParam) parts.push(`branch=${encodeURIComponent(branchParam)}`);
+      if (parts.length === 0) return '';
+      return `${hasQuery ? '&' : '?'}${parts.join('&')}`;
+    },
+    [activeRepoPath, branchParam],
+  );
 
   const loadStatus = useCallback(async () => {
     const r = await get<DocsStatus>(`/projects/${projectId}/docs/status${repoSuffix(false)}`);
     if (r.success && r.data) setStatus(r.data);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeRepoPath, branchParam]);
+  }, [projectId, repoSuffix]);
 
   // Selection lives independently of the tree fetch (see the selection effect
   // below), so loadTree only fetches — it must NOT depend on selectedPath or
@@ -125,8 +128,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   const loadTree = useCallback(async () => {
     const r = await get<{ files: DocFile[] }>(`/projects/${projectId}/docs/tree${repoSuffix(false)}`);
     if (r.success && r.data) setFiles(r.data.files);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeRepoPath, branchParam]);
+  }, [projectId, repoSuffix]);
 
   // Monotonic token so a slow/404 content response for a no-longer-selected
   // file (e.g. the previous repo's file during a repo switch) can't clobber
@@ -155,8 +157,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
         setContent(`# Could not load ${path}\n\n${r.error ?? ''}`);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectId, activeRepoPath, branchParam],
+    [projectId, repoSuffix],
   );
 
   useEffect(() => {
@@ -242,8 +243,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, projectId, activeRepoPath, branchParam, loadTree, loadContent, selectedPath]);
+  }, [status, projectId, repoSuffix, loadTree, loadContent, selectedPath]);
 
   const handleGenerate = useCallback(async () => {
     setBusy('generate');
@@ -260,8 +260,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     setOptimisticRunning(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeRepoPath, branchParam, loadStatus]);
+  }, [projectId, repoSuffix, loadStatus]);
 
   const handleBuild = useCallback(async () => {
     setBusy('build');
@@ -273,8 +272,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     await loadTree();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeRepoPath, branchParam, loadStatus, loadTree]);
+  }, [projectId, repoSuffix, loadStatus, loadTree]);
 
   const handleIndexCodegraph = useCallback(async () => {
     setBusy('codegraph');
@@ -287,8 +285,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       setError(r.error ?? 'Failed to start code-graph indexing');
     }
     await loadStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeRepoPath, branchParam, loadStatus]);
+  }, [projectId, repoSuffix, loadStatus]);
 
   const handleStop = useCallback(async () => {
     setBusy('stop');
@@ -320,8 +317,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     setOptimisticRunning(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeRepoPath, branchParam, loadStatus]);
+  }, [projectId, repoSuffix, loadStatus]);
 
   // Install the post-commit hook that requests a docs refresh on external
   // commits (honored by the optional watcher). Toasts done/error.
@@ -338,8 +334,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     } else {
       setHookMsg({ ok: true, text: t('hook.installed') });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, activeRepoPath, branchParam, t]);
+  }, [projectId, repoSuffix, t]);
 
   const isRunning = status?.state === 'running' || optimisticRunning;
 

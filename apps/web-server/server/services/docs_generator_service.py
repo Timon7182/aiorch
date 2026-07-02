@@ -345,12 +345,17 @@ class DocsGeneratorService:
             pass
 
     def _git_head(self, project_path: Path) -> str | None:
-        """Best-effort `git rev-parse --short HEAD`, returns None on failure."""
+        """Best-effort `git rev-parse --short=12 HEAD`, returns None on failure.
+
+        12 chars rather than git's default 7: this sha later serves as the base
+        of `git diff <sha>..HEAD` in refresh_docs_incremental, and 7-char
+        abbreviations can become ambiguous on large repos.
+        """
         import subprocess
         try:
             out = subprocess.check_output(
                 ["git", "-c", f"safe.directory={project_path}",
-                 "-C", str(project_path), "rev-parse", "--short", "HEAD"],
+                 "-C", str(project_path), "rev-parse", "--short=12", "HEAD"],
                 stderr=subprocess.DEVNULL,
                 timeout=5,
             )
