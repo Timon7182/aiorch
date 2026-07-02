@@ -72,7 +72,77 @@ def _incremental_prompt_section(changed: list[str]) -> str:
     )
 
 
-async def _run(project_dir: Path, model: str, changed_files: Path | None = None) -> int:
+# Placeholders in doc_generator.md → manifest keys in a doc template's
+# template.json. A template supplies the structure contract, the mkdocs.yml
+# skeleton, the per-page templates, and optional extra instructions.
+_TEMPLATE_PLACEHOLDERS: dict[str, str] = {
+    "structure": "{{TEMPLATE_STRUCTURE}}",
+    "mkdocs_yml": "{{TEMPLATE_MKDOCS_YML}}",
+    "page_templates": "{{TEMPLATE_PAGE_TEMPLATES}}",
+    "extra_instructions": "{{TEMPLATE_EXTRA}}",
+}
+
+
+def _template_search_dirs(project_dir: Path, name: str) -> list[Path]:
+    """Resolution order: project override → user global → bundled built-in."""
+    return [
+        project_dir / ".magestic-ai" / "doc-templates" / name,
+        Path.home() / ".magestic-ai" / "doc-templates" / name,
+        _BACKEND_DIR / "prompts" / "doc_templates" / name,
+    ]
+
+
+def _load_template_manifest(project_dir: Path, name: str) -> dict | None:
+    """Load the first `template.json` found for ``name``, or None."""
+    import json
+
+    for d in _template_search_dirs(project_dir, name):
+        manifest = d / "template.json"
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+                print(
+                    f"[docs] template {name!r} manifest is not an object",
+                    file=sys.stderr,
+                )
+                return None
+            except (json.JSONDecodeError, OSError) as exc:
+                print(
+                    f"[docs] template {name!r} manifest unreadable: {exc}",
+                    file=sys.stderr,
+                )
+                return None
+    return None
+
+
+def _resolve_template(project_dir: Path, name: str) -> dict:
+    """Resolve a template manifest, falling back to 'default' when missing."""
+    data = _load_template_manifest(project_dir, name)
+    if data is None and name != "default":
+        print(
+            f"[docs] template {name!r} not found; falling back to 'default'",
+            file=sys.stderr,
+        )
+        data = _load_template_manifest(project_dir, "default")
+    return data or {}
+
+
+def _apply_template(prompt_text: str, tpl: dict) -> str:
+    """Substitute the {{TEMPLATE_*}} placeholders with the template's content."""
+    for key, placeholder in _TEMPLATE_PLACEHOLDERS.items():
+        value = tpl.get(key, "") if isinstance(tpl, dict) else ""
+        prompt_text = prompt_text.replace(placeholder, str(value or ""))
+    return prompt_text
+
+
+async def _run(
+    project_dir: Path,
+    model: str,
+    template: str = "default",
+    changed_files: Path | None = None,
+) -> int:
     # Resolve through the prompt resolver so per-project overrides
     # (MAGESTIC_PROMPT_OVERRIDE_DIR) take precedence over the bundled default.
     from prompts_pkg.prompt_resolver import resolve_prompt_file
@@ -88,6 +158,14 @@ async def _run(project_dir: Path, model: str, changed_files: Path | None = None)
 
     prompt_text = prompt_path.read_text(encoding="utf-8")
 
+    # Fill the template placeholders from the selected doc template so the
+    # generated site follows the chosen structure/mkdocs/page layout.
+    tpl = _resolve_template(project_dir, template)
+    prompt_text = _apply_template(prompt_text, tpl)
+    print(f"[docs] using template '{template}'", flush=True)
+
+    # Incremental mode: append the changed-files appendix AFTER template
+    # substitution so the instruction survives verbatim in the final prompt.
     changed = _read_changed_files(changed_files)
     if changed:
         prompt_text = prompt_text + _incremental_prompt_section(changed)
@@ -189,6 +267,14 @@ def main() -> int:
         help="Claude model to use for the doc agent (default: sonnet-4-5)",
     )
     parser.add_argument(
+        "--template",
+        default=os.environ.get("DOCS_TEMPLATE", "default"),
+        help="Doc template name to drive structure/mkdocs/page layout "
+        "(default: 'default'). Resolved from the project's "
+        ".magestic-ai/doc-templates/, then ~/.magestic-ai/doc-templates/, "
+        "then the bundled built-ins.",
+    )
+    parser.add_argument(
         "--changed-files",
         type=Path,
         default=None,
@@ -199,7 +285,9 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        return asyncio.run(_run(args.project_dir, args.model, args.changed_files))
+        return asyncio.run(
+            _run(args.project_dir, args.model, args.template, args.changed_files)
+        )
     except KeyboardInterrupt:
         return 130
     except Exception as exc:

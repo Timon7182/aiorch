@@ -39,6 +39,44 @@ class ConnectedClient:
 # Active WebSocket connections — keyed by WebSocket object for fast lookup
 _clients: dict[WebSocket, ConnectedClient] = {}
 
+# The main asyncio loop, captured at app startup. Background *threads* (which have
+# no running loop of their own — e.g. the remote preview-deploy worker) use this
+# to schedule broadcasts back onto the loop the websockets live on.
+_main_loop: "asyncio.AbstractEventLoop | None" = None
+
+
+def set_main_loop(loop: "asyncio.AbstractEventLoop") -> None:
+    """Record the running event loop so thread code can broadcast via it."""
+    global _main_loop
+    _main_loop = loop
+
+
+def emit_threadsafe(coro) -> None:
+    """Schedule a broadcast coroutine onto the main loop from any thread.
+
+    Safe to call from a non-async background thread (paramiko workers, the
+    preview-deploy thread). No-ops silently if the loop isn't available yet.
+    """
+    loop = _main_loop
+    if loop is None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+    def _log_result(f: "asyncio.Future") -> None:
+        if f.cancelled():
+            return
+        exc = f.exception()
+        if exc is not None:
+            logger.warning("emit_threadsafe broadcast failed: %s", exc)
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        fut.add_done_callback(_log_result)
+    except Exception:
+        logger.debug("emit_threadsafe failed", exc_info=True)
+
 # Legacy set kept for backward compatibility with code that still
 # references ``active_connections`` directly.
 active_connections: set[WebSocket] = set()
@@ -307,6 +345,43 @@ async def emit_task_usage(task_id: str, usage: dict):
         f"out: {usage.get('output_tokens')}"
     )
     await broadcast_event("task:usage", {"taskId": task_id, "usage": usage})
+
+
+async def emit_preview_status(
+    task_id: str,
+    project_id: str | None,
+    status: str,
+    strategy: str,
+    url: str | None = None,
+    error: str | None = None,
+):
+    """Emit a preview lifecycle transition (building -> running/failed/stopped).
+
+    Emitted by both the local preview service (dev-server / compose-local) and
+    the remote docker preview worker so the UI updates immediately instead of
+    waiting for its poll.
+    """
+    logger.info(
+        "[WebSocket] Emitting preview:status - taskId: %s, status: %s, strategy: %s",
+        task_id, status, strategy,
+    )
+    # TODO: scope preview:status to the task owner via send_to_user instead of
+    # broadcasting to every connected client.
+    await broadcast_event("preview:status", {
+        "taskId": task_id,
+        "projectId": project_id,
+        "status": status,
+        "strategy": strategy,
+        "url": url,
+        "error": error,
+    })
+
+
+async def emit_preview_log(task_id: str, line: str):
+    """Emit a single line of preview build/run output for the live log panel."""
+    # TODO: scope preview:log to the task owner via send_to_user instead of
+    # broadcasting to every connected client.
+    await broadcast_event("preview:log", {"taskId": task_id, "line": line})
 
 
 async def emit_subtask_update(task_id: str, subtask_id: str, status: str, previous_status: str | None = None):

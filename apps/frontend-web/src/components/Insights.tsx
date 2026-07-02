@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   MessageSquare,
@@ -21,7 +21,9 @@ import {
   Database,
   Paperclip,
   Brain,
-  Download
+  Download,
+  RefreshCw,
+  X
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -56,7 +58,7 @@ import { RepoSwitcher } from './RepoSwitcher';
 import { CreateTaskFromChatDialog } from './CreateTaskFromChatDialog';
 import { InsightsModelSelector } from './InsightsModelSelector';
 import { ChatAttachmentBar, processChatFiles, CHAT_FILE_ACCEPT } from './insights/ChatAttachmentBar';
-import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider, ChatAttachment } from '../shared/types';
+import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider, ChatAttachment, DocsStatus } from '../shared/types';
 import {
   TASK_CATEGORY_LABELS,
   TASK_CATEGORY_COLORS,
@@ -65,6 +67,33 @@ import {
   PROVIDER_INFO,
   PROVIDER_MODELS
 } from '../shared/constants';
+
+// Persist the "docs outdated" banner dismissal per (project, docsSha) so it
+// survives page refresh; a new docsSha yields a new key, so regenerated docs
+// naturally re-arm the banner.
+function docsBannerStorageKey(projectId: string, docsSha: string | null | undefined): string | null {
+  return docsSha ? `insights-docs-banner-dismissed:${projectId}:${docsSha}` : null;
+}
+
+function isDocsBannerDismissed(projectId: string, docsSha: string | null | undefined): boolean {
+  const key = docsBannerStorageKey(projectId, docsSha);
+  if (!key) return false;
+  try {
+    return localStorage.getItem(key) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function persistDocsBannerDismissed(projectId: string, docsSha: string | null | undefined): void {
+  const key = docsBannerStorageKey(projectId, docsSha);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, 'true');
+  } catch {
+    // Storage unavailable (private mode / quota) — dismissal stays session-only.
+  }
+}
 
 /** Build a model suffix like "(Claude Sonnet 4.6)" or "(Ollama: qwen3-30b)" */
 function getModelLabel(provider?: InsightsProvider, model?: string): string | null {
@@ -187,6 +216,17 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // (the selected branch's worktree / active repo). Drives whether the model
   // selector offers the CodeGraph option. Optimistic default avoids flicker.
   const [cgcAvailable, setCgcAvailable] = useState<boolean>(true);
+  // Whether a graphify graph.json exists for the dir the chat runs against.
+  const [graphifyAvailable, setGraphifyAvailable] = useState<boolean>(false);
+  // Documentation freshness for that dir (drives the "docs outdated" banner).
+  // Dismissal persists in localStorage keyed by (projectId, docsSha) so it
+  // survives refresh; a new docsSha naturally invalidates the dismissal.
+  const [docsStatus, setDocsStatus] = useState<DocsStatus | null>(null);
+  const [docsBannerDismissed, setDocsBannerDismissed] = useState<boolean>(() =>
+    isDocsBannerDismissed(projectId, null)
+  );
+  const [refreshingDocs, setRefreshingDocs] = useState<boolean>(false);
+  const [refreshDocsError, setRefreshDocsError] = useState<boolean>(false);
 
   // Create Task from Chat state
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
@@ -288,11 +328,44 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     const repo = isMultiRepo && activeRepoPath ? activeRepoPath : undefined;
     window.API.getInsightsCodeSearchAvailability(projectId, branch, repo)
       .then((res) => {
-        if (!cancelled) setCgcAvailable(res.success && res.data ? res.data.cgc : false);
+        if (cancelled) return;
+        const data = res.success ? res.data : undefined;
+        setCgcAvailable(data ? data.cgc : false);
+        setGraphifyAvailable(data ? data.graphify : false);
+        setDocsStatus(data?.docs ?? null);
+        // Re-derive dismissal for this scope's docsSha — a previously dismissed
+        // banner stays hidden until the docs are regenerated (new docsSha).
+        setDocsBannerDismissed(isDocsBannerDismissed(projectId, data?.docs?.docsSha));
       })
-      .catch(() => { if (!cancelled) setCgcAvailable(false); });
+      .catch(() => {
+        if (cancelled) return;
+        setCgcAvailable(false);
+        setGraphifyAvailable(false);
+        setDocsStatus(null);
+      });
     return () => { cancelled = true; };
   }, [projectId, selectedBranch, activeRepoPath, isMultiRepo]);
+
+  // Kick off a code-graph / docs re-index for the current repo scope, then
+  // dismiss the "docs outdated" banner (freshness will re-fetch on next scope
+  // change or reload).
+  const handleRefreshDocs = useCallback(async () => {
+    setRefreshingDocs(true);
+    setRefreshDocsError(false);
+    try {
+      const res = await window.API.refreshInsightsCodegraph(projectId, activeRepoPath ?? undefined);
+      if (res?.success) {
+        setDocsBannerDismissed(true);
+      } else {
+        setRefreshDocsError(true);
+      }
+    } catch (err) {
+      console.error('Failed to refresh docs/code-graph:', err);
+      setRefreshDocsError(true);
+    } finally {
+      setRefreshingDocs(false);
+    }
+  }, [projectId, activeRepoPath]);
 
   const handleSend = () => {
     const message = inputValue.trim();
@@ -521,6 +594,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
               onConfigChange={handleModelConfigChange}
               disabled={isLoading}
               cgcAvailable={cgcAvailable}
+              graphifyAvailable={graphifyAvailable}
             />
             {messages.length > 0 && !isLoading && (
               <Button
@@ -542,6 +616,45 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
             </Button>
           </div>
         </div>
+
+      {/* Stale documentation banner — docs exist but code moved past them. */}
+      {docsStatus?.hasDocs && !docsStatus.fresh && docsStatus.docsSha && !docsBannerDismissed && (
+        <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm md:px-6">
+          <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span className="min-w-0 flex-1 text-amber-800 dark:text-amber-200">
+            {t('common:insights.docsBanner.message', 'Documentation is outdated — it may not reflect the latest code.')}
+            {refreshDocsError && (
+              <span className="ml-2 text-xs text-destructive">
+                {t('common:insights.docsBanner.refreshError', 'Refresh failed — please try again.')}
+              </span>
+            )}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0"
+            onClick={handleRefreshDocs}
+            disabled={refreshingDocs}
+          >
+            {refreshingDocs
+              ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+            {t('common:insights.docsBanner.refresh', 'Refresh')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            onClick={() => {
+              persistDocsBannerDismissed(projectId, docsStatus.docsSha);
+              setDocsBannerDismissed(true);
+            }}
+            aria-label={t('common:insights.docsBanner.dismiss', 'Dismiss')}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
       {/* Messages */}
       <ScrollArea className="flex-1 px-6 py-4">

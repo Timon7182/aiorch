@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Dialog,
   DialogContent,
@@ -23,6 +24,9 @@ interface AddDatabaseModalProps {
   open?: boolean;
   onClose: () => void;
   onSaved: () => void; // called after a successful create so the caller can refresh
+  // The project the "Add connection" was opened from — used to pre-scope the
+  // profile. Omitted = the modal defaults to a global (unscoped) connection.
+  projectId?: string;
 }
 
 const DEFAULT_PORTS: Record<string, number> = { postgres: 5432, mysql: 3306, sqlite: 0 };
@@ -32,7 +36,8 @@ const DEFAULT_PORTS: Record<string, number> = { postgres: 5432, mysql: 3306, sql
  * Saves via window.API.createDatabase → POST /api/ext/databases (authenticated),
  * so credentials are entered by the user in their own session.
  */
-export function AddDatabaseModal({ open = true, onClose, onSaved }: AddDatabaseModalProps) {
+export function AddDatabaseModal({ open = true, onClose, onSaved, projectId }: AddDatabaseModalProps) {
+  const { t } = useTranslation(['dialogs', 'common']);
   const [name, setName] = useState('');
   const [kind, setKind] = useState('postgres');
   const [host, setHost] = useState('192.168.88.55');
@@ -43,6 +48,27 @@ export function AddDatabaseModal({ open = true, onClose, onSaved }: AddDatabaseM
   const [env, setEnv] = useState('preview');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Optional per-project scoping. Empty selection = global (visible in every
+  // project's chat DB selector). Pre-scoped to the opening project.
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>(
+    projectId ? [projectId] : []
+  );
+  useEffect(() => {
+    window.API.getProjects?.()
+      .then((res) => {
+        if (res?.success && res.data) {
+          setProjects(res.data.map((p) => ({ id: p.id, name: p.name })));
+        }
+      })
+      .catch(() => {});
+  }, []);
+  const toggleProject = (id: string) => {
+    setSelectedProjectIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
 
   const onKindChange = (k: string) => {
     setKind(k);
@@ -66,6 +92,7 @@ export function AddDatabaseModal({ open = true, onClose, onSaved }: AddDatabaseM
         database: database.trim(),
         username: username.trim() || undefined,
         password: password || undefined,
+        projectIds: selectedProjectIds,
       });
       if (res?.success) {
         onSaved();
@@ -136,6 +163,26 @@ export function AddDatabaseModal({ open = true, onClose, onSaved }: AddDatabaseM
               <Input id="db-pass" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
           </div>
+          {projects.length > 0 && (
+            <div className="space-y-1">
+              <Label>{t('dialogs:addDatabase.scope.label', 'Scope to projects')}</Label>
+              <p className="text-xs text-muted-foreground">
+                {t('dialogs:addDatabase.scope.hint', 'Leave empty to make this connection available in every project.')}
+              </p>
+              <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+                {projects.map((p) => (
+                  <label key={p.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={selectedProjectIds.includes(p.id)}
+                      onChange={() => toggleProject(p.id)}
+                    />
+                    <span className="truncate">{p.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
 

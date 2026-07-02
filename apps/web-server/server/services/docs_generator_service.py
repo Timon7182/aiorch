@@ -122,6 +122,7 @@ class DocsGeneratorService:
         project_path: Path,
         oauth_token: str | None,
         user_identity: tuple[str, str] | None = None,
+        template: str | None = None,
         branch: str | None = None,
         changed_files: Path | None = None,
     ) -> GenerationResult:
@@ -137,6 +138,9 @@ class DocsGeneratorService:
             user_identity: optional (name, email) used to attribute any
                 writes the agent makes via git (the agent itself doesn't
                 commit, but stays consistent with the rest of the platform).
+            template: optional doc template name (structure/mkdocs/page
+                layout). Defaults to "default" when None. Passed through to
+                the runner's ``--template`` flag.
             branch: optional branch name recorded in the .docgen.json marker so
                 the UI can show which branch these docs describe. None means the
                 currently-checked-out HEAD (fully backward compatible).
@@ -188,6 +192,8 @@ class DocsGeneratorService:
             "--project-dir",
             str(project_path),
         ]
+        if template:
+            cmd += ["--template", template]
         if changed_files is not None:
             cmd += ["--changed-files", str(changed_files)]
 
