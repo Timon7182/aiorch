@@ -358,7 +358,7 @@ export const webAPI: API & { _isWebMode: boolean } = {
   createPRFromTask: (taskId: string, options?: { title?: string; body?: string; draft?: boolean; baseBranch?: string; targetRepo?: string }) =>
     post(`/tasks/${taskId}/worktree/create-pr`, options || {}),
   // ========== Preview deploy ("Run on server") ==========
-  deployPreview: (taskId: string, options?: { lane?: string }) =>
+  deployPreview: (taskId: string, options?: { lane?: string; strategy?: string }) =>
     post(`/tasks/${taskId}/deploy-preview`, options || {}),
   getPreview: (taskId: string) => get(`/tasks/${taskId}/deploy-preview`),
   stopPreview: (taskId: string) => del(`/tasks/${taskId}/deploy-preview`),
@@ -366,6 +366,14 @@ export const webAPI: API & { _isWebMode: boolean } = {
     post(`/tasks/${taskId}/deploy-preview/extend`, options || {}),
   promotePreview: (taskId: string, options?: { lane?: string }) =>
     post(`/tasks/${taskId}/promote`, options || {}),
+  onPreviewStatus: (callback) =>
+    registerCallback('preview:status', (payload: { taskId: string; status: string; strategy: string; url?: string | null; error?: string | null; projectId?: string | null }) => {
+      callback(payload as never);
+    }),
+  onPreviewLog: (callback) =>
+    registerCallback('preview:log', (payload: { taskId: string; line: string }) => {
+      callback(payload as never);
+    }),
   // ========== Databases (chat DB connection) ==========
   listDatabases: () => get(`/ext/databases`),
   createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) =>
