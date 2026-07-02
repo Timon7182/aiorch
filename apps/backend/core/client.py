@@ -389,8 +389,6 @@ def load_project_mcp_config(project_dir: Path) -> dict:
         Dict of MCP configuration values (string values, except CUSTOM_MCP_SERVERS which is parsed JSON)
     """
     env_path = project_dir / ".magestic-ai" / ".env"
-    if not env_path.exists():
-        return {}
 
     config = {}
     mcp_keys = {
@@ -400,49 +398,63 @@ def load_project_mcp_config(project_dir: Path) -> dict:
         "CODE_GRAPH_PROVIDER",  # exclusive code-graph selection: codegraph (default) | graphify
     }
 
-    try:
-        with open(env_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    key = key.strip()
-                    value = value.strip().strip("\"'")
-                    # Include global MCP toggles
-                    if key in mcp_keys:
-                        config[key] = value
-                    # Include per-agent MCP overrides (AGENT_MCP_<agent>_ADD/REMOVE)
-                    elif key.startswith("AGENT_MCP_"):
-                        config[key] = value
-                    # Include custom MCP servers (parse JSON with schema validation)
-                    elif key == "CUSTOM_MCP_SERVERS":
-                        try:
-                            parsed = json.loads(value)
-                            if not isinstance(parsed, list):
+    if env_path.exists():
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        key = key.strip()
+                        value = value.strip().strip("\"'")
+                        # Include global MCP toggles
+                        if key in mcp_keys:
+                            config[key] = value
+                        # Include per-agent MCP overrides (AGENT_MCP_<agent>_ADD/REMOVE)
+                        elif key.startswith("AGENT_MCP_"):
+                            config[key] = value
+                        # Include custom MCP servers (parse JSON with schema validation)
+                        elif key == "CUSTOM_MCP_SERVERS":
+                            try:
+                                parsed = json.loads(value)
+                                if not isinstance(parsed, list):
+                                    logger.warning(
+                                        "CUSTOM_MCP_SERVERS must be a JSON array"
+                                    )
+                                    config["CUSTOM_MCP_SERVERS"] = []
+                                else:
+                                    # Validate each server and filter out invalid ones
+                                    valid_servers = []
+                                    for i, server in enumerate(parsed):
+                                        if _validate_custom_mcp_server(server):
+                                            valid_servers.append(server)
+                                        else:
+                                            logger.warning(
+                                                f"Skipping invalid custom MCP server at index {i}"
+                                            )
+                                    config["CUSTOM_MCP_SERVERS"] = valid_servers
+                            except json.JSONDecodeError:
                                 logger.warning(
-                                    "CUSTOM_MCP_SERVERS must be a JSON array"
+                                    f"Failed to parse CUSTOM_MCP_SERVERS JSON: {value}"
                                 )
                                 config["CUSTOM_MCP_SERVERS"] = []
-                            else:
-                                # Validate each server and filter out invalid ones
-                                valid_servers = []
-                                for i, server in enumerate(parsed):
-                                    if _validate_custom_mcp_server(server):
-                                        valid_servers.append(server)
-                                    else:
-                                        logger.warning(
-                                            f"Skipping invalid custom MCP server at index {i}"
-                                        )
-                                config["CUSTOM_MCP_SERVERS"] = valid_servers
-                        except json.JSONDecodeError:
-                            logger.warning(
-                                f"Failed to parse CUSTOM_MCP_SERVERS JSON: {value}"
-                            )
-                            config["CUSTOM_MCP_SERVERS"] = []
-    except Exception as e:
-        logger.debug(f"Failed to load project MCP config from {env_path}: {e}")
+        except Exception as e:
+            logger.debug(f"Failed to load project MCP config from {env_path}: {e}")
+
+    # Overlay per-agent MCP overrides from the process environment. This lets
+    # the web-server force per-agent servers on a subprocess (e.g.
+    # AGENT_MCP_qa_reviewer_ADD=playwright for bug-report tasks) without
+    # editing the project's .magestic-ai/.env. Deliberately scoped to
+    # AGENT_MCP_* ONLY: global toggles like PLAYWRIGHT_MCP_ENABLED /
+    # CONTEXT7_ENABLED / CODE_GRAPH_PROVIDER must NOT leak in from ambient
+    # container-wide env, or operators' shell env would silently change
+    # per-project behavior. Env values win over the file so a forced setting
+    # always takes effect.
+    for _key, _value in os.environ.items():
+        if _key.startswith("AGENT_MCP_"):
+            config[_key] = _value
 
     return config
 
@@ -817,11 +829,14 @@ def create_client(
         }
 
     if "playwright" in required_servers:
-        # Playwright for web frontends (headless Chromium)
+        # Playwright for web frontends (headless Chromium).
+        # Version is PINNED (not @latest) for reproducible QA runs — an
+        # unattended agent must not silently pick up a breaking MCP release.
+        # Bump this deliberately after verifying the new version.
         mcp_servers["playwright"] = {
             "command": "npx",
             "args": [
-                "@playwright/mcp@latest",
+                "@playwright/mcp@0.0.41",
                 "--headless",
                 "--browser", "chromium",
                 "--viewport-size", "1280x720",

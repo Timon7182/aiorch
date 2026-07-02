@@ -75,7 +75,7 @@ The project root is the parent of magestic-ai/. Implement code in the project ro
 ---
 
 """
-    return spec_context + prompt
+    return spec_context + _get_attachments_context(spec_dir) + prompt
 
 
 def get_coding_prompt(spec_dir: Path) -> str:
@@ -142,7 +142,7 @@ After addressing this input, you may delete or clear the HUMAN_INPUT.md file.
 
 """
 
-    return spec_context + prompt
+    return spec_context + _get_attachments_context(spec_dir) + prompt
 
 
 def _get_recovery_context(spec_dir: Path) -> str:
@@ -260,7 +260,7 @@ You are adding follow-up work to a **completed** spec.
 ---
 
 """
-    return spec_context + prompt
+    return spec_context + _get_attachments_context(spec_dir) + prompt
 
 
 def is_first_run(spec_dir: Path) -> bool:
@@ -296,6 +296,99 @@ def is_first_run(spec_dir: Path) -> bool:
     except (OSError, json.JSONDecodeError):
         # If we can't read the file, treat as first run
         return True
+
+
+def _get_attachments_context(spec_dir: Path) -> str:
+    """Return a prompt section listing client-attached screenshots, if any.
+
+    The web-server materializes pasted screenshots into ``<spec_dir>/attachments/``
+    (see routes/tasks.py ``_materialize_attachments``). Agents' Read tool renders
+    images natively, so we point them at the files. Returns "" when no
+    attachments exist (backward compatible).
+    """
+    attachments_dir = spec_dir / "attachments"
+    if not attachments_dir.is_dir():
+        return ""
+    try:
+        files = sorted(
+            p
+            for p in attachments_dir.iterdir()
+            if p.is_file()
+            and p.suffix.lower()
+            in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")
+        )
+    except OSError:
+        return ""
+    if not files:
+        return ""
+    listing = "\n".join(f"- `{p}`" for p in files)
+    return (
+        "## CLIENT-ATTACHED SCREENSHOTS\n\n"
+        f"The client attached {len(files)} screenshot(s) with this task. "
+        "Use the Read tool to view them (images render natively in your context):\n\n"
+        f"{listing}\n\n---\n\n"
+    )
+
+
+def _get_bug_repro_context(spec_dir: Path, role: str) -> str:
+    """Return the bug-reproduction protocol section for QA prompts on bug tasks.
+
+    Gated on ``task_metadata.json`` ``taskType == 'bug'``. ``role`` is
+    ``'reviewer'`` or ``'fixer'``. Injects the client's structured bug report
+    (steps/expected/actual from requirements.json metadata) followed by the
+    ``qa_bug_repro.md`` protocol. Returns "" for non-bug tasks (backward
+    compatible).
+    """
+    task_type = ""
+    try:
+        tm_file = spec_dir / "task_metadata.json"
+        if tm_file.is_file():
+            task_type = (json.loads(tm_file.read_text()) or {}).get("taskType", "")
+    except (OSError, json.JSONDecodeError, TypeError):
+        return ""
+    if task_type != "bug":
+        return ""
+
+    # Client's structured bug report (from requirements.json metadata)
+    bug = {}
+    try:
+        req_file = spec_dir / "requirements.json"
+        if req_file.is_file():
+            meta = (json.loads(req_file.read_text()) or {}).get("metadata") or {}
+            bug = meta.get("bugReport") or {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        bug = {}
+
+    client_report = "## CLIENT BUG REPORT\n\n"
+    if isinstance(bug, dict) and bug.get("steps"):
+        client_report += f"**Steps to reproduce:**\n{bug['steps']}\n\n"
+    if isinstance(bug, dict) and bug.get("expected"):
+        client_report += f"**Expected behavior:**\n{bug['expected']}\n\n"
+    if isinstance(bug, dict) and bug.get("actual"):
+        client_report += f"**Actual behavior:**\n{bug['actual']}\n\n"
+    if not bug:
+        client_report += (
+            "(No structured steps provided — derive the reproduction steps from "
+            "the task description and any attached screenshots.)\n\n"
+        )
+    client_report += "---\n\n"
+
+    try:
+        protocol = _load_prompt_file("qa_bug_repro.md")
+    except FileNotFoundError:
+        protocol = ""
+
+    role_note = ""
+    if role == "fixer":
+        role_note = (
+            "\n\n## FIXER: RE-VERIFY IN BROWSER AFTER FIX\n\n"
+            "After applying your fix, re-run the client's reproduction steps in the "
+            "browser, capture AFTER screenshots into `evidence/`, and append a "
+            '"Verification after fix" section to `reproduction_report.md` confirming '
+            "the bug no longer reproduces.\n"
+        )
+
+    return client_report + protocol + role_note + "\n\n---\n\n"
 
 
 def _load_prompt_file(filename: str) -> str:
@@ -355,7 +448,12 @@ The project root is: `{project_dir}`
 ---
 
 """
-            return spec_context + base_prompt
+            return (
+                spec_context
+                + _get_attachments_context(spec_dir)
+                + _get_bug_repro_context(spec_dir, "reviewer")
+                + base_prompt
+            )
 
     # Load base QA reviewer prompt (full mode with MCP tools)
     base_prompt = _load_prompt_file("qa_reviewer.md")
@@ -434,7 +532,12 @@ The project root is: `{project_dir}`
         base_prompt += "\n\n---\n\n## PROJECT-SPECIFIC VALIDATION TOOLS\n\n"
         base_prompt += "\n\n---\n\n".join(mcp_sections)
 
-    return spec_context + base_prompt
+    return (
+        spec_context
+        + _get_attachments_context(spec_dir)
+        + _get_bug_repro_context(spec_dir, "reviewer")
+        + base_prompt
+    )
 
 
 def get_qa_fixer_prompt(spec_dir: Path, project_dir: Path) -> str:
@@ -463,4 +566,9 @@ The project root is: `{project_dir}`
 ---
 
 """
-    return spec_context + base_prompt
+    return (
+        spec_context
+        + _get_attachments_context(spec_dir)
+        + _get_bug_repro_context(spec_dir, "fixer")
+        + base_prompt
+    )

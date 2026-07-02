@@ -1544,6 +1544,15 @@ async def get_project_task_logs(project_id: str, spec_id: str):
     return await tasks_module.get_task_logs(task_id)
 
 
+@router.get("/{project_id}/tasks/{spec_id}/reproduction-report")
+async def get_project_task_reproduction_report(project_id: str, spec_id: str):
+    """Get the bug reproduction report for a task (delegates to tasks router)."""
+    from . import tasks as tasks_module
+
+    task_id = f"{project_id}:{spec_id}"
+    return await tasks_module.get_reproduction_report(task_id)
+
+
 # --------------------------------------------------------------------------
 # Task Archive Routes
 # --------------------------------------------------------------------------
