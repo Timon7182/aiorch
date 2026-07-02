@@ -248,14 +248,15 @@
       "codeSearch": {
         "label": "Recherche de code",
         "auto": "Auto",
-        "autoDesc": "CodeGraph si indexé, sinon fichiers",
+        "autoDesc": "CodeGraph si indexé, sinon Graphify, sinon fichiers",
         "cgc": "CodeGraph",
         "cgcDesc": "Interroger le graphe de code indexé (Claude uniquement)",
         "graphify": "Graphify",
         "graphifyDesc": "Interroger le graphe de connaissances docs + code (Claude uniquement)",
         "files": "Fichiers",
         "filesDesc": "Read / Grep / Glob simples",
-        "cgcUnavailable": "Non disponible pour cette branche"
+        "cgcUnavailable": "Non disponible pour cette branche",
+        "graphifyUnavailable": "Aucun graphe construit pour ce projet"
       },
       "logs": {
         "label": "Journaux",
@@ -266,6 +267,7 @@
     "docsBanner": {
       "message": "La documentation est obsolète — elle peut ne pas refléter le code le plus récent.",
       "refresh": "Actualiser",
+      "refreshError": "L'actualisation a échoué — veuillez réessayer.",
       "dismiss": "Ignorer"
     },
     "createTask": {

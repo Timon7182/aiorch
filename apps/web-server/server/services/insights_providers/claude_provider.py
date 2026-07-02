@@ -131,7 +131,7 @@ def _validate_backend_mcp_server(server: dict) -> bool:
 def graphify_available(run_dir: Path) -> bool:
     """graphify chat tools are usable when the graph file exists and the layer
     is not disabled. Shared by the provider and the availability route."""
-    if str(os.environ.get("GRAPHIFY_DISABLED", "")).lower() == "true":
+    if os.environ.get("GRAPHIFY_DISABLED", "").lower() == "true":
         return False
     return (run_dir / "graphify-out" / "graph.json").is_file()
 
@@ -342,7 +342,7 @@ class ClaudeProvider(ProviderStrategy):
             }
         }
 
-    def _build_logs_mcp_config(self) -> dict | None:
+    def _build_logs_mcp_config(self) -> dict:
         """Build the inline --mcp-config payload for the read-only logs MCP
         server (``server.mcp.logs_mcp``). Spawned with the web-server Python and
         PYTHONPATH pointed at the web-server root so ``-m server.mcp.logs_mcp``
@@ -636,19 +636,18 @@ class ClaudeProvider(ProviderStrategy):
         # turn via the "Logs" toggle in the model selector.
         if (model_config or {}).get("logsEnabled"):
             logs_cfg = self._build_logs_mcp_config()
-            if logs_cfg:
-                mcp_servers.update(logs_cfg["mcpServers"])
-                allowed_tools.append("mcp__logs__*")
-                sys_prompt_appends.append(
-                    "You can read logs via the read-only mcp__logs__* tools: "
-                    "mcp__logs__list_app_logs / mcp__logs__read_app_log (this "
-                    "server's own logs), mcp__logs__list_remote_logs / "
-                    "mcp__logs__tail_remote_log (allowlisted logs on configured "
-                    "SSH servers), and mcp__logs__docker_logs (allowlisted "
-                    "containers). Use them to investigate errors and runtime "
-                    "behavior; all are read-only."
-                )
-                logger.info("[ClaudeProvider] Logs MCP enabled for this turn")
+            mcp_servers.update(logs_cfg["mcpServers"])
+            allowed_tools.append("mcp__logs__*")
+            sys_prompt_appends.append(
+                "You can read logs via the read-only mcp__logs__* tools: "
+                "mcp__logs__list_app_logs / mcp__logs__read_app_log (this "
+                "server's own logs), mcp__logs__list_remote_logs / "
+                "mcp__logs__tail_remote_log (allowlisted logs on configured "
+                "SSH servers), and mcp__logs__docker_logs (allowlisted "
+                "containers). Use them to investigate errors and runtime "
+                "behavior; all are read-only."
+            )
+            logger.info("[ClaudeProvider] Logs MCP enabled for this turn")
 
         if mcp_servers:
             # --allowedTools is variadic, so it must be followed by another flag

@@ -68,6 +68,33 @@ import {
   PROVIDER_MODELS
 } from '../shared/constants';
 
+// Persist the "docs outdated" banner dismissal per (project, docsSha) so it
+// survives page refresh; a new docsSha yields a new key, so regenerated docs
+// naturally re-arm the banner.
+function docsBannerStorageKey(projectId: string, docsSha: string | null | undefined): string | null {
+  return docsSha ? `insights-docs-banner-dismissed:${projectId}:${docsSha}` : null;
+}
+
+function isDocsBannerDismissed(projectId: string, docsSha: string | null | undefined): boolean {
+  const key = docsBannerStorageKey(projectId, docsSha);
+  if (!key) return false;
+  try {
+    return localStorage.getItem(key) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function persistDocsBannerDismissed(projectId: string, docsSha: string | null | undefined): void {
+  const key = docsBannerStorageKey(projectId, docsSha);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, 'true');
+  } catch {
+    // Storage unavailable (private mode / quota) — dismissal stays session-only.
+  }
+}
+
 /** Build a model suffix like "(Claude Sonnet 4.6)" or "(Ollama: qwen3-30b)" */
 function getModelLabel(provider?: InsightsProvider, model?: string): string | null {
   if (!provider && !model) return null;
@@ -192,9 +219,14 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // Whether a graphify graph.json exists for the dir the chat runs against.
   const [graphifyAvailable, setGraphifyAvailable] = useState<boolean>(false);
   // Documentation freshness for that dir (drives the "docs outdated" banner).
+  // Dismissal persists in localStorage keyed by (projectId, docsSha) so it
+  // survives refresh; a new docsSha naturally invalidates the dismissal.
   const [docsStatus, setDocsStatus] = useState<DocsStatus | null>(null);
-  const [docsBannerDismissed, setDocsBannerDismissed] = useState<boolean>(false);
+  const [docsBannerDismissed, setDocsBannerDismissed] = useState<boolean>(() =>
+    isDocsBannerDismissed(projectId, null)
+  );
   const [refreshingDocs, setRefreshingDocs] = useState<boolean>(false);
+  const [refreshDocsError, setRefreshDocsError] = useState<boolean>(false);
 
   // Create Task from Chat state
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
@@ -301,7 +333,9 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
         setCgcAvailable(data ? data.cgc : false);
         setGraphifyAvailable(data ? data.graphify : false);
         setDocsStatus(data?.docs ?? null);
-        setDocsBannerDismissed(false);
+        // Re-derive dismissal for this scope's docsSha — a previously dismissed
+        // banner stays hidden until the docs are regenerated (new docsSha).
+        setDocsBannerDismissed(isDocsBannerDismissed(projectId, data?.docs?.docsSha));
       })
       .catch(() => {
         if (cancelled) return;
@@ -317,11 +351,17 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // change or reload).
   const handleRefreshDocs = useCallback(async () => {
     setRefreshingDocs(true);
+    setRefreshDocsError(false);
     try {
-      await window.API.refreshInsightsCodegraph(projectId, activeRepoPath ?? undefined);
-      setDocsBannerDismissed(true);
+      const res = await window.API.refreshInsightsCodegraph(projectId, activeRepoPath ?? undefined);
+      if (res?.success) {
+        setDocsBannerDismissed(true);
+      } else {
+        setRefreshDocsError(true);
+      }
     } catch (err) {
       console.error('Failed to refresh docs/code-graph:', err);
+      setRefreshDocsError(true);
     } finally {
       setRefreshingDocs(false);
     }
@@ -583,6 +623,11 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
           <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <span className="min-w-0 flex-1 text-amber-800 dark:text-amber-200">
             {t('common:insights.docsBanner.message', 'Documentation is outdated — it may not reflect the latest code.')}
+            {refreshDocsError && (
+              <span className="ml-2 text-xs text-destructive">
+                {t('common:insights.docsBanner.refreshError', 'Refresh failed — please try again.')}
+              </span>
+            )}
           </span>
           <Button
             variant="outline"
@@ -600,7 +645,10 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
             variant="ghost"
             size="icon"
             className="h-7 w-7 shrink-0"
-            onClick={() => setDocsBannerDismissed(true)}
+            onClick={() => {
+              persistDocsBannerDismissed(projectId, docsStatus.docsSha);
+              setDocsBannerDismissed(true);
+            }}
             aria-label={t('common:insights.docsBanner.dismiss', 'Dismiss')}
           >
             <X className="h-4 w-4" />

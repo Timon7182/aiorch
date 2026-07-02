@@ -211,7 +211,9 @@ export function InsightsModelSelector({
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {isUnavailable
-                      ? t('common:insights.modelSelector.codeSearch.cgcUnavailable', 'Not indexed for this branch')
+                      ? (opt === 'graphify'
+                          ? t('common:insights.modelSelector.codeSearch.graphifyUnavailable', 'No graph built for this project')
+                          : t('common:insights.modelSelector.codeSearch.cgcUnavailable', 'Not available for this branch'))
                       : t(`common:insights.modelSelector.codeSearch.${opt}Desc`, '')}
                   </div>
                 </div>
