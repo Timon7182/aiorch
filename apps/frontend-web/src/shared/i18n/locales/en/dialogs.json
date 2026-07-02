@@ -107,6 +107,12 @@
     "remove": "Remove",
     "error": "Failed to remove project"
   },
+  "clone": {
+    "branchDefault": "Default branch",
+    "branchPlaceholder": "Branch (optional)",
+    "branchHint": "Branch to check out. Leave empty for the repository's default branch.",
+    "branchListFailed": "Could not list branches — type a branch name if you need a specific one."
+  },
   "addDatabase": {
     "scope": {
       "label": "Scope to projects",

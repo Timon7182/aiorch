@@ -21,10 +21,20 @@ import type { Project } from '../shared/types';
 
 type AddMode = 'discover' | 'custom' | 'clone' | 'prompt';
 
-type CloneRepo = { url: string; name: string; nameTouched: boolean };
+type CloneRepo = {
+  url: string;
+  name: string;
+  nameTouched: boolean;
+  branch: string;
+  // Remote branch names fetched from the URL; empty until a lookup succeeds.
+  branches: string[];
+  // True once a branch lookup returned nothing/failed — we fall back to a
+  // free-text branch input so the user can still type a branch by hand.
+  branchListFailed: boolean;
+};
 
 function emptyRepo(): CloneRepo {
-  return { url: '', name: '', nameTouched: false };
+  return { url: '', name: '', nameTouched: false, branch: '', branches: [], branchListFailed: false };
 }
 
 function deriveCloneName(url: string): string {
@@ -200,6 +210,36 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
     );
   };
 
+  const setRepoBranch = (index: number, branch: string) => {
+    setCloneRepos((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, branch } : r)),
+    );
+  };
+
+  // Populate a repo row's branch dropdown from the remote. Best-effort: on any
+  // failure (private/unreachable repo, timeout) we flag branchListFailed so the
+  // UI falls back to a free-text branch field instead of blocking the clone.
+  const fetchRemoteBranches = async (index: number, url: string) => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    try {
+      const res = await window.API.getRemoteBranches(trimmed);
+      const names =
+        res.success && res.data && Array.isArray(res.data.branches)
+          ? res.data.branches.map((b) => b.name)
+          : [];
+      setCloneRepos((prev) =>
+        prev.map((r, i) =>
+          i === index ? { ...r, branches: names, branchListFailed: names.length === 0 } : r,
+        ),
+      );
+    } catch {
+      setCloneRepos((prev) =>
+        prev.map((r, i) => (i === index ? { ...r, branches: [], branchListFailed: true } : r)),
+      );
+    }
+  };
+
   const addRepoRow = () => setCloneRepos((prev) => [...prev, emptyRepo()]);
 
   const removeRepoRow = (index: number) =>
@@ -241,7 +281,11 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
 
     if (mode === 'clone') {
       const repos = cloneRepos
-        .map((r) => ({ url: r.url.trim(), name: r.name.trim() || deriveCloneName(r.url) }))
+        .map((r) => ({
+          url: r.url.trim(),
+          name: r.name.trim() || deriveCloneName(r.url),
+          branch: r.branch.trim() || undefined,
+        }))
         .filter((r) => r.url);
       if (repos.length === 0) {
         setError('Please enter at least one git URL');
@@ -260,7 +304,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
       try {
         const project =
           repos.length === 1
-            ? await cloneProject(repos[0].url, repos[0].name)
+            ? await cloneProject(repos[0].url, repos[0].name, undefined, repos[0].branch)
             : await cloneMultiProject(pname, repos);
         if (project) completeAdd(project);
       } catch (err) {
@@ -627,6 +671,7 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
                         placeholder="https://gitlab.com/group/repo.git"
                         value={repo.url}
                         onChange={(e) => setRepoUrl(i, e.target.value)}
+                        onBlur={(e) => fetchRemoteBranches(i, e.target.value)}
                         onKeyDown={handleKeyDown}
                         autoFocus={i === 0}
                       />
@@ -650,6 +695,39 @@ export function AddProjectModal({ open, onOpenChange, onProjectAdded }: AddProje
                         onKeyDown={handleKeyDown}
                         className="text-xs"
                       />
+                    )}
+                    {repo.url.trim() && (
+                      <div className="flex items-center gap-2">
+                        <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        {repo.branches.length > 0 ? (
+                          <select
+                            value={repo.branch}
+                            onChange={(e) => setRepoBranch(i, e.target.value)}
+                            className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                            title={t('clone.branchHint')}
+                          >
+                            <option value="">{t('clone.branchDefault')}</option>
+                            {repo.branches.map((b) => (
+                              <option key={b} value={b}>
+                                {b}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <Input
+                            placeholder={t('clone.branchPlaceholder')}
+                            value={repo.branch}
+                            onChange={(e) => setRepoBranch(i, e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            className="text-xs"
+                            title={
+                              repo.branchListFailed
+                                ? t('clone.branchListFailed')
+                                : t('clone.branchHint')
+                            }
+                          />
+                        )}
+                      </div>
                     )}
                   </div>
                 ))}

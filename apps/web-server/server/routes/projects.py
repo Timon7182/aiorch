@@ -55,6 +55,51 @@ def _kickoff_codegraph_index(project_path: str) -> None:
     except Exception:
         logger.debug("Failed to kick off CGC index for %s", project_path, exc_info=True)
 
+
+def _docs_auto_generate_enabled() -> bool:
+    """Whether docs are auto-generated on project creation.
+
+    Off by default — doc generation spends LLM tokens, so it's opt-in via
+    DOCS_AUTO_GENERATE_ON_CREATE=true. CGC indexing (free, tree-sitter) stays on.
+    """
+    return str(os.environ.get("DOCS_AUTO_GENERATE_ON_CREATE", "")).lower() in (
+        "true", "1", "yes",
+    )
+
+
+def _kickoff_docs_generation(project_id: str, project_path: str) -> None:
+    """Fire-and-forget full docs generation for a newly created project.
+
+    Gated on DOCS_AUTO_GENERATE_ON_CREATE (default off). Never raises into the
+    request path — registration must succeed regardless of doc generation.
+    """
+    if not _docs_auto_generate_enabled():
+        return
+    try:
+        from ..services.docs_generator_service import get_docs_generator_service
+
+        backend_path = Path(get_settings().BACKEND_PATH)
+        svc = get_docs_generator_service(backend_path)
+
+        async def _run():
+            try:
+                token = await svc.resolve_oauth_token()
+                await svc.generate(
+                    project_id=project_id,
+                    project_path=Path(project_path),
+                    oauth_token=token,
+                )
+            except Exception:
+                logger.debug("Auto docs generation failed for %s", project_path, exc_info=True)
+
+        # Mirror the interactive /docs/generate route: flag the project as
+        # starting *before* scheduling the task so a /docs/status call that
+        # races the spawn already reports state=running.
+        svc.mark_starting(project_id)
+        asyncio.create_task(_run())
+    except Exception:
+        logger.debug("Failed to kick off docs generation for %s", project_path, exc_info=True)
+
 # Include project-specific sub-routers
 # These will be available under /api/projects/{projectId}/...
 router.include_router(github.project_router, prefix="/{projectId}/github", tags=["GitHub"])
@@ -427,6 +472,7 @@ async def add_project(project: ProjectCreate):
     projects[project_id] = project_data
     save_projects(projects)
     _kickoff_codegraph_index(project_data["path"])
+    _kickoff_docs_generation(project_id, project_data["path"])
 
     response = project_to_response(project_id, project_data)
     if created_directory:
@@ -452,6 +498,9 @@ class ProjectClone(BaseModel):
 
     url: str = Field(..., description="HTTPS git URL to clone")
     name: str | None = Field(None, description="Folder name (defaults to repo name from URL)")
+    branch: str | None = Field(
+        None, description="Branch to check out (git clone --branch). Defaults to remote HEAD."
+    )
     target_dir: str | None = Field(
         None,
         description="Absolute parent directory for the clone (defaults to PROJECTS_CLONE_DIR)",
@@ -466,6 +515,63 @@ class ProjectClone(BaseModel):
         if not v.startswith(("https://", "http://")):
             raise ValueError("Only https:// or http:// URLs are supported")
         return v
+
+
+class RemoteBranchesRequest(BaseModel):
+    """Body for listing a remote's branches before cloning."""
+
+    url: str = Field(..., description="HTTPS git URL to inspect")
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("URL is required")
+        if not v.startswith(("https://", "http://")):
+            raise ValueError("Only https:// or http:// URLs are supported")
+        return v
+
+
+@router.post("/git/remote-branches")
+async def list_remote_branches(payload: RemoteBranchesRequest):
+    """List branch names on a remote via ``git ls-remote --heads`` (pre-clone).
+
+    Used to populate the clone dialog's branch dropdown. On any failure
+    (auth/network/timeout) returns an empty list plus an ``error`` string so the
+    UI can fall back to a free-text branch input rather than blocking the clone.
+    """
+    # GIT_TERMINAL_PROMPT=0 so a private repo fails fast instead of prompting.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "ls-remote", "--heads", "--", payload.url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except asyncio.TimeoutError:
+        return {"branches": [], "error": "Timed out listing remote branches."}
+    except OSError as e:
+        return {"branches": [], "error": str(e)}
+
+    if proc.returncode != 0:
+        detail = stderr.decode("utf-8", "replace").strip()[:300]
+        return {"branches": [], "error": detail or "Failed to list remote branches."}
+
+    branches: list[dict] = []
+    seen: set[str] = set()
+    for line in stdout.decode("utf-8", "replace").splitlines():
+        # Each line: "<sha>\trefs/heads/<branch>"
+        parts = line.split("\trefs/heads/", 1)
+        if len(parts) != 2:
+            continue
+        name = parts[1].strip()
+        if name and name not in seen:
+            seen.add(name)
+            branches.append({"name": name})
+    return {"branches": branches}
 
 
 def _derive_repo_name(url: str) -> str:
@@ -518,8 +624,13 @@ async def clone_project(payload: ProjectClone):
 
     # GIT_TERMINAL_PROMPT=0 makes git fail fast on auth instead of hanging.
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    branch_args = (
+        ["--branch", payload.branch.strip()]
+        if payload.branch and payload.branch.strip()
+        else []
+    )
     proc = await asyncio.create_subprocess_exec(
-        "git", "clone", "--", payload.url, str(target),
+        "git", "clone", *branch_args, "--", payload.url, str(target),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -559,6 +670,7 @@ async def clone_project(payload: ProjectClone):
     projects[project_id] = project_data
     save_projects(projects)
     _kickoff_codegraph_index(resolved)
+    _kickoff_docs_generation(project_id, resolved)
 
     response = project_to_response(project_id, project_data)
     response["createdDirectory"] = True
@@ -575,6 +687,9 @@ class RepoSpec(BaseModel):
 
     url: str = Field(..., description="HTTPS git URL to clone")
     name: str | None = Field(None, description="Child folder name (defaults to repo name from URL)")
+    branch: str | None = Field(
+        None, description="Branch to check out for this repo (git clone --branch)."
+    )
 
     @field_validator("url")
     @classmethod
@@ -603,12 +718,17 @@ class ProjectCloneMulti(BaseModel):
     )
 
 
-async def _git_clone(url: str, target: Path) -> tuple[bool, str]:
-    """Clone ``url`` into ``target``. Returns (ok, stderr)."""
+async def _git_clone(url: str, target: Path, branch: str | None = None) -> tuple[bool, str]:
+    """Clone ``url`` into ``target``. Returns (ok, stderr).
+
+    When ``branch`` is set, ``--branch <b>`` checks that branch out on clone;
+    otherwise git uses the remote's default HEAD (unchanged behavior).
+    """
     # GIT_TERMINAL_PROMPT=0 makes git fail fast on auth instead of hanging.
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    branch_args = ["--branch", branch.strip()] if branch and branch.strip() else []
     proc = await asyncio.create_subprocess_exec(
-        "git", "clone", "--", url, str(target),
+        "git", "clone", *branch_args, "--", url, str(target),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -680,7 +800,7 @@ async def clone_multi_project(payload: ProjectCloneMulti):
     # Clone each repo; on any failure tear down the whole project folder so we
     # never register a half-cloned multi-repo project.
     for spec, child in zip(payload.repos, child_names):
-        ok, err = await _git_clone(spec.url, project_root / child)
+        ok, err = await _git_clone(spec.url, project_root / child, spec.branch)
         if not ok:
             shutil.rmtree(project_root, ignore_errors=True)
             raise HTTPException(
@@ -705,6 +825,7 @@ async def clone_multi_project(payload: ProjectCloneMulti):
     projects[project_id] = project_data
     save_projects(projects)
     _kickoff_codegraph_index(resolved)
+    _kickoff_docs_generation(project_id, resolved)
 
     response = project_to_response(project_id, project_data)
     response["createdDirectory"] = True

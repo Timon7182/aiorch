@@ -165,12 +165,20 @@ export interface PreviewState {
 export interface API {
   // Project operations
   addProject: (projectPath: string) => Promise<IPCResult<Project>>;
-  cloneProject: (url: string, name?: string, targetDir?: string) => Promise<IPCResult<Project>>;
+  cloneProject: (
+    url: string,
+    name?: string,
+    targetDir?: string,
+    branch?: string,
+  ) => Promise<IPCResult<Project>>;
   cloneMultiProject: (
     name: string,
-    repos: { url: string; name?: string }[],
+    repos: { url: string; name?: string; branch?: string }[],
     targetDir?: string,
   ) => Promise<IPCResult<Project>>;
+  getRemoteBranches: (
+    url: string,
+  ) => Promise<IPCResult<{ branches: { name: string }[]; error?: string }>>;
   createProjectFromPrompt: (
     prompt: string,
     name?: string,

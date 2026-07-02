@@ -148,6 +148,22 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("CGC startup sweep failed to schedule", exc_info=True)
 
+    # Optional docs auto-refresh watcher (opt-in via DOCS_WATCH_ENABLED). Snapshots
+    # the registered project paths at startup and re-indexes CGC on source changes
+    # (debounced), plus honors the post-commit touch-file for full docs refreshes.
+    try:
+        from .services import docs_watcher
+        from .routes.projects import load_projects
+
+        if docs_watcher.watch_enabled():
+            watch_paths = [
+                Path(p["path"]) for p in load_projects().values() if p.get("path")
+            ]
+            docs_watcher.start_watcher(watch_paths, backend_path)
+            logger.info("Docs watcher started (%d project(s))", len(watch_paths))
+    except Exception:
+        logger.warning("Docs watcher failed to start", exc_info=True)
+
     yield
 
     # Shutdown
@@ -163,6 +179,13 @@ async def lifespan(app: FastAPI):
         logger.warning("local preview shutdown failed", exc_info=True)
 
     await token_service.stop()
+
+    # Stop the docs watcher if it was started.
+    try:
+        from .services import docs_watcher
+        await docs_watcher.stop_watcher()
+    except Exception:
+        logger.warning("Docs watcher failed to stop cleanly", exc_info=True)
 
     # Stop any running language servers so they don't outlive the app.
     from .lsp.manager import get_lsp_manager

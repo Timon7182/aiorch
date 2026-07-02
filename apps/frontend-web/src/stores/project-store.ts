@@ -484,11 +484,12 @@ export async function cloneProject(
   url: string,
   name?: string,
   targetDir?: string,
+  branch?: string,
 ): Promise<Project | null> {
   const store = useProjectStore.getState();
 
   try {
-    const result = await window.API.cloneProject(url, name, targetDir);
+    const result = await window.API.cloneProject(url, name, targetDir, branch);
     if (result.success && result.data) {
       store.addProject(result.data);
       store.selectProject(result.data.id);
@@ -512,7 +513,7 @@ export async function cloneProject(
  */
 export async function cloneMultiProject(
   name: string,
-  repos: { url: string; name?: string }[],
+  repos: { url: string; name?: string; branch?: string }[],
   targetDir?: string,
 ): Promise<Project | null> {
   const store = useProjectStore.getState();
