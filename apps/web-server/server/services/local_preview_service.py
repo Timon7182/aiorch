@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -453,7 +454,6 @@ async def _pump(preview: LocalPreview, ready_pattern: str | None) -> None:
         _log(preview, line)
         if ready_pattern and preview._ready and not preview._ready.is_set():
             try:
-                import re
                 if re.search(ready_pattern, line):
                     preview._ready.set()
             except re.error:
