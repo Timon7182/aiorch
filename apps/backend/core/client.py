@@ -389,8 +389,6 @@ def load_project_mcp_config(project_dir: Path) -> dict:
         Dict of MCP configuration values (string values, except CUSTOM_MCP_SERVERS which is parsed JSON)
     """
     env_path = project_dir / ".magestic-ai" / ".env"
-    if not env_path.exists():
-        return {}
 
     config = {}
     mcp_keys = {
@@ -400,7 +398,8 @@ def load_project_mcp_config(project_dir: Path) -> dict:
         "CODE_GRAPH_PROVIDER",  # exclusive code-graph selection: codegraph (default) | graphify
     }
 
-    try:
+    if env_path.exists():
+      try:
         with open(env_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -441,8 +440,16 @@ def load_project_mcp_config(project_dir: Path) -> dict:
                                 f"Failed to parse CUSTOM_MCP_SERVERS JSON: {value}"
                             )
                             config["CUSTOM_MCP_SERVERS"] = []
-    except Exception as e:
+      except Exception as e:
         logger.debug(f"Failed to load project MCP config from {env_path}: {e}")
+
+    # Overlay process-level env vars. This lets the web-server force per-agent
+    # MCP servers on a subprocess (e.g. AGENT_MCP_qa_reviewer_ADD=playwright for
+    # bug-report tasks) without editing the project's .magestic-ai/.env. Env
+    # values win over the file so a forced setting always takes effect.
+    for _key, _value in os.environ.items():
+        if _key in mcp_keys or _key.startswith("AGENT_MCP_"):
+            config[_key] = _value
 
     return config
 
@@ -817,11 +824,14 @@ def create_client(
         }
 
     if "playwright" in required_servers:
-        # Playwright for web frontends (headless Chromium)
+        # Playwright for web frontends (headless Chromium).
+        # Version is PINNED (not @latest) for reproducible QA runs — an
+        # unattended agent must not silently pick up a breaking MCP release.
+        # Bump this deliberately after verifying the new version.
         mcp_servers["playwright"] = {
             "command": "npx",
             "args": [
-                "@playwright/mcp@latest",
+                "@playwright/mcp@0.0.41",
                 "--headless",
                 "--browser", "chromium",
                 "--viewport-size", "1280x720",

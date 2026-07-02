@@ -1271,6 +1271,7 @@ class AgentService:
             "context.json",
             "qa_report.md",
             "QA_FIX_REQUEST.md",
+            "reproduction_report.md",  # Bug-report tasks: browser reproduction + verification
             "spec.md",
             "requirements.json",
         ]
@@ -1278,6 +1279,7 @@ class AgentService:
         # Directories to sync (will copy entire directory tree)
         dirs_to_sync = [
             "memory",  # Session insights and memory data
+            "evidence",  # Bug-report tasks: before/after browser screenshots
         ]
 
         synced_count = 0
@@ -2662,6 +2664,32 @@ class AgentService:
             env["GIT_COMMITTER_NAME"] = name
             env["GIT_COMMITTER_EMAIL"] = email
             logger.info(f"[AgentService] Git author for task {task_id}: {name} <{email}>")
+
+        # Bug-report tasks: force the browser (Playwright) MCP for the QA agents
+        # via the per-agent ADD override so the per-project PLAYWRIGHT_MCP_ENABLED
+        # flag is not required. Also expose a running preview's URL as PREVIEW_URL
+        # so QA targets the live app instead of a hardcoded localhost.
+        try:
+            bug_spec_dir = project_path / ".magestic-ai" / "specs" / spec_id
+            bug_meta_file = bug_spec_dir / "task_metadata.json"
+            if bug_meta_file.exists():
+                bug_meta = json.loads(bug_meta_file.read_text())
+                if str(bug_meta.get("taskType", "")).lower() == "bug":
+                    env["AGENT_MCP_qa_reviewer_ADD"] = "playwright"
+                    env["AGENT_MCP_qa_fixer_ADD"] = "playwright"
+                    logger.info(
+                        f"[AgentService] Bug task {task_id}: forcing Playwright MCP for QA agents"
+                    )
+                # PREVIEW_URL (any task type): prefer a running preview as the QA target.
+                preview = bug_meta.get("preview") or {}
+                preview_url = preview.get("url")
+                if preview.get("status") == "running" and preview_url:
+                    env["PREVIEW_URL"] = preview_url
+                    logger.info(f"[AgentService] Task {task_id}: PREVIEW_URL={preview_url}")
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(
+                f"[AgentService] Could not read task_metadata for bug/preview wiring ({task_id}): {e}"
+            )
 
         exec_model_display = self._task_profiles.get(task_id, {}).get("model", "sonnet")
         logger.info(f"[AgentService] [Model: {exec_model_display}] Starting task execution for {task_id}")
