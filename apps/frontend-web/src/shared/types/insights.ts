@@ -18,13 +18,22 @@ export type InsightsProvider = 'claude' | 'codex' | 'gemini' | 'ollama'
 //   'auto'  → CodeGraph when the project is indexed, else plain file tools
 //   'cgc'   → force CodeGraph MCP tools (only takes effect for Claude)
 //   'files' → raw Read/Grep/Glob only
-export type CodeSearchBackend = 'auto' | 'cgc' | 'files';
+export type CodeSearchBackend = 'auto' | 'cgc' | 'graphify' | 'files';
+
+// Freshness of the project's generated documentation relative to current code.
+export interface DocsStatus {
+  hasDocs: boolean;        // a docs/ tree exists in the run dir
+  headSha: string | null;  // current short HEAD of the run dir
+  docsSha: string | null;  // head_sha recorded at last docs generation
+  fresh: boolean;          // headSha === docsSha (both known)
+}
 
 // Which code-search backends are usable for the branch/repo the chat will
 // run against. Returned by the code-search-availability endpoint.
 export interface CodeSearchAvailability {
   cgc: boolean;       // CodeGraph indexed + enabled + CLI present for that dir
   graphify: boolean;  // graphify-out/graph.json present for that dir
+  docs?: DocsStatus;  // documentation freshness for that dir
 }
 
 // Model configuration for insights sessions
@@ -35,6 +44,7 @@ export interface InsightsModelConfig {
   thinkingLevel?: ThinkingLevel; // Only applicable for Claude
   codeSearch?: CodeSearchBackend; // Code navigation backend (default: 'auto')
   dbProfileId?: string;          // Connect the chat to a registered DB (read-only); undefined = none
+  logsEnabled?: boolean;         // Give the chat the read-only logs MCP server
 }
 
 // A saved database connection profile (from the Databases extension)
@@ -45,6 +55,7 @@ export interface DatabaseProfileSummary {
   env?: string;
   database?: string;
   host?: string;
+  projectIds?: string[]; // per-project scoping; empty/absent = global
 }
 
 // Provider info returned from detection endpoint

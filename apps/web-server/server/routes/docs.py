@@ -22,11 +22,13 @@ import asyncio
 import json
 import logging
 import mimetypes
+import re
+import shutil
 from pathlib import Path
-from pathlib import Path as FilePath
 
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from ..services.docs_generator_service import get_docs_generator_service
 from .projects import load_projects
@@ -43,7 +45,7 @@ def _resolve_project(project_id: str) -> Path:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project {project_id} not registered",
         )
-    project_path = FilePath(pdata["path"])
+    project_path = Path(pdata["path"])
     if not project_path.is_dir():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -62,13 +64,13 @@ def _resolve_docs_base(project_id: str, repo: str | None) -> Path:
     """
     project_path = _resolve_project(project_id)
     from ..services.git_repos import resolve_repo_cwd
-    return FilePath(resolve_repo_cwd(str(project_path), repo))
+    return Path(resolve_repo_cwd(str(project_path), repo))
 
 
-def _backend_path() -> FilePath:
+def _backend_path() -> Path:
     """Locate apps/backend relative to apps/web-server (where we run)."""
     # apps/web-server/server/routes/docs.py → apps/backend
-    return FilePath(__file__).resolve().parents[3] / "backend"
+    return Path(__file__).resolve().parents[3] / "backend"
 
 
 async def _resolve_oauth_token() -> str | None:
@@ -115,8 +117,17 @@ async def _resolve_user_identity(raw_request: Request) -> tuple[str, str] | None
 
 
 @router.post("/{project_id}/docs/generate", status_code=status.HTTP_202_ACCEPTED)
-async def generate_docs(project_id: str, raw_request: Request, repo: str | None = None):
-    """Spawn the doc-generator agent in the background; return immediately."""
+async def generate_docs(
+    project_id: str,
+    raw_request: Request,
+    repo: str | None = None,
+    template: str | None = None,
+):
+    """Spawn the doc-generator agent in the background; return immediately.
+
+    ``template`` selects the doc template (structure/mkdocs/page layout);
+    defaults to "default" in the runner when omitted.
+    """
     project_path = _resolve_docs_base(project_id, repo)
     svc = get_docs_generator_service(_backend_path())
 
@@ -142,6 +153,7 @@ async def generate_docs(project_id: str, raw_request: Request, repo: str | None 
                 project_path=project_path,
                 oauth_token=oauth_token,
                 user_identity=user_identity,
+                template=template,
             )
             logger.info(
                 f"[docs] generation finished for {project_id}: "
@@ -176,6 +188,129 @@ async def build_docs(project_id: str, repo: str | None = None):
     if not ok:
         return {"success": False, "error": log[-4000:]}
     return {"log": log[-4000:]}
+
+
+# ---------------------------------------------------------------------------
+# Doc templates
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_DIRNAME = "doc-templates"
+# Slug guard: also prevents path traversal via the {name} path param.
+_TEMPLATE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def _builtin_templates_dir() -> Path:
+    return _backend_path() / "prompts" / "doc_templates"
+
+
+def _global_templates_dir() -> Path:
+    return Path.home() / ".magestic-ai" / _TEMPLATE_DIRNAME
+
+
+def _project_templates_dir(project_path: Path) -> Path:
+    return project_path / ".magestic-ai" / _TEMPLATE_DIRNAME
+
+
+def _read_template_manifest(template_dir: Path) -> dict | None:
+    manifest = template_dir / "template.json"
+    if not manifest.is_file():
+        return None
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _enumerate_templates(project_path: Path) -> dict[str, dict]:
+    """Merge templates from builtin → global → project (later wins)."""
+    merged: dict[str, dict] = {}
+    for source, base in (
+        ("builtin", _builtin_templates_dir()),
+        ("global", _global_templates_dir()),
+        ("project", _project_templates_dir(project_path)),
+    ):
+        if not base.is_dir():
+            continue
+        for child in sorted(base.iterdir()):
+            if not child.is_dir():
+                continue
+            data = _read_template_manifest(child)
+            if data is None:
+                continue
+            name = str(data.get("name") or child.name)
+            merged[name] = {
+                "name": name,
+                "description": str(data.get("description") or ""),
+                "source": source,
+            }
+    return merged
+
+
+class DocsTemplateBody(BaseModel):
+    """Body for PUT /docs/templates/{name} — a template manifest."""
+
+    name: str | None = None  # ignored; the path param is authoritative
+    description: str
+    structure: str
+    mkdocs_yml: str
+    page_templates: str
+    extra_instructions: str | None = ""
+    repo: str | None = None
+
+
+@router.get("/{project_id}/docs/templates")
+async def list_docs_templates(project_id: str, repo: str | None = None):
+    """List all doc templates available to this project (builtin/global/project)."""
+    project_path = _resolve_docs_base(project_id, repo)
+    merged = _enumerate_templates(project_path)
+    return sorted(merged.values(), key=lambda t: t["name"])
+
+
+@router.put("/{project_id}/docs/templates/{name}")
+async def save_docs_template(project_id: str, name: str, body: DocsTemplateBody):
+    """Create or update a project-level doc template."""
+    project_path = _resolve_docs_base(project_id, body.repo)
+    if not _TEMPLATE_SLUG_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid template name (lowercase letters, digits, '-' or '_')",
+        )
+    manifest = {
+        "name": name,
+        "description": body.description,
+        "structure": body.structure,
+        "mkdocs_yml": body.mkdocs_yml,
+        "page_templates": body.page_templates,
+        "extra_instructions": body.extra_instructions or "",
+    }
+    dest = _project_templates_dir(project_path) / name
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "template.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Write failed: {exc}")
+    return {"ok": True}
+
+
+@router.delete("/{project_id}/docs/templates/{name}")
+async def delete_docs_template(project_id: str, name: str, repo: str | None = None):
+    """Delete a project-level doc template. Builtin/global are read-only (404)."""
+    project_path = _resolve_docs_base(project_id, repo)
+    if not _TEMPLATE_SLUG_RE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid template name")
+    dest = _project_templates_dir(project_path) / name
+    if not (dest / "template.json").is_file():
+        raise HTTPException(
+            status_code=404, detail="No project-level template with that name"
+        )
+    try:
+        shutil.rmtree(dest)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {exc}")
+    return {"ok": True}
 
 
 @router.post("/{project_id}/docs/codegraph/index", status_code=status.HTTP_202_ACCEPTED)
@@ -282,6 +417,59 @@ async def docs_raw_markdown(project_id: str, path: str, repo: str | None = None)
         "path": path,
         "content": target.read_text(encoding="utf-8", errors="replace"),
     }
+
+
+class DocsWriteBody(BaseModel):
+    """Body for PUT /docs/raw — save a hand-edited doc file."""
+
+    path: str
+    # 5 MB cap: generous for markdown, blocks accidental/abusive huge payloads.
+    content: str = Field(..., max_length=5_000_000)
+    repo: str | None = None
+
+
+@router.put("/{project_id}/docs/raw")
+async def docs_raw_write(project_id: str, body: DocsWriteBody):
+    """Overwrite a markdown doc file (or mkdocs.yml) with user-edited content.
+
+    Companion write endpoint to GET /docs/raw, used by the in-app editor.
+    Only markdown files under ``docs/`` and the project-root ``mkdocs.yml``
+    may be written; the same path-traversal guard as the GET applies. Does
+    NOT rebuild the site — the client calls POST /docs/build explicitly.
+    """
+    project_path = _resolve_docs_base(project_id, body.repo)
+    rel = (body.path or "").strip()
+    if not rel:
+        raise HTTPException(status_code=400, detail="Missing path")
+
+    # mkdocs.yml is a special case: it lives at the repo root, not under docs/.
+    if rel in ("mkdocs.yml", "./mkdocs.yml"):
+        target = (project_path / "mkdocs.yml").resolve()
+        base = project_path.resolve()
+    else:
+        docs_dir = (project_path / "docs").resolve()
+        target = (docs_dir / rel).resolve()
+        # Path-traversal guard (mirrors the GET).
+        try:
+            target.relative_to(docs_dir)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path escapes docs directory")
+        if target.suffix.lower() != ".md":
+            raise HTTPException(status_code=400, detail="Only .md files may be edited")
+        base = docs_dir
+
+    # Defense in depth: re-confirm the resolved target stays under its base.
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes allowed directory")
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body.content, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Write failed: {exc}")
+    return {"ok": True}
 
 
 @router.get("/{project_id}/docs/graph-report")

@@ -106,5 +106,11 @@
     "cancel": "Annuler",
     "remove": "Retirer",
     "error": "Échec de la suppression du projet"
+  },
+  "addDatabase": {
+    "scope": {
+      "label": "Limiter aux projets",
+      "hint": "Laisser vide pour rendre cette connexion disponible dans tous les projets."
+    }
   }
 }

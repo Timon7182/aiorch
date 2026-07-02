@@ -17,8 +17,18 @@ from typing import Any
 
 CONFIG_FILENAME = "deploy.config.json"
 
+# Preview strategies:
+#   docker-remote  — build the worktree into an isolated Docker stack on a remote
+#                    host over SSH (the original, default behavior).
+#   dev-server     — run the framework dev server (hot-reload) locally as a
+#                    subprocess (npm run dev / manage.py runserver / …).
+#   compose-local  — bring the worktree up with a local `docker compose` project.
+STRATEGIES = ("docker-remote", "dev-server", "compose-local")
+LOCAL_STRATEGIES = ("dev-server", "compose-local")
+
 # Baked-in default — matches cts: .NET backend + Node frontend + Postgres.
 DEFAULT_CONFIG: dict[str, Any] = {
+    "strategy": "docker-remote",
     "target": "preview-host",
     "ship": "save-load",                       # or "registry"
     "registry": "",
@@ -99,8 +109,42 @@ def load_deploy_config(project_path: Path) -> dict[str, Any]:
 
 
 def validate_config(config: dict[str, Any]) -> list[str]:
-    """Return a list of human-readable problems; empty list means OK."""
+    """Return a list of human-readable problems; empty list means OK.
+
+    Validation depends on ``strategy``. The strict docker-remote rules (a
+    dockerfile per component, a public component, an exposure/ship/lanes setup)
+    only apply to ``docker-remote``. The local strategies (``dev-server``,
+    ``compose-local``) are almost entirely auto-detected, so their optional
+    config sections are only type-checked when present.
+    """
     errors: list[str] = []
+    strategy = config.get("strategy", "docker-remote")
+    if strategy not in STRATEGIES:
+        errors.append("strategy must be one of " + "|".join(STRATEGIES))
+        return errors
+
+    if strategy == "dev-server":
+        ds = config.get("devServer")
+        if ds is not None and not isinstance(ds, dict):
+            errors.append("devServer must be an object")
+        elif isinstance(ds, dict):
+            if ds.get("port") is not None and not isinstance(ds.get("port"), int):
+                errors.append("devServer.port must be an integer")
+            if ds.get("env") is not None and not isinstance(ds.get("env"), dict):
+                errors.append("devServer.env must be an object")
+        return errors
+
+    if strategy == "compose-local":
+        cf = config.get("composeFile")
+        if cf is not None and not isinstance(cf, str):
+            errors.append("composeFile must be a string")
+        if config.get("port") is not None and not isinstance(config.get("port"), int):
+            errors.append("port must be an integer")
+        if config.get("containerPort") is not None and not isinstance(config.get("containerPort"), int):
+            errors.append("containerPort must be an integer")
+        return errors
+
+    # ---- docker-remote (strict) ----
     comps = config.get("components")
     if not isinstance(comps, list) or not comps:
         errors.append("components must be a non-empty array")
