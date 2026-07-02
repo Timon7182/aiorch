@@ -143,7 +143,7 @@ export interface BugReport {
 // A piece of evidence captured during bug reproduction (screenshot)
 export interface ReproductionEvidence {
   name: string;  // Filename (e.g., before-1.png)
-  path: string;  // Absolute path on the server
+  path: string;  // Path relative to the spec dir (e.g., evidence/before-1.png)
 }
 
 // Bug reproduction report produced by QA (reproduction_report.md + evidence)

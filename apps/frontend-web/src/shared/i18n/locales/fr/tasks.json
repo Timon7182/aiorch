@@ -16,6 +16,7 @@
     "tab": "Reproduction",
     "title": "Rapport de reproduction du bogue",
     "empty": "Aucun rapport de reproduction pour l'instant. Il apparaîtra une fois que la QA aura reproduit le bogue dans un navigateur.",
+    "loading": "Chargement…",
     "evidence": "Preuves"
   },
   "preview": {

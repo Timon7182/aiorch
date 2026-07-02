@@ -1051,9 +1051,11 @@ _ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 def _materialize_attachments(spec_dir: Path, metadata_dict: dict) -> None:
     """Decode base64 ``attachedImages`` into files under ``<spec_dir>/attachments/``.
 
-    Replaces each image's inline base64 ``data``/``thumbnail`` blobs with a
-    lightweight on-disk reference ``{id, filename, path, mimeType, size}`` so
+    Replaces each image's inline base64 ``data`` blob with a lightweight
+    on-disk reference ``{id, filename, path, mimeType, size[, thumbnail]}`` so
     requirements.json stays small and agents can Read the files directly.
+    The small preview ``thumbnail`` is preserved so edit dialogs keep showing
+    previews without re-reading the full image.
 
     Backward compatible: absent/empty ``attachedImages`` (or entries already
     materialized without inline ``data``) -> no-op. Mutates ``metadata_dict``
@@ -1066,15 +1068,28 @@ def _materialize_attachments(spec_dir: Path, metadata_dict: dict) -> None:
 
     logger = logging.getLogger(__name__)
     attachments_dir = spec_dir / "attachments"
-    new_images: list[dict] = []
+
+    # Seed the filename counter from files already on disk so a task-edit that
+    # adds a new image never clobbers an earlier img-<n>.<ext> attachment.
     idx = 0
+    if attachments_dir.is_dir():
+        try:
+            for existing in attachments_dir.iterdir():
+                m = re.match(r"img-(\d+)\.", existing.name)
+                if m:
+                    idx = max(idx, int(m.group(1)))
+        except OSError:
+            pass
+
+    new_images: list[dict] = []
     for image in images:
         if not isinstance(image, dict):
             continue
         data = image.get("data")
-        # Already materialized (has path, no inline data) -> keep the ref, drop any thumbnail.
+        # Already materialized (has path, no inline data) -> keep the ref as-is
+        # (including its small thumbnail so edit dialogs still show previews).
         if not data:
-            new_images.append({k: v for k, v in image.items() if k != "thumbnail"})
+            new_images.append(dict(image))
             continue
 
         mime = (image.get("mimeType") or "image/png").lower().strip()
@@ -1086,6 +1101,13 @@ def _materialize_attachments(spec_dir: Path, metadata_dict: dict) -> None:
         data_str = data.strip()
         if data_str.startswith("data:") and "," in data_str:
             data_str = data_str.split(",", 1)[1]
+        # Enforce the size cap BEFORE decoding (base64 inflates ~4/3, +padding)
+        # so an oversized payload never costs a full decode.
+        if len(data_str) > _ATTACHMENT_MAX_BYTES * 4 // 3 + 8:
+            logger.warning(
+                f"[Attachments] Image base64 payload exceeds size cap ({len(data_str)} chars); skipping"
+            )
+            continue
         try:
             raw = base64.b64decode(data_str)
         except Exception as exc:
@@ -1106,13 +1128,18 @@ def _materialize_attachments(spec_dir: Path, metadata_dict: dict) -> None:
             logger.warning(f"[Attachments] Failed to write {filename}: {exc}")
             continue
 
-        new_images.append({
+        ref = {
             "id": image.get("id"),
             "filename": image.get("filename") or filename,
             "path": f"attachments/{filename}",
             "mimeType": mime,
             "size": len(raw),
-        })
+        }
+        # Preserve the wizard's small preview thumbnail (distinct from the
+        # full-size data blob) so the edit dialog keeps showing previews.
+        if image.get("thumbnail"):
+            ref["thumbnail"] = image["thumbnail"]
+        new_images.append(ref)
 
     metadata_dict["attachedImages"] = new_images
 
@@ -2118,7 +2145,10 @@ async def get_reproduction_report(task_id: str):
             try:
                 for p in sorted(evidence_dir.iterdir()):
                     if p.is_file() and p.suffix.lower() in _img_ext:
-                        evidence.append({"name": p.name, "path": str(p)})
+                        # Path is spec-dir-relative (matches how the report
+                        # references screenshots); never expose absolute
+                        # server paths to the client.
+                        evidence.append({"name": p.name, "path": f"evidence/{p.name}"})
             except OSError:
                 pass
         return {"exists": True, "content": content, "evidence": evidence}

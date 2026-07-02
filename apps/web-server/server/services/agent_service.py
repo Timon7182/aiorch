@@ -1245,6 +1245,12 @@ class AgentService:
     async def _sync_worktree_files(self, project_path: Path, spec_id: str, task_id: str | None = None) -> None:
         """Sync files from worktree spec dir to main spec dir for frontend visibility.
 
+        NOTE (known limitation): this sync is one-way (worktree -> main spec).
+        The spec dir is copied INTO the worktree once at build start, so
+        attachments (or other spec files) added via task-edit while a build is
+        RUNNING do not reach the live worktree — agents in that session won't
+        see them until the next build.
+
         Args:
             project_path: Path to the project
             spec_id: Spec directory name (e.g., "001-fix-bug")

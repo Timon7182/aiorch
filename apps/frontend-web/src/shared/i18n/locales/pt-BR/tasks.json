@@ -16,6 +16,7 @@
     "tab": "Reprodução",
     "title": "Relatório de reprodução do bug",
     "empty": "Ainda não há relatório de reprodução. Ele aparecerá assim que o QA reproduzir o bug em um navegador.",
+    "loading": "Carregando…",
     "evidence": "Evidências"
   },
   "status": {

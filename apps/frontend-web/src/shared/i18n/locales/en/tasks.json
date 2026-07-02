@@ -16,6 +16,7 @@
     "tab": "Reproduction",
     "title": "Bug reproduction report",
     "empty": "No reproduction report yet. It will appear once QA reproduces the bug in a browser.",
+    "loading": "Loading…",
     "evidence": "Evidence"
   },
   "preview": {

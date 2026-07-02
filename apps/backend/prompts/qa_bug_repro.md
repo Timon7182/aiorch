@@ -9,8 +9,12 @@ capture evidence. You have the Playwright browser tools available
 
 - **Preferred:** if the `PREVIEW_URL` environment variable is set, use it as the
   base URL. Check it with: `echo "$PREVIEW_URL"`. A running preview is already
-  serving the app there — do NOT start another server.
-- **Fallback:** if `PREVIEW_URL` is empty, start the app yourself (e.g.
+  serving the app there — do NOT start another server. **Verify it responds
+  before using it** (the preview may have stopped since the build started):
+  `curl -s -o /dev/null -w "%{http_code}" "$PREVIEW_URL"` — any HTTP status code
+  (2xx/3xx/4xx) means the server is alive; connection refused / `000` means it
+  is dead, so fall back to starting the app locally as below.
+- **Fallback:** if `PREVIEW_URL` is empty or not responding, start the app yourself (e.g.
   `./init.sh`, `npm run dev`, framework dev server) and use its local URL. Only
   fall back to a hardcoded `http://localhost:3000` if nothing else is available.
 

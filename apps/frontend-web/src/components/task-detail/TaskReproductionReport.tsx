@@ -49,7 +49,7 @@ export function TaskReproductionReport({ task }: TaskReproductionReportProps) {
         <h3 className="text-sm font-medium text-foreground">{t('tasks:reproduction.title')}</h3>
 
         {isLoading && !report && (
-          <p className="text-xs text-muted-foreground">…</p>
+          <p className="text-xs text-muted-foreground">{t('tasks:reproduction.loading')}</p>
         )}
 
         {!isLoading && !hasReport && (

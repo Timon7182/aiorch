@@ -57,6 +57,10 @@ def is_browser_verified(spec_dir: Path) -> bool:
     Reads the optional ``browser_verified`` flag on the ``qa_signoff`` object
     (set by the QA reviewer on bug-reproduction tasks). Absent on non-bug tasks
     and older plans -> defaults to False (backward compatible).
+
+    NOTE: this flag is informational only — it is NOT enforced as an approval
+    gate (a bug task can be approved without it). Deliberate for now; revisit
+    if browser verification should become mandatory for bug tasks.
     """
     status = get_qa_signoff_status(spec_dir)
     if not status:
