@@ -345,12 +345,21 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     setDraft(content);
   }, [draft, content, t]);
 
+  // Ref mirror of selectedPath so the async save can detect a file switch
+  // that happened while the PUT was in flight (stale-closure guard).
+  const selectedPathRef = useRef(selectedPath);
+  selectedPathRef.current = selectedPath;
+
   const saveEdit = useCallback(async () => {
     if (!selectedPath || !isEditableFile) return;
+    // Snapshot the target: if the selection somehow changes mid-flight, the
+    // write still lands on the right file, but we must not clobber the newly
+    // selected file's viewer state with the old draft.
+    const savedPath = selectedPath;
     setSavingEdit(true);
     setError(null);
     const r = await put<{ ok?: boolean }>(`/projects/${projectId}/docs/raw`, {
-      path: selectedPath,
+      path: savedPath,
       content: draft,
       repo: activeRepoPath,
     });
@@ -359,12 +368,19 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       setError(r.error ?? t('documentation.saveFailed'));
       return;
     }
+    if (selectedPathRef.current !== savedPath) return; // user moved on
     setContent(draft);
     setEditing(false);
     // Refresh from disk, then rebuild the HTML site in the background so the
-    // built site reflects the edit without blocking the editor.
-    await loadContent(selectedPath);
-    void post(`/projects/${projectId}/docs/build${repoSuffix(false)}`).then(() => {
+    // built site reflects the edit without blocking the editor. Surface a
+    // build failure the same way the manual Rebuild button does.
+    await loadContent(savedPath);
+    void post<{ log?: string }>(
+      `/projects/${projectId}/docs/build${repoSuffix(false)}`,
+    ).then((buildResult) => {
+      if (!buildResult.success) {
+        setError(buildResult.error ?? 'Build failed');
+      }
       void loadStatus();
     });
   }, [
@@ -378,17 +394,20 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     t,
   ]);
 
-  // Guarded file selection: confirm before leaving an edit with unsaved work.
+  // Guarded file selection: confirm before leaving an edit with unsaved work,
+  // and block switching entirely while a save is in flight so the PUT's
+  // follow-up state updates can't race the new selection.
   const selectFile = useCallback(
     (path: string) => {
       if (path === selectedPath) return;
+      if (savingEdit) return;
       if (editing && draft !== content && !window.confirm(t('documentation.unsavedConfirm'))) {
         return;
       }
       setEditing(false);
       setSelectedPath(path);
     },
-    [selectedPath, editing, draft, content, t],
+    [selectedPath, savingEdit, editing, draft, content, t],
   );
 
   const treeByFolder = useMemo(() => {

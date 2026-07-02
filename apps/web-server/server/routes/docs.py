@@ -25,11 +25,10 @@ import mimetypes
 import re
 import shutil
 from pathlib import Path
-from pathlib import Path as FilePath
 
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from ..services.docs_generator_service import get_docs_generator_service
 from .projects import load_projects
@@ -46,7 +45,7 @@ def _resolve_project(project_id: str) -> Path:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project {project_id} not registered",
         )
-    project_path = FilePath(pdata["path"])
+    project_path = Path(pdata["path"])
     if not project_path.is_dir():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -65,13 +64,13 @@ def _resolve_docs_base(project_id: str, repo: str | None) -> Path:
     """
     project_path = _resolve_project(project_id)
     from ..services.git_repos import resolve_repo_cwd
-    return FilePath(resolve_repo_cwd(str(project_path), repo))
+    return Path(resolve_repo_cwd(str(project_path), repo))
 
 
-def _backend_path() -> FilePath:
+def _backend_path() -> Path:
     """Locate apps/backend relative to apps/web-server (where we run)."""
     # apps/web-server/server/routes/docs.py → apps/backend
-    return FilePath(__file__).resolve().parents[3] / "backend"
+    return Path(__file__).resolve().parents[3] / "backend"
 
 
 async def _resolve_oauth_token() -> str | None:
@@ -196,17 +195,16 @@ async def build_docs(project_id: str, repo: str | None = None):
 # ---------------------------------------------------------------------------
 
 _TEMPLATE_DIRNAME = "doc-templates"
-_TEMPLATE_REQUIRED_KEYS = ("description", "structure", "mkdocs_yml", "page_templates")
 # Slug guard: also prevents path traversal via the {name} path param.
 _TEMPLATE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
-def _builtin_templates_dir() -> FilePath:
+def _builtin_templates_dir() -> Path:
     return _backend_path() / "prompts" / "doc_templates"
 
 
-def _global_templates_dir() -> FilePath:
-    return FilePath.home() / ".magestic-ai" / _TEMPLATE_DIRNAME
+def _global_templates_dir() -> Path:
+    return Path.home() / ".magestic-ai" / _TEMPLATE_DIRNAME
 
 
 def _project_templates_dir(project_path: Path) -> Path:
@@ -425,7 +423,8 @@ class DocsWriteBody(BaseModel):
     """Body for PUT /docs/raw — save a hand-edited doc file."""
 
     path: str
-    content: str
+    # 5 MB cap: generous for markdown, blocks accidental/abusive huge payloads.
+    content: str = Field(..., max_length=5_000_000)
     repo: str | None = None
 
 
