@@ -2678,6 +2678,7 @@ class AgentService:
         try:
             bug_spec_dir = project_path / ".magestic-ai" / "specs" / spec_id
             bug_meta_file = bug_spec_dir / "task_metadata.json"
+            bug_meta = {}
             if bug_meta_file.exists():
                 bug_meta = json.loads(bug_meta_file.read_text())
                 if str(bug_meta.get("taskType", "")).lower() == "bug":
@@ -2686,12 +2687,28 @@ class AgentService:
                     logger.info(
                         f"[AgentService] Bug task {task_id}: forcing Playwright MCP for QA agents"
                     )
-                # PREVIEW_URL (any task type): prefer a running preview as the QA target.
+
+            # PREVIEW_URL (any task type): prefer a running preview as the QA
+            # target. The local preview registry (dev-server / compose-local)
+            # is checked first — it is live in-memory state, so it can't be
+            # stale after a server restart. Fall back to the persisted
+            # task_metadata "preview" state, which also covers docker-remote
+            # previews that never enter the local registry.
+            preview_url = None
+            try:
+                from . import local_preview_service as _lps
+                _lp = _lps._previews.get(task_id)
+                if _lp and _lp.status == "running" and _lp.url:
+                    preview_url = _lp.url
+            except Exception:
+                pass
+            if not preview_url:
                 preview = bug_meta.get("preview") or {}
-                preview_url = preview.get("url")
-                if preview.get("status") == "running" and preview_url:
-                    env["PREVIEW_URL"] = preview_url
-                    logger.info(f"[AgentService] Task {task_id}: PREVIEW_URL={preview_url}")
+                if preview.get("status") == "running" and preview.get("url"):
+                    preview_url = preview["url"]
+            if preview_url:
+                env["PREVIEW_URL"] = preview_url
+                logger.info(f"[AgentService] Task {task_id}: PREVIEW_URL={preview_url}")
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(
                 f"[AgentService] Could not read task_metadata for bug/preview wiring ({task_id}): {e}"
