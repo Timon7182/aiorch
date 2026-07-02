@@ -25,6 +25,13 @@ import {
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
 import { Separator } from './ui/separator';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
 import { RepoSwitcher } from './RepoSwitcher';
 import { cn } from '../lib/utils';
 import { get, post, put } from '../lib/api-client';
@@ -62,6 +69,12 @@ interface RawDoc {
   content: string;
 }
 
+interface DocTemplate {
+  name: string;
+  description: string;
+  source: 'builtin' | 'global' | 'project';
+}
+
 interface DocumentationViewProps {
   projectId: string;
 }
@@ -88,6 +101,9 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     'generate' | 'build' | 'stop' | 'restart' | 'codegraph' | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  // Available doc templates (builtin/global/project) and the current pick.
+  const [templates, setTemplates] = useState<DocTemplate[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<string>('default');
   // Optimistic flag: set true the instant the user clicks Generate/Restart,
   // cleared once the server confirms (status=running) or the request fails.
   // Closes the small window between the POST returning and the subprocess
@@ -149,12 +165,33 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     [projectId, activeRepoPath],
   );
 
+  const loadTemplates = useCallback(async () => {
+    const r = await get<DocTemplate[]>(
+      `/projects/${projectId}/docs/templates${repoSuffix(false)}`,
+    );
+    if (r.success && Array.isArray(r.data)) {
+      setTemplates(r.data);
+      // Keep the selection valid; default to "default" when present.
+      setSelectedTemplate((prev) =>
+        r.data!.some((tpl) => tpl.name === prev)
+          ? prev
+          : r.data!.some((tpl) => tpl.name === 'default')
+            ? 'default'
+            : (r.data![0]?.name ?? 'default'),
+      );
+    }
+  }, [projectId, activeRepoPath]);
+
   useEffect(() => {
     loadStatus();
     loadTree();
-  }, [loadStatus, loadTree]);
+    loadTemplates();
+  }, [loadStatus, loadTree, loadTemplates]);
 
   useEffect(() => {
+    // Leaving a file (or switching repos) always drops out of edit mode so a
+    // stale draft can't be saved over a different file.
+    setEditing(false);
     if (selectedPath) loadContent(selectedPath);
   }, [selectedPath, loadContent]);
 
@@ -197,13 +234,18 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     return () => clearInterval(id);
   }, [status, projectId, activeRepoPath, loadTree, loadContent, selectedPath]);
 
+  // Build the generate URL with repo + template query params.
+  const generateUrl = useCallback(() => {
+    const rs = repoSuffix(false); // '' or '?repo=...'
+    const sep = rs ? '&' : '?';
+    return `/projects/${projectId}/docs/generate${rs}${sep}template=${encodeURIComponent(selectedTemplate)}`;
+  }, [projectId, activeRepoPath, selectedTemplate]);
+
   const handleGenerate = useCallback(async () => {
     setBusy('generate');
     setError(null);
     setOptimisticRunning(true);
-    const r = await post<{ state?: string; error?: string }>(
-      `/projects/${projectId}/docs/generate${repoSuffix(false)}`,
-    );
+    const r = await post<{ state?: string; error?: string }>(generateUrl());
     setBusy(null);
     if (!r.success) {
       setOptimisticRunning(false);
@@ -212,7 +254,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     setOptimisticRunning(false);
-  }, [projectId, activeRepoPath, loadStatus]);
+  }, [generateUrl, loadStatus]);
 
   const handleBuild = useCallback(async () => {
     setBusy('build');
@@ -258,9 +300,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     setError(null);
     await post(`/projects/${projectId}/docs/cancel`);
     setOptimisticRunning(true);
-    const r = await post<{ state?: string; error?: string }>(
-      `/projects/${projectId}/docs/generate${repoSuffix(false)}`,
-    );
+    const r = await post<{ state?: string; error?: string }>(generateUrl());
     setBusy(null);
     if (!r.success) {
       setOptimisticRunning(false);
@@ -269,7 +309,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     setOptimisticRunning(false);
-  }, [projectId, activeRepoPath, loadStatus]);
+  }, [projectId, generateUrl, loadStatus]);
 
   const isRunning = status?.state === 'running' || optimisticRunning;
 
@@ -290,7 +330,6 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     !!selectedPath &&
     selectedPath !== GRAPH_REPORT_PATH &&
     selectedPath !== CODEGRAPH_REPORT_PATH;
-  const isDirty = editing && draft !== content;
   // Warn when editing content that lives inside auto-generated blocks; those
   // get overwritten on the next regeneration.
   const hasAutoBlock = editing && draft.includes('<!-- docgen:auto');
@@ -368,6 +407,29 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       <div className="flex w-48 sm:w-60 md:w-72 shrink-0 flex-col border-r border-border bg-sidebar/40">
         <div className="p-3 space-y-2">
           <RepoSwitcher projectId={projectId} className="w-full justify-between" />
+          {templates.length > 0 && (
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {t('documentation.template')}
+              </label>
+              <Select
+                value={selectedTemplate}
+                onValueChange={setSelectedTemplate}
+                disabled={isRunning}
+              >
+                <SelectTrigger className="h-9 w-full text-sm">
+                  <SelectValue placeholder={t('documentation.template')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {templates.map((tpl) => (
+                    <SelectItem key={tpl.name} value={tpl.name} title={tpl.description}>
+                      {tpl.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <Button
             className="w-full"
             onClick={handleGenerate}

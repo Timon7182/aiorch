@@ -302,7 +302,8 @@
     "rebuilding": "Reconstruindo o site...",
     "saveFailed": "Falha ao salvar o arquivo",
     "autoBlockWarning": "Este arquivo contém blocos gerados automaticamente. As edições dentro dos marcadores <!-- docgen:auto --> serão sobrescritas na próxima vez que a documentação for regenerada.",
-    "unsavedConfirm": "Você tem alterações não salvas. Descartá-las?"
+    "unsavedConfirm": "Você tem alterações não salvas. Descartá-las?",
+    "template": "Modelo"
   },
   "lastChecked": "Última verificação"
 }

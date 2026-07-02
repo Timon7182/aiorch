@@ -311,7 +311,8 @@
     "rebuilding": "Rebuilding site...",
     "saveFailed": "Failed to save file",
     "autoBlockWarning": "This file contains auto-generated blocks. Edits inside <!-- docgen:auto --> markers will be overwritten the next time documentation is regenerated.",
-    "unsavedConfirm": "You have unsaved changes. Discard them?"
+    "unsavedConfirm": "You have unsaved changes. Discard them?",
+    "template": "Template"
   },
   "lastChecked": "Last checked"
 }

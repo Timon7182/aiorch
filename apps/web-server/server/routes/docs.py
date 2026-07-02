@@ -22,6 +22,8 @@ import asyncio
 import json
 import logging
 import mimetypes
+import re
+import shutil
 from pathlib import Path
 from pathlib import Path as FilePath
 
@@ -116,8 +118,17 @@ async def _resolve_user_identity(raw_request: Request) -> tuple[str, str] | None
 
 
 @router.post("/{project_id}/docs/generate", status_code=status.HTTP_202_ACCEPTED)
-async def generate_docs(project_id: str, raw_request: Request, repo: str | None = None):
-    """Spawn the doc-generator agent in the background; return immediately."""
+async def generate_docs(
+    project_id: str,
+    raw_request: Request,
+    repo: str | None = None,
+    template: str | None = None,
+):
+    """Spawn the doc-generator agent in the background; return immediately.
+
+    ``template`` selects the doc template (structure/mkdocs/page layout);
+    defaults to "default" in the runner when omitted.
+    """
     project_path = _resolve_docs_base(project_id, repo)
     svc = get_docs_generator_service(_backend_path())
 
@@ -143,6 +154,7 @@ async def generate_docs(project_id: str, raw_request: Request, repo: str | None 
                 project_path=project_path,
                 oauth_token=oauth_token,
                 user_identity=user_identity,
+                template=template,
             )
             logger.info(
                 f"[docs] generation finished for {project_id}: "
@@ -177,6 +189,130 @@ async def build_docs(project_id: str, repo: str | None = None):
     if not ok:
         return {"success": False, "error": log[-4000:]}
     return {"log": log[-4000:]}
+
+
+# ---------------------------------------------------------------------------
+# Doc templates
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_DIRNAME = "doc-templates"
+_TEMPLATE_REQUIRED_KEYS = ("description", "structure", "mkdocs_yml", "page_templates")
+# Slug guard: also prevents path traversal via the {name} path param.
+_TEMPLATE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def _builtin_templates_dir() -> FilePath:
+    return _backend_path() / "prompts" / "doc_templates"
+
+
+def _global_templates_dir() -> FilePath:
+    return FilePath.home() / ".magestic-ai" / _TEMPLATE_DIRNAME
+
+
+def _project_templates_dir(project_path: Path) -> Path:
+    return project_path / ".magestic-ai" / _TEMPLATE_DIRNAME
+
+
+def _read_template_manifest(template_dir: Path) -> dict | None:
+    manifest = template_dir / "template.json"
+    if not manifest.is_file():
+        return None
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _enumerate_templates(project_path: Path) -> dict[str, dict]:
+    """Merge templates from builtin → global → project (later wins)."""
+    merged: dict[str, dict] = {}
+    for source, base in (
+        ("builtin", _builtin_templates_dir()),
+        ("global", _global_templates_dir()),
+        ("project", _project_templates_dir(project_path)),
+    ):
+        if not base.is_dir():
+            continue
+        for child in sorted(base.iterdir()):
+            if not child.is_dir():
+                continue
+            data = _read_template_manifest(child)
+            if data is None:
+                continue
+            name = str(data.get("name") or child.name)
+            merged[name] = {
+                "name": name,
+                "description": str(data.get("description") or ""),
+                "source": source,
+            }
+    return merged
+
+
+class DocsTemplateBody(BaseModel):
+    """Body for PUT /docs/templates/{name} — a template manifest."""
+
+    name: str | None = None  # ignored; the path param is authoritative
+    description: str
+    structure: str
+    mkdocs_yml: str
+    page_templates: str
+    extra_instructions: str | None = ""
+    repo: str | None = None
+
+
+@router.get("/{project_id}/docs/templates")
+async def list_docs_templates(project_id: str, repo: str | None = None):
+    """List all doc templates available to this project (builtin/global/project)."""
+    project_path = _resolve_docs_base(project_id, repo)
+    merged = _enumerate_templates(project_path)
+    return sorted(merged.values(), key=lambda t: t["name"])
+
+
+@router.put("/{project_id}/docs/templates/{name}")
+async def save_docs_template(project_id: str, name: str, body: DocsTemplateBody):
+    """Create or update a project-level doc template."""
+    project_path = _resolve_docs_base(project_id, body.repo)
+    if not _TEMPLATE_SLUG_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid template name (lowercase letters, digits, '-' or '_')",
+        )
+    manifest = {
+        "name": name,
+        "description": body.description,
+        "structure": body.structure,
+        "mkdocs_yml": body.mkdocs_yml,
+        "page_templates": body.page_templates,
+        "extra_instructions": body.extra_instructions or "",
+    }
+    dest = _project_templates_dir(project_path) / name
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "template.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Write failed: {exc}")
+    return {"ok": True}
+
+
+@router.delete("/{project_id}/docs/templates/{name}")
+async def delete_docs_template(project_id: str, name: str, repo: str | None = None):
+    """Delete a project-level doc template. Builtin/global are read-only (404)."""
+    project_path = _resolve_docs_base(project_id, repo)
+    if not _TEMPLATE_SLUG_RE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid template name")
+    dest = _project_templates_dir(project_path) / name
+    if not (dest / "template.json").is_file():
+        raise HTTPException(
+            status_code=404, detail="No project-level template with that name"
+        )
+    try:
+        shutil.rmtree(dest)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {exc}")
+    return {"ok": True}
 
 
 @router.post("/{project_id}/docs/codegraph/index", status_code=status.HTTP_202_ACCEPTED)
