@@ -140,6 +140,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             errors.append("composeFile must be a string")
         if config.get("port") is not None and not isinstance(config.get("port"), int):
             errors.append("port must be an integer")
+        if config.get("containerPort") is not None and not isinstance(config.get("containerPort"), int):
+            errors.append("containerPort must be an integer")
         return errors
 
     # ---- docker-remote (strict) ----

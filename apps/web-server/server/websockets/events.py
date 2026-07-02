@@ -63,8 +63,17 @@ def emit_threadsafe(coro) -> None:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+
+    def _log_result(f: "asyncio.Future") -> None:
+        if f.cancelled():
+            return
+        exc = f.exception()
+        if exc is not None:
+            logger.warning("emit_threadsafe broadcast failed: %s", exc)
+
     try:
-        asyncio.run_coroutine_threadsafe(coro, loop)
+        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        fut.add_done_callback(_log_result)
     except Exception:
         logger.debug("emit_threadsafe failed", exc_info=True)
 
@@ -356,6 +365,8 @@ async def emit_preview_status(
         "[WebSocket] Emitting preview:status - taskId: %s, status: %s, strategy: %s",
         task_id, status, strategy,
     )
+    # TODO: scope preview:status to the task owner via send_to_user instead of
+    # broadcasting to every connected client.
     await broadcast_event("preview:status", {
         "taskId": task_id,
         "projectId": project_id,
@@ -368,6 +379,8 @@ async def emit_preview_status(
 
 async def emit_preview_log(task_id: str, line: str):
     """Emit a single line of preview build/run output for the live log panel."""
+    # TODO: scope preview:log to the task owner via send_to_user instead of
+    # broadcasting to every connected client.
     await broadcast_event("preview:log", {"taskId": task_id, "line": line})
 
 

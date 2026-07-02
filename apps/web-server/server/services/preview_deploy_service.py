@@ -339,6 +339,7 @@ def deploy_preview(
 
     state = _write_preview_state(ref.spec_dir, {
         "status": "building",
+        "strategy": "docker-remote",
         "lane": lane,
         "branch": branch,
         "ref": sha,

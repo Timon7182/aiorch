@@ -72,6 +72,9 @@ class LocalPreview:
     cwd: Path | None = None
     logs: deque[str] = field(default_factory=lambda: deque(maxlen=_LOG_RING))
     _ready: "asyncio.Event | None" = None
+    # Held task references so stop/teardown can cancel them explicitly.
+    _pump_task: "asyncio.Task | None" = None
+    _emit_tasks: "set[asyncio.Task]" = field(default_factory=set)
 
 
 # task_id -> LocalPreview
@@ -226,15 +229,19 @@ async def _emit_status(preview: LocalPreview) -> None:
 
 
 def _log(preview: LocalPreview, line: str) -> None:
+    """Append a line to the ring buffer and stream it as a preview:log event.
+
+    All callers (``_run_dev_server``, ``_run_compose``, ``_pump``, ``_stream``)
+    are coroutines already running ON the main event loop, so the emit is
+    scheduled with ``create_task``. Task references are held on the preview
+    record so they can be cancelled on stop.
+    """
     line = line.rstrip("\n")
     preview.logs.append(line)
     try:
-        loop = ws_events._main_loop
-        coro = ws_events.emit_preview_log(preview.task_id, line)
-        if loop and loop.is_running():
-            asyncio.run_coroutine_threadsafe(coro, loop)
-        else:
-            asyncio.ensure_future(coro)
+        task = asyncio.create_task(ws_events.emit_preview_log(preview.task_id, line))
+        preview._emit_tasks.add(task)
+        task.add_done_callback(preview._emit_tasks.discard)
     except Exception:
         pass
 
@@ -279,7 +286,7 @@ def start(ref: pds.TaskRef, strategy: str, config: dict[str, Any]) -> dict[str, 
     preview._ready = asyncio.Event()
     _previews[preview.task_id] = preview
 
-    pds._write_preview_state(ref.spec_dir, {
+    initial_state: dict[str, Any] = {
         "status": "building",
         "strategy": strategy,
         "branch": branch,
@@ -289,7 +296,12 @@ def start(ref: pds.TaskRef, strategy: str, config: dict[str, Any]) -> dict[str, 
         "port": None,
         "error": None,
         "startedAt": preview.started_at,
-    })
+    }
+    if strategy == "compose-local":
+        # Persist the compose file so teardown works after a server restart
+        # (when the in-memory handle is gone).
+        initial_state["composeFile"] = config.get("composeFile") or "docker-compose.yml"
+    pds._write_preview_state(ref.spec_dir, initial_state)
 
     loop = _running_loop()
     if strategy == "compose-local":
@@ -353,7 +365,7 @@ async def _run_dev_server(preview: LocalPreview, ref: pds.TaskRef, config: dict[
             raise RuntimeError(f"command not found: {argv[0]} ({exc})") from exc
         preview.process = proc
 
-        asyncio.ensure_future(_pump(preview, ready_pattern))
+        preview._pump_task = asyncio.create_task(_pump(preview, ready_pattern))
 
         # Readiness: TCP connect, log pattern, or early exit.
         deadline = time.monotonic() + _READY_TIMEOUT_S
@@ -406,7 +418,10 @@ async def _run_compose(preview: LocalPreview, ref: pds.TaskRef, config: dict[str
         port = config.get("port")
         service = config.get("service")
         if not port and service:
-            port = await _compose_published_port(cwd, compose_file, project, service)
+            container_port = config.get("containerPort") or 80
+            port = await _compose_published_port(
+                cwd, compose_file, project, service, container_port,
+            )
         preview.port = port
         preview.url = f"http://localhost:{port}" if port else None
 
@@ -479,12 +494,15 @@ async def _stream(preview: LocalPreview, argv: list[str], cwd: Path) -> int:
     return await proc.wait()
 
 
-async def _compose_published_port(cwd: Path, compose_file: str, project: str, service: str) -> int | None:
-    """Ask `docker compose port` for a service's first published host port."""
+async def _compose_published_port(
+    cwd: Path, compose_file: str, project: str, service: str, container_port: int = 80,
+) -> int | None:
+    """Ask `docker compose port` for the host port published for a service's
+    container port (``containerPort`` in the compose-local config, default 80)."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", "compose", "-f", compose_file, "-p", project,
-            "port", service, "80",
+            "port", service, str(container_port),
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
@@ -503,6 +521,14 @@ async def _compose_published_port(cwd: Path, compose_file: str, project: str, se
 # ---------------------------------------------------------------------------
 def _kill(preview: LocalPreview) -> None:
     """Kill the dev-server process tree, or tear down the compose project."""
+    # Cancel the output pump and any in-flight log-emit tasks first so nothing
+    # keeps reading from (or emitting for) a process we're about to kill.
+    if preview._pump_task and not preview._pump_task.done():
+        preview._pump_task.cancel()
+    for task in list(preview._emit_tasks):
+        if not task.done():
+            task.cancel()
+    preview._emit_tasks.clear()
     if preview.process and preview.process.returncode is None:
         pid = preview.process.pid
         try:
@@ -556,14 +582,21 @@ def stop(ref: pds.TaskRef) -> dict[str, Any]:
 
 
 def _compose_down_from_meta(ref: pds.TaskRef) -> None:
+    """Tear down a compose-local preview using only persisted state.
+
+    Used when there's no in-memory handle (server restarted). The compose file
+    is read from the preview state persisted at start so previews launched with
+    a custom ``composeFile`` are torn down correctly too.
+    """
     meta_preview = (pds._read_meta(ref.spec_dir).get("preview")) or {}
     if meta_preview.get("strategy") != "compose-local":
         return
     project = f"magestic-preview-{ref.slug}"[:60]
-    compose_file = "docker-compose.yml"
+    compose_file = meta_preview.get("composeFile") or "docker-compose.yml"
     try:
         subprocess.run(
-            ["docker", "compose", "-p", project, "down", "-v", "--remove-orphans"],
+            ["docker", "compose", "-f", compose_file, "-p", project,
+             "down", "-v", "--remove-orphans"],
             cwd=str(ref.worktree_path), capture_output=True, timeout=120,
         )
     except Exception:
