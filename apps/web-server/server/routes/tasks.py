@@ -3562,6 +3562,10 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
 
 class DeployPreviewOptions(BaseModel):
     lane: Optional[str] = Field(None, description="Override lane (A or B); default derived from branch")
+    strategy: Optional[str] = Field(
+        None,
+        description="Override preview strategy: docker-remote | dev-server | compose-local (default from config)",
+    )
 
 
 class PromoteOptions(BaseModel):
@@ -3581,7 +3585,9 @@ async def deploy_preview(task_id: str, options: DeployPreviewOptions = None):
     if options is None:
         options = DeployPreviewOptions()
     try:
-        state = pds.deploy_preview(task_id, lane_override=options.lane)
+        state = pds.deploy_preview(
+            task_id, lane_override=options.lane, strategy_override=options.strategy,
+        )
     except pds.PreviewError as exc:
         return {"success": False, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001

@@ -25,7 +25,13 @@
     "expiresSoon": "Expire bientôt — besoin de plus de temps ?",
     "expired": "Expiré",
     "extend": "+1 heure",
-    "extendFailed": "Échec de l'extension"
+    "extendFailed": "Échec de l'extension",
+    "strategy": "Exécution :",
+    "strategyAuto": "Auto",
+    "strategyDevServer": "Serveur de dev",
+    "strategyComposeLocal": "Compose local",
+    "strategyDockerRemote": "Docker distant",
+    "logs": "Journaux"
   },
   "usage": {
     "title": "Consommation de tokens",

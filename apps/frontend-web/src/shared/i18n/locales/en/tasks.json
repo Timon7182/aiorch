@@ -25,7 +25,13 @@
     "expiresSoon": "Expires soon — need more time?",
     "expired": "Expired",
     "extend": "+1 hour",
-    "extendFailed": "Extend failed"
+    "extendFailed": "Extend failed",
+    "strategy": "Run:",
+    "strategyAuto": "Auto",
+    "strategyDevServer": "Dev server",
+    "strategyComposeLocal": "Local Compose",
+    "strategyDockerRemote": "Remote Docker",
+    "logs": "Logs"
   },
   "usage": {
     "title": "Token usage",

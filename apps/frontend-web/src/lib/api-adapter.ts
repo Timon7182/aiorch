@@ -38,6 +38,8 @@ import type {
   CreateTerminalWorktreeRequest,
   CustomMcpServer,
   ProjectEnvConfig,
+  PreviewStatus,
+  PreviewStrategy,
 } from '../shared/types';
 
 // Event callback storage
@@ -358,7 +360,7 @@ export const webAPI: API & { _isWebMode: boolean } = {
   createPRFromTask: (taskId: string, options?: { title?: string; body?: string; draft?: boolean; baseBranch?: string; targetRepo?: string }) =>
     post(`/tasks/${taskId}/worktree/create-pr`, options || {}),
   // ========== Preview deploy ("Run on server") ==========
-  deployPreview: (taskId: string, options?: { lane?: string }) =>
+  deployPreview: (taskId: string, options?: { lane?: string; strategy?: PreviewStrategy }) =>
     post(`/tasks/${taskId}/deploy-preview`, options || {}),
   getPreview: (taskId: string) => get(`/tasks/${taskId}/deploy-preview`),
   stopPreview: (taskId: string) => del(`/tasks/${taskId}/deploy-preview`),
@@ -366,6 +368,14 @@ export const webAPI: API & { _isWebMode: boolean } = {
     post(`/tasks/${taskId}/deploy-preview/extend`, options || {}),
   promotePreview: (taskId: string, options?: { lane?: string }) =>
     post(`/tasks/${taskId}/promote`, options || {}),
+  onPreviewStatus: (callback) =>
+    registerCallback('preview:status', (payload: { taskId: string; projectId?: string | null; status: PreviewStatus; strategy: PreviewStrategy; url?: string | null; error?: string | null }) => {
+      callback(payload);
+    }),
+  onPreviewLog: (callback) =>
+    registerCallback('preview:log', (payload: { taskId: string; line: string }) => {
+      callback(payload);
+    }),
   // ========== Databases (chat DB connection) ==========
   listDatabases: () => get(`/ext/databases`),
   createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) =>

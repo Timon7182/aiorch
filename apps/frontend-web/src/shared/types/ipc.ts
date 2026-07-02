@@ -140,8 +140,12 @@ export type PreviewStatus =
   | 'promoting'
   | 'promoted';
 
+export type PreviewStrategy = 'docker-remote' | 'dev-server' | 'compose-local';
+
 export interface PreviewState {
   status: PreviewStatus;
+  /** Which preview strategy produced this state. Absent = docker-remote (legacy). */
+  strategy?: PreviewStrategy;
   lane?: 'A' | 'B' | string;
   branch?: string;
   ref?: string;
@@ -214,11 +218,13 @@ export interface API {
     targetRepo?: string;
   }) => Promise<IPCResult<{ prUrl: string; prNumber: number | null; branch: string; baseBranch: string }>>;
   // Preview deploy ("Run on server")
-  deployPreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
+  deployPreview: (taskId: string, options?: { lane?: string; strategy?: PreviewStrategy }) => Promise<IPCResult<PreviewState>>;
   getPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
   stopPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
   extendPreview: (taskId: string, options?: { hours?: number }) => Promise<IPCResult<PreviewState>>;
   promotePreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
+  onPreviewStatus: (callback: (data: { taskId: string; projectId?: string | null; status: PreviewStatus; strategy: PreviewStrategy; url?: string | null; error?: string | null }) => void) => () => void;
+  onPreviewLog: (callback: (data: { taskId: string; line: string }) => void) => () => void;
   // Databases (chat DB connection)
   listDatabases: () => Promise<IPCResult<import('./insights').DatabaseProfileSummary[]>>;
   createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) => Promise<IPCResult<import('./insights').DatabaseProfileSummary>>;
