@@ -122,6 +122,7 @@ class DocsGeneratorService:
         project_path: Path,
         oauth_token: str | None,
         user_identity: tuple[str, str] | None = None,
+        template: str | None = None,
     ) -> GenerationResult:
         """Run the doc-generator agent + mkdocs build for a project.
 
@@ -133,6 +134,9 @@ class DocsGeneratorService:
             user_identity: optional (name, email) used to attribute any
                 writes the agent makes via git (the agent itself doesn't
                 commit, but stays consistent with the rest of the platform).
+            template: optional doc template name (structure/mkdocs/page
+                layout). Defaults to "default" when None. Passed through to
+                the runner's ``--template`` flag.
         """
         # Only reject a duplicate run if there's an *actual* subprocess
         # already running. The route handler may have called mark_starting()
@@ -177,6 +181,8 @@ class DocsGeneratorService:
             "--project-dir",
             str(project_path),
         ]
+        if template:
+            cmd += ["--template", template]
 
         logger.info(
             f"[DocsGenerator] Starting runner for project {project_id} "

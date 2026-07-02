@@ -303,5 +303,16 @@
     "download": "Télécharger {{name}}",
     "downloadFailed": "Impossible de télécharger {{name}}"
   },
+  "documentation": {
+    "edit": "Modifier",
+    "save": "Enregistrer",
+    "saving": "Enregistrement...",
+    "cancel": "Annuler",
+    "rebuilding": "Reconstruction du site...",
+    "saveFailed": "Échec de l'enregistrement du fichier",
+    "autoBlockWarning": "Ce fichier contient des blocs générés automatiquement. Les modifications à l'intérieur des marqueurs <!-- docgen:auto --> seront écrasées lors de la prochaine régénération de la documentation.",
+    "unsavedConfirm": "Vous avez des modifications non enregistrées. Les abandonner ?",
+    "template": "Modèle"
+  },
   "lastChecked": "Dernière vérification"
 }
