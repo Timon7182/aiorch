@@ -90,6 +90,13 @@ async def lifespan(app: FastAPI):
     # Ensure data directory exists
     Path(settings.PROJECTS_DATA_DIR).mkdir(parents=True, exist_ok=True)
 
+    # Capture the running loop so background threads (remote preview worker) can
+    # broadcast websocket events back onto it via events.emit_threadsafe.
+    import asyncio as _asyncio
+
+    from .websockets import events as _ws_events
+    _ws_events.set_main_loop(_asyncio.get_running_loop())
+
     # Auto-configure autoBuildPath if the backend directory exists
     # (enables project initialization without manual settings configuration)
     backend_path = Path(settings.BACKEND_PATH)
@@ -146,6 +153,15 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Magestic AI Web Server...")
     preview_reaper.stop()
+
+    # Tear down any local (dev-server / compose-local) previews so their
+    # subprocesses / compose projects don't outlive the server.
+    try:
+        from .services import local_preview_service
+        local_preview_service.shutdown_all()
+    except Exception:
+        logger.warning("local preview shutdown failed", exc_info=True)
+
     await token_service.stop()
 
     # Stop any running language servers so they don't outlive the app.
