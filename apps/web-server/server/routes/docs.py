@@ -27,6 +27,7 @@ from pathlib import Path as FilePath
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 
 from ..services.docs_generator_service import get_docs_generator_service
 from .projects import load_projects
@@ -282,6 +283,58 @@ async def docs_raw_markdown(project_id: str, path: str, repo: str | None = None)
         "path": path,
         "content": target.read_text(encoding="utf-8", errors="replace"),
     }
+
+
+class DocsWriteBody(BaseModel):
+    """Body for PUT /docs/raw — save a hand-edited doc file."""
+
+    path: str
+    content: str
+    repo: str | None = None
+
+
+@router.put("/{project_id}/docs/raw")
+async def docs_raw_write(project_id: str, body: DocsWriteBody):
+    """Overwrite a markdown doc file (or mkdocs.yml) with user-edited content.
+
+    Companion write endpoint to GET /docs/raw, used by the in-app editor.
+    Only markdown files under ``docs/`` and the project-root ``mkdocs.yml``
+    may be written; the same path-traversal guard as the GET applies. Does
+    NOT rebuild the site — the client calls POST /docs/build explicitly.
+    """
+    project_path = _resolve_docs_base(project_id, body.repo)
+    rel = (body.path or "").strip()
+    if not rel:
+        raise HTTPException(status_code=400, detail="Missing path")
+
+    # mkdocs.yml is a special case: it lives at the repo root, not under docs/.
+    if rel in ("mkdocs.yml", "./mkdocs.yml"):
+        target = (project_path / "mkdocs.yml").resolve()
+        base = project_path.resolve()
+    else:
+        docs_dir = (project_path / "docs").resolve()
+        target = (docs_dir / rel).resolve()
+        # Path-traversal guard (mirrors the GET).
+        try:
+            target.relative_to(docs_dir)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path escapes docs directory")
+        if target.suffix.lower() != ".md":
+            raise HTTPException(status_code=400, detail="Only .md files may be edited")
+        base = docs_dir
+
+    # Defense in depth: re-confirm the resolved target stays under its base.
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes allowed directory")
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body.content, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Write failed: {exc}")
+    return {"ok": True}
 
 
 @router.get("/{project_id}/docs/graph-report")

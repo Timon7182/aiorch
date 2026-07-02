@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import CodeMirror from '@uiw/react-codemirror';
+import { markdown } from '@codemirror/lang-markdown';
 import {
   FileText,
   Folder,
@@ -14,6 +17,9 @@ import {
   RotateCw,
   Network,
   ExternalLink,
+  Pencil,
+  Save,
+  X,
 } from 'lucide-react';
 
 import { Button } from './ui/button';
@@ -21,7 +27,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Separator } from './ui/separator';
 import { RepoSwitcher } from './RepoSwitcher';
 import { cn } from '../lib/utils';
-import { get, post } from '../lib/api-client';
+import { get, post, put } from '../lib/api-client';
 import { getAuthToken } from '../lib/auth';
 import { useProjectStore } from '../stores/project-store';
 
@@ -63,10 +69,21 @@ interface DocumentationViewProps {
 const POLL_INTERVAL_MS = 4000;
 
 export function DocumentationView({ projectId }: DocumentationViewProps) {
+  const { t } = useTranslation('common');
   const [status, setStatus] = useState<DocsStatus | null>(null);
   const [files, setFiles] = useState<DocFile[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [content, setContent] = useState<string>('');
+  // Editing state for in-app markdown editing (CodeMirror). `draft` holds the
+  // pending edit; `dirty` = draft diverges from the loaded content.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  // Track dark mode so the CodeMirror theme matches the app (the app toggles
+  // `dark` on <html>). Reactive via a MutationObserver on the class attribute.
+  const [isDark, setIsDark] = useState(
+    () => typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
+  );
   const [busy, setBusy] = useState<
     'generate' | 'build' | 'stop' | 'restart' | 'codegraph' | null
   >(null);
@@ -256,6 +273,85 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
 
   const isRunning = status?.state === 'running' || optimisticRunning;
 
+  // Keep the CodeMirror theme in sync with the app's light/dark toggle.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const el = document.documentElement;
+    const observer = new MutationObserver(() => {
+      setIsDark(el.classList.contains('dark'));
+    });
+    observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  // A real, editable markdown file is selected (not a graph/codegraph report
+  // sentinel). mkdocs.yml isn't in the tree, so this is always a docs/*.md file.
+  const isEditableFile =
+    !!selectedPath &&
+    selectedPath !== GRAPH_REPORT_PATH &&
+    selectedPath !== CODEGRAPH_REPORT_PATH;
+  const isDirty = editing && draft !== content;
+  // Warn when editing content that lives inside auto-generated blocks; those
+  // get overwritten on the next regeneration.
+  const hasAutoBlock = editing && draft.includes('<!-- docgen:auto');
+
+  const beginEdit = useCallback(() => {
+    setDraft(content);
+    setEditing(true);
+  }, [content]);
+
+  const cancelEdit = useCallback(() => {
+    if (draft !== content && !window.confirm(t('documentation.unsavedConfirm'))) return;
+    setEditing(false);
+    setDraft(content);
+  }, [draft, content, t]);
+
+  const saveEdit = useCallback(async () => {
+    if (!selectedPath || !isEditableFile) return;
+    setSavingEdit(true);
+    setError(null);
+    const r = await put<{ ok?: boolean }>(`/projects/${projectId}/docs/raw`, {
+      path: selectedPath,
+      content: draft,
+      repo: activeRepoPath,
+    });
+    setSavingEdit(false);
+    if (!r.success) {
+      setError(r.error ?? t('documentation.saveFailed'));
+      return;
+    }
+    setContent(draft);
+    setEditing(false);
+    // Refresh from disk, then rebuild the HTML site in the background so the
+    // built site reflects the edit without blocking the editor.
+    await loadContent(selectedPath);
+    void post(`/projects/${projectId}/docs/build${repoSuffix(false)}`).then(() => {
+      void loadStatus();
+    });
+  }, [
+    selectedPath,
+    isEditableFile,
+    projectId,
+    draft,
+    activeRepoPath,
+    loadContent,
+    loadStatus,
+    t,
+  ]);
+
+  // Guarded file selection: confirm before leaving an edit with unsaved work.
+  const selectFile = useCallback(
+    (path: string) => {
+      if (path === selectedPath) return;
+      if (editing && draft !== content && !window.confirm(t('documentation.unsavedConfirm'))) {
+        return;
+      }
+      setEditing(false);
+      setSelectedPath(path);
+    },
+    [selectedPath, editing, draft, content, t],
+  );
+
   const treeByFolder = useMemo(() => {
     const groups: Record<string, DocFile[]> = {};
     for (const f of files) {
@@ -425,7 +521,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
               </div>
               <button
                 type="button"
-                onClick={() => setSelectedPath(GRAPH_REPORT_PATH)}
+                onClick={() => selectFile(GRAPH_REPORT_PATH)}
                 className={cn(
                   'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/50',
                   selectedPath === GRAPH_REPORT_PATH && 'bg-accent',
@@ -468,7 +564,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
               </div>
               <button
                 type="button"
-                onClick={() => setSelectedPath(CODEGRAPH_REPORT_PATH)}
+                onClick={() => selectFile(CODEGRAPH_REPORT_PATH)}
                 className={cn(
                   'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/50',
                   selectedPath === CODEGRAPH_REPORT_PATH && 'bg-accent',
@@ -499,7 +595,7 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
                     <button
                       key={f.path}
                       type="button"
-                      onClick={() => setSelectedPath(f.path)}
+                      onClick={() => selectFile(f.path)}
                       className={cn(
                         'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/50',
                         isActive && 'bg-accent',
@@ -532,33 +628,93 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
                 ? 'CGC_REPORT.md (CodeGraphContext)'
                 : selectedPath ?? '—'}
           </span>
-          {status?.has_site && (
-            <a
-              href={`/api/projects/${projectId}/docs/site/index.html?token=${encodeURIComponent(getAuthToken() ?? '')}${repoSuffix(true)}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-primary hover:underline"
-            >
-              Open built site ↗
-            </a>
-          )}
+          <div className="flex items-center gap-2">
+            {isEditableFile && !editing && (
+              <Button variant="outline" size="sm" onClick={beginEdit}>
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                {t('documentation.edit')}
+              </Button>
+            )}
+            {isEditableFile && editing && (
+              <>
+                <Button size="sm" onClick={saveEdit} disabled={savingEdit}>
+                  {savingEdit ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      {t('documentation.saving')}
+                    </>
+                  ) : (
+                    <>
+                      <Save className="mr-1.5 h-3.5 w-3.5" />
+                      {t('documentation.save')}
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={cancelEdit}
+                  disabled={savingEdit}
+                >
+                  <X className="mr-1.5 h-3.5 w-3.5" />
+                  {t('documentation.cancel')}
+                </Button>
+              </>
+            )}
+            {status?.has_site && (
+              <a
+                href={`/api/projects/${projectId}/docs/site/index.html?token=${encodeURIComponent(getAuthToken() ?? '')}${repoSuffix(true)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
+                Open built site ↗
+              </a>
+            )}
+          </div>
         </div>
-        <ScrollArea className="flex-1">
-          <div className="prose prose-sm dark:prose-invert max-w-3xl px-6 py-6">
+        {editing ? (
+          <div className="flex flex-1 flex-col min-h-0">
             {error && (
-              <div className="not-prose mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              <div className="mx-6 mt-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                 {error}
               </div>
             )}
-            {selectedPath ? (
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-            ) : (
-              <div className="text-muted-foreground">
-                Select a file on the left, or generate documentation to start.
+            {hasAutoBlock && (
+              <div className="mx-6 mt-4 flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-700 dark:text-yellow-400">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{t('documentation.autoBlockWarning')}</span>
               </div>
             )}
+            <div className="flex-1 min-h-0 overflow-auto p-4">
+              <CodeMirror
+                value={draft}
+                onChange={setDraft}
+                extensions={[markdown()]}
+                theme={isDark ? 'dark' : 'light'}
+                height="100%"
+                className="text-sm"
+              />
+            </div>
           </div>
-        </ScrollArea>
+        ) : (
+          <ScrollArea className="flex-1">
+            <div className="prose prose-sm dark:prose-invert max-w-3xl px-6 py-6">
+              {error && (
+                <div className="not-prose mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  {error}
+                </div>
+              )}
+              {selectedPath ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+              ) : (
+                <div className="text-muted-foreground">
+                  Select a file on the left, or generate documentation to start.
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+        )}
       </div>
     </div>
   );
