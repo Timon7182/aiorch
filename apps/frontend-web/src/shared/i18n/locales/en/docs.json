@@ -1,0 +1,14 @@
+{
+  "branch": {
+    "hint": "View and generate docs from a specific branch (a read-only worktree; your working tree is not touched).",
+    "current": "Current branch ({{branch}})",
+    "checkedOut": "Current checkout"
+  },
+  "hook": {
+    "install": "Install auto-refresh hook",
+    "installing": "Installing...",
+    "installed": "Auto-refresh hook installed.",
+    "error": "Failed to install hook.",
+    "hint": "Add a git post-commit hook that requests a docs refresh after each commit (honored by the docs watcher)."
+  }
+}

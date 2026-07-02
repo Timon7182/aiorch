@@ -272,10 +272,18 @@ export const webAPI: API & { _isWebMode: boolean } = {
 
   // ========== Project Operations ==========
   addProject: (projectPath: string) => post<Project>('/projects', { path: projectPath }),
-  cloneProject: (url: string, name?: string, targetDir?: string) =>
-    post<Project>('/projects/clone', { url, name, target_dir: targetDir }),
-  cloneMultiProject: (name: string, repos: { url: string; name?: string }[], targetDir?: string) =>
-    post<Project>('/projects/clone-multi', { name, repos, target_dir: targetDir }),
+  cloneProject: (url: string, name?: string, targetDir?: string, branch?: string) =>
+    post<Project>('/projects/clone', { url, name, target_dir: targetDir, branch }),
+  cloneMultiProject: (
+    name: string,
+    repos: { url: string; name?: string; branch?: string }[],
+    targetDir?: string,
+  ) => post<Project>('/projects/clone-multi', { name, repos, target_dir: targetDir }),
+  getRemoteBranches: (url: string) =>
+    post<{ branches: { name: string }[]; error?: string }>(
+      '/projects/git/remote-branches',
+      { url },
+    ),
   createProjectFromPrompt: (prompt: string, name?: string, parentDir?: string) =>
     post<Project>('/projects/from-prompt', { prompt, name, parent_dir: parentDir }),
   removeProject: (projectId: string) => del(`/projects/${projectId}`),

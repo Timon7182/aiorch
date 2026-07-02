@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -14,6 +15,8 @@ import {
   RotateCw,
   Network,
   ExternalLink,
+  GitBranch,
+  Webhook,
 } from 'lucide-react';
 
 import { Button } from './ui/button';
@@ -38,6 +41,7 @@ interface DocsStatus {
   last_graphify?: string;
   last_codegraph?: string;
   head_sha?: string;
+  branch?: string | null;
 }
 
 // Sentinel paths used to signal "show the graphify / CodeGraphContext report
@@ -63,12 +67,13 @@ interface DocumentationViewProps {
 const POLL_INTERVAL_MS = 4000;
 
 export function DocumentationView({ projectId }: DocumentationViewProps) {
+  const { t } = useTranslation('docs');
   const [status, setStatus] = useState<DocsStatus | null>(null);
   const [files, setFiles] = useState<DocFile[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [content, setContent] = useState<string>('');
   const [busy, setBusy] = useState<
-    'generate' | 'build' | 'stop' | 'restart' | 'codegraph' | null
+    'generate' | 'build' | 'stop' | 'restart' | 'codegraph' | 'hook' | null
   >(null);
   const [error, setError] = useState<string | null>(null);
   // Optimistic flag: set true the instant the user clicks Generate/Restart,
@@ -86,13 +91,33 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   const activeRepoPath = repos.length > 1
     ? (activeRepoByProject[projectId] ?? repos[0]?.path)
     : undefined;
-  const repoSuffix = (hasQuery: boolean) =>
-    activeRepoPath ? `${hasQuery ? '&' : '?'}repo=${encodeURIComponent(activeRepoPath)}` : '';
+
+  // Branch-aware docs: view/generate docs from a branch other than the current
+  // checkout. '' = current checkout (fully backward compatible). The repo path
+  // used for branch listing works for single- and multi-repo projects.
+  const [branches, setBranches] = useState<string[]>([]);
+  const [currentBranch, setCurrentBranch] = useState<string>('');
+  const [selectedBranch, setSelectedBranch] = useState<string>('');
+  const [hookMsg, setHookMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const branchRepoPath = activeRepoByProject[projectId] ?? repos[0]?.path;
+  // Only send a branch param when it differs from the current checkout.
+  const branchParam = selectedBranch && selectedBranch !== currentBranch ? selectedBranch : undefined;
+
+  // Append the repo (multi-repo scope) and branch params to every docs request
+  // so the backend reads/writes the right repo + branch worktree.
+  const repoSuffix = (hasQuery: boolean) => {
+    const parts: string[] = [];
+    if (activeRepoPath) parts.push(`repo=${encodeURIComponent(activeRepoPath)}`);
+    if (branchParam) parts.push(`branch=${encodeURIComponent(branchParam)}`);
+    if (parts.length === 0) return '';
+    return `${hasQuery ? '&' : '?'}${parts.join('&')}`;
+  };
 
   const loadStatus = useCallback(async () => {
     const r = await get<DocsStatus>(`/projects/${projectId}/docs/status${repoSuffix(false)}`);
     if (r.success && r.data) setStatus(r.data);
-  }, [projectId, activeRepoPath]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeRepoPath, branchParam]);
 
   // Selection lives independently of the tree fetch (see the selection effect
   // below), so loadTree only fetches — it must NOT depend on selectedPath or
@@ -100,7 +125,8 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
   const loadTree = useCallback(async () => {
     const r = await get<{ files: DocFile[] }>(`/projects/${projectId}/docs/tree${repoSuffix(false)}`);
     if (r.success && r.data) setFiles(r.data.files);
-  }, [projectId, activeRepoPath]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeRepoPath, branchParam]);
 
   // Monotonic token so a slow/404 content response for a no-longer-selected
   // file (e.g. the previous repo's file during a repo switch) can't clobber
@@ -129,13 +155,51 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
         setContent(`# Could not load ${path}\n\n${r.error ?? ''}`);
       }
     },
-    [projectId, activeRepoPath],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, activeRepoPath, branchParam],
   );
 
   useEffect(() => {
     loadStatus();
     loadTree();
   }, [loadStatus, loadTree]);
+
+  // Load the repo's branches + current branch so docs can be viewed/generated
+  // from a branch other than the checkout. Reuses the same git endpoints the
+  // Insights chat branch selector uses.
+  useEffect(() => {
+    if (!branchRepoPath) {
+      setBranches([]);
+      setCurrentBranch('');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [branchesResult, currentResult] = await Promise.all([
+          window.API.getGitBranches(branchRepoPath),
+          window.API.getCurrentGitBranch(branchRepoPath),
+        ]);
+        if (cancelled) return;
+        setBranches(branchesResult.success && branchesResult.data ? branchesResult.data : []);
+        setCurrentBranch(currentResult.success && currentResult.data ? currentResult.data : '');
+      } catch {
+        if (!cancelled) {
+          setBranches([]);
+          setCurrentBranch('');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [branchRepoPath]);
+
+  // Reset the branch choice back to the checkout when the project or repo
+  // changes (each repo has its own branches).
+  useEffect(() => {
+    setSelectedBranch('');
+  }, [projectId, branchRepoPath]);
 
   useEffect(() => {
     if (selectedPath) loadContent(selectedPath);
@@ -178,7 +242,8 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [status, projectId, activeRepoPath, loadTree, loadContent, selectedPath]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, projectId, activeRepoPath, branchParam, loadTree, loadContent, selectedPath]);
 
   const handleGenerate = useCallback(async () => {
     setBusy('generate');
@@ -195,7 +260,8 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     setOptimisticRunning(false);
-  }, [projectId, activeRepoPath, loadStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeRepoPath, branchParam, loadStatus]);
 
   const handleBuild = useCallback(async () => {
     setBusy('build');
@@ -207,7 +273,8 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     await loadTree();
-  }, [projectId, activeRepoPath, loadStatus, loadTree]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeRepoPath, branchParam, loadStatus, loadTree]);
 
   const handleIndexCodegraph = useCallback(async () => {
     setBusy('codegraph');
@@ -220,7 +287,8 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       setError(r.error ?? 'Failed to start code-graph indexing');
     }
     await loadStatus();
-  }, [projectId, activeRepoPath, loadStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeRepoPath, branchParam, loadStatus]);
 
   const handleStop = useCallback(async () => {
     setBusy('stop');
@@ -252,7 +320,26 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
     }
     await loadStatus();
     setOptimisticRunning(false);
-  }, [projectId, activeRepoPath, loadStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeRepoPath, branchParam, loadStatus]);
+
+  // Install the post-commit hook that requests a docs refresh on external
+  // commits (honored by the optional watcher). Toasts done/error.
+  const handleInstallHook = useCallback(async () => {
+    setBusy('hook');
+    setError(null);
+    setHookMsg(null);
+    const r = await post<{ state?: string; error?: string }>(
+      `/projects/${projectId}/docs/install-hook${repoSuffix(false)}`,
+    );
+    setBusy(null);
+    if (!r.success) {
+      setHookMsg({ ok: false, text: r.error ?? t('hook.error') });
+    } else {
+      setHookMsg({ ok: true, text: t('hook.installed') });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, activeRepoPath, branchParam, t]);
 
   const isRunning = status?.state === 'running' || optimisticRunning;
 
@@ -272,6 +359,31 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
       <div className="flex w-48 sm:w-60 md:w-72 shrink-0 flex-col border-r border-border bg-sidebar/40">
         <div className="p-3 space-y-2">
           <RepoSwitcher projectId={projectId} className="w-full justify-between" />
+          {branches.length > 0 && (
+            <div className="flex items-center gap-2">
+              <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <select
+                value={selectedBranch}
+                onChange={(e) => setSelectedBranch(e.target.value)}
+                disabled={isRunning}
+                title={t('branch.hint')}
+                className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+              >
+                <option value="">
+                  {currentBranch
+                    ? t('branch.current', { branch: currentBranch })
+                    : t('branch.checkedOut')}
+                </option>
+                {branches
+                  .filter((b) => b !== currentBranch)
+                  .map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
           <Button
             className="w-full"
             onClick={handleGenerate}
@@ -381,6 +493,41 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
             <RefreshCw className="mr-2 h-3.5 w-3.5" />
             Refresh
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
+            onClick={handleInstallHook}
+            disabled={busy === 'hook'}
+            title={t('hook.hint')}
+          >
+            {busy === 'hook' ? (
+              <>
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                {t('hook.installing')}
+              </>
+            ) : (
+              <>
+                <Webhook className="mr-2 h-3.5 w-3.5" />
+                {t('hook.install')}
+              </>
+            )}
+          </Button>
+          {hookMsg && (
+            <div
+              className={cn(
+                'flex items-center gap-1 text-xs',
+                hookMsg.ok ? 'text-green-600' : 'text-destructive',
+              )}
+            >
+              {hookMsg.ok ? (
+                <CheckCircle2 className="h-3 w-3 shrink-0" />
+              ) : (
+                <AlertCircle className="h-3 w-3 shrink-0" />
+              )}
+              <span className="truncate" title={hookMsg.text}>{hookMsg.text}</span>
+            </div>
+          )}
         </div>
         <Separator />
         <div className="px-3 py-2 text-xs text-muted-foreground space-y-1">

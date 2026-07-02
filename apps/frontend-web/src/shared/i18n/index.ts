@@ -11,6 +11,7 @@ import enOnboarding from './locales/en/onboarding.json';
 import enDialogs from './locales/en/dialogs.json';
 import enTaskReview from './locales/en/taskReview.json';
 import enTerminal from './locales/en/terminal.json';
+import enDocs from './locales/en/docs.json';
 
 // Import French translation resources
 import frCommon from './locales/fr/common.json';
@@ -22,6 +23,7 @@ import frOnboarding from './locales/fr/onboarding.json';
 import frDialogs from './locales/fr/dialogs.json';
 import frTaskReview from './locales/fr/taskReview.json';
 import frTerminal from './locales/fr/terminal.json';
+import frDocs from './locales/fr/docs.json';
 
 // Import Portuguese (Brazil) translation resources
 import ptBRCommon from './locales/pt-BR/common.json';
@@ -33,6 +35,7 @@ import ptBROnboarding from './locales/pt-BR/onboarding.json';
 import ptBRDialogs from './locales/pt-BR/dialogs.json';
 import ptBRTaskReview from './locales/pt-BR/taskReview.json';
 import ptBRTerminal from './locales/pt-BR/terminal.json';
+import ptBRDocs from './locales/pt-BR/docs.json';
 
 export const defaultNS = 'common';
 
@@ -46,7 +49,8 @@ export const resources = {
     onboarding: enOnboarding,
     dialogs: enDialogs,
     taskReview: enTaskReview,
-    terminal: enTerminal
+    terminal: enTerminal,
+    docs: enDocs
   },
   fr: {
     common: frCommon,
@@ -57,7 +61,8 @@ export const resources = {
     onboarding: frOnboarding,
     dialogs: frDialogs,
     taskReview: frTaskReview,
-    terminal: frTerminal
+    terminal: frTerminal,
+    docs: frDocs
   },
   'pt-BR': {
     common: ptBRCommon,
@@ -68,7 +73,8 @@ export const resources = {
     onboarding: ptBROnboarding,
     dialogs: ptBRDialogs,
     taskReview: ptBRTaskReview,
-    terminal: ptBRTerminal
+    terminal: ptBRTerminal,
+    docs: ptBRDocs
   }
 } as const;
 
@@ -79,7 +85,7 @@ i18n
     lng: 'en', // Default language (will be overridden by settings)
     fallbackLng: 'en',
     defaultNS,
-    ns: ['common', 'navigation', 'settings', 'tasks', 'welcome', 'onboarding', 'dialogs', 'taskReview', 'terminal'],
+    ns: ['common', 'navigation', 'settings', 'tasks', 'welcome', 'onboarding', 'dialogs', 'taskReview', 'terminal', 'docs'],
     interpolation: {
       escapeValue: false // React already escapes values
     },

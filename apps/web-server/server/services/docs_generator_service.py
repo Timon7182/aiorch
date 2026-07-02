@@ -122,17 +122,28 @@ class DocsGeneratorService:
         project_path: Path,
         oauth_token: str | None,
         user_identity: tuple[str, str] | None = None,
+        branch: str | None = None,
+        changed_files: Path | None = None,
     ) -> GenerationResult:
         """Run the doc-generator agent + mkdocs build for a project.
 
         Args:
             project_id: registered project ID (only used for tracking).
-            project_path: absolute path to the project on disk.
+            project_path: absolute path to the project on disk. For branch-aware
+                docs this is a branch worktree path resolved by the caller, not
+                necessarily the project root.
             oauth_token: Claude Code OAuth token to authorize the agent. If
                 None, the subprocess inherits whatever is in the environment.
             user_identity: optional (name, email) used to attribute any
                 writes the agent makes via git (the agent itself doesn't
                 commit, but stays consistent with the rest of the platform).
+            branch: optional branch name recorded in the .docgen.json marker so
+                the UI can show which branch these docs describe. None means the
+                currently-checked-out HEAD (fully backward compatible).
+            changed_files: optional path to a newline-delimited list of source
+                files changed since the docs were last generated. When set, the
+                runner does an INCREMENTAL update (only pages affected by these
+                files) instead of a full regeneration.
         """
         # Only reject a duplicate run if there's an *actual* subprocess
         # already running. The route handler may have called mark_starting()
@@ -177,6 +188,8 @@ class DocsGeneratorService:
             "--project-dir",
             str(project_path),
         ]
+        if changed_files is not None:
+            cmd += ["--changed-files", str(changed_files)]
 
         logger.info(
             f"[DocsGenerator] Starting runner for project {project_id} "
@@ -247,7 +260,7 @@ class DocsGeneratorService:
         files_generated = self._enumerate_generated_files(project_path)
         # Make sure the marker file reflects this run even if the agent
         # didn't get to step 8 of the prompt.
-        self._write_run_marker(project_path)
+        self._write_run_marker(project_path, branch=branch)
         build_log, build_ok = await self._build_site(project_path)
 
         if not build_ok:
@@ -301,12 +314,16 @@ class DocsGeneratorService:
             env["GIT_COMMITTER_EMAIL"] = email
         return env
 
-    def _write_run_marker(self, project_path: Path) -> None:
+    def _write_run_marker(self, project_path: Path, branch: str | None = None) -> None:
         """Write/update .magestic-ai/.docgen.json with the current run metadata.
 
         The agent prompt also instructs the agent to update this file, but
         we write it from the service too so `last_run` is always reliable
         even when the agent skips step 8.
+
+        ``branch`` records which branch these docs describe (None => the
+        currently-checked-out HEAD). Kept as an explicit field so the UI's
+        branch selector can show it.
         """
         marker = project_path / ".magestic-ai" / ".docgen.json"
         marker.parent.mkdir(parents=True, exist_ok=True)
@@ -320,6 +337,8 @@ class DocsGeneratorService:
         head_sha = self._git_head(project_path)
         if head_sha:
             existing["head_sha"] = head_sha
+        # Normalize "" to None so status readers get a consistent shape.
+        existing["branch"] = branch.strip() if (branch and branch.strip()) else None
         try:
             marker.write_text(json.dumps(existing, indent=2))
         except OSError:
@@ -338,6 +357,129 @@ class DocsGeneratorService:
             return out.decode("utf-8", "replace").strip() or None
         except Exception:
             return None
+
+    @staticmethod
+    def docs_exist(project_path: Path) -> bool:
+        """True when a docs site is present (``docs/`` dir + ``mkdocs.yml``)."""
+        return (project_path / "docs").is_dir() and (project_path / "mkdocs.yml").exists()
+
+    def _git_sha_valid(self, project_path: Path, sha: str) -> bool:
+        """Whether ``sha`` resolves to a commit object in this repo."""
+        import subprocess
+        try:
+            return subprocess.run(
+                ["git", "-c", "safe.directory=*", "-C", str(project_path),
+                 "cat-file", "-e", f"{sha}^{{commit}}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+            ).returncode == 0
+        except Exception:
+            return False
+
+    def _git_diff_names(self, project_path: Path, base_sha: str) -> list[str] | None:
+        """Return files changed between ``base_sha`` and HEAD.
+
+        Returns an empty list when nothing changed, and None on any git error
+        (the caller falls back to a full regeneration).
+        """
+        import subprocess
+        try:
+            out = subprocess.check_output(
+                ["git", "-c", "safe.directory=*", "-C", str(project_path),
+                 "diff", "--name-only", f"{base_sha}..HEAD"],
+                stderr=subprocess.DEVNULL, timeout=15,
+            )
+        except Exception:
+            return None
+        return [
+            line.strip()
+            for line in out.decode("utf-8", "replace").splitlines()
+            if line.strip()
+        ]
+
+    async def refresh_docs_incremental(
+        self,
+        project_id: str,
+        project_path: Path,
+        oauth_token: str | None,
+        user_identity: tuple[str, str] | None = None,
+        branch: str | None = None,
+    ) -> None:
+        """Change-aware docs refresh (used by the merge trigger + watcher).
+
+        - No docs yet -> no-op (nothing to refresh; explicit generation is a
+          separate, user-initiated action).
+        - A generation already running for this project -> skip (single-flight).
+        - No/invalid ``head_sha`` in the marker -> full ``generate()``.
+        - ``git diff`` empty -> only rebuild the site + bump the marker.
+        - Otherwise -> ``generate()`` with a ``--changed-files`` list so the
+          runner updates only the affected pages.
+        """
+        if not self.docs_exist(project_path):
+            logger.info("[DocsGenerator] no docs at %s; skipping refresh", project_path)
+            return
+        if self.is_running(project_id):
+            logger.info("[DocsGenerator] generation already running for %s; skipping refresh", project_id)
+            return
+
+        marker = project_path / ".magestic-ai" / ".docgen.json"
+        base_sha: str | None = None
+        if marker.exists():
+            try:
+                base_sha = json.loads(marker.read_text()).get("head_sha")
+            except (json.JSONDecodeError, OSError):
+                base_sha = None
+
+        if not base_sha or not self._git_sha_valid(project_path, base_sha):
+            logger.info("[DocsGenerator] no valid docsSha for %s; full regenerate", project_id)
+            await self.generate(project_id, project_path, oauth_token, user_identity, branch=branch)
+            return
+
+        changed = self._git_diff_names(project_path, base_sha)
+        if changed is None:
+            logger.info("[DocsGenerator] git diff failed for %s; full regenerate", project_id)
+            await self.generate(project_id, project_path, oauth_token, user_identity, branch=branch)
+            return
+
+        if not changed:
+            logger.info("[DocsGenerator] no source changes for %s; rebuilding site only", project_id)
+            self._write_run_marker(project_path, branch=branch)
+            await self._build_site(project_path)
+            return
+
+        # Write the changed-file list to a scratch area under .magestic-ai/
+        # (never the repo tree) and hand it to the runner for an incremental pass.
+        listfile = project_path / ".magestic-ai" / "docs-runner" / "changed-files.txt"
+        try:
+            listfile.parent.mkdir(parents=True, exist_ok=True)
+            listfile.write_text("\n".join(changed), encoding="utf-8")
+        except OSError as e:
+            logger.warning("[DocsGenerator] could not write changed-files list: %s", e)
+            listfile = None  # type: ignore[assignment]
+
+        logger.info(
+            "[DocsGenerator] incremental refresh for %s (%d changed file(s))",
+            project_id, len(changed),
+        )
+        await self.generate(
+            project_id, project_path, oauth_token, user_identity,
+            branch=branch, changed_files=listfile,
+        )
+
+    @staticmethod
+    async def resolve_oauth_token() -> str | None:
+        """Freshly-refreshed OAuth token, falling back to the env var.
+
+        Mirrors docs.py's resolver so background triggers (merge, watcher) can
+        authorize the doc agent the same way the interactive route does.
+        """
+        try:
+            from .claude_token_service import get_claude_token_service
+            token = await get_claude_token_service().get_access_token()
+            if token:
+                return token
+        except Exception:
+            pass
+        return os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or None
 
     def _enumerate_generated_files(self, project_path: Path) -> list[str]:
         out: list[str] = []

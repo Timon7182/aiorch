@@ -106,5 +106,11 @@
     "cancel": "Annuler",
     "remove": "Retirer",
     "error": "Échec de la suppression du projet"
+  },
+  "clone": {
+    "branchDefault": "Branche par défaut",
+    "branchPlaceholder": "Branche (optionnel)",
+    "branchHint": "Branche à extraire. Laissez vide pour la branche par défaut du dépôt.",
+    "branchListFailed": "Impossible de lister les branches — saisissez un nom de branche si nécessaire."
   }
 }

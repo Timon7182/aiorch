@@ -1,0 +1,14 @@
+{
+  "branch": {
+    "hint": "Consulter et générer la documentation depuis une branche spécifique (un worktree en lecture seule ; votre copie de travail n'est pas modifiée).",
+    "current": "Branche actuelle ({{branch}})",
+    "checkedOut": "Checkout actuel"
+  },
+  "hook": {
+    "install": "Installer le hook de rafraîchissement auto",
+    "installing": "Installation...",
+    "installed": "Hook de rafraîchissement auto installé.",
+    "error": "Échec de l'installation du hook.",
+    "hint": "Ajoute un hook git post-commit qui demande un rafraîchissement de la documentation après chaque commit (pris en charge par le watcher de documentation)."
+  }
+}
