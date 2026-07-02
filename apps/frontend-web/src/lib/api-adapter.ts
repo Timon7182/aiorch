@@ -20,6 +20,7 @@ import type {
   TaskRecoveryOptions,
   TaskMetadata,
   TaskLogs,
+  ReproductionReport,
   IPCResult,
   TerminalCreateOptions,
   TerminalSession,
@@ -852,6 +853,9 @@ export const webAPI: API & { _isWebMode: boolean } = {
       console.log('[API] getTaskLogs result.data keys:', Object.keys(result.data));
     }
     return result;
+  },
+  getReproductionReport: async (projectId: string, specId: string): Promise<IPCResult<ReproductionReport | null>> => {
+    return get<ReproductionReport | null>(`/projects/${projectId}/tasks/${specId}/reproduction-report`);
   },
   watchTaskLogs: (projectId: string, specId: string) =>
     post(`/projects/${projectId}/tasks/${specId}/logs/watch`),

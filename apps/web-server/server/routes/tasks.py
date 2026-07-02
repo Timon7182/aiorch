@@ -4,6 +4,7 @@ Task management routes.
 Handles CRUD operations for tasks (specs) within projects.
 """
 
+import base64
 import json
 import logging
 import re
@@ -129,6 +130,10 @@ class TaskMetadata(BaseModel):
     archivedInVersion: str | None = None
     # Skills attached to this task
     selectedSkills: list[SelectedSkill] | None = None
+    # Task type: 'feature' (default) or 'bug' (client-reported bug report)
+    taskType: str | None = None
+    # Structured bug report (only meaningful when taskType == 'bug')
+    bugReport: dict | None = None
 
 
 class Task(TaskBase):
@@ -186,6 +191,10 @@ class TaskMetadataUpdate(BaseModel):
     referencedFiles: list | None = None
     # Skills attached to this task (can be null to clear)
     selectedSkills: list[SelectedSkill] | None = None
+    # Task type: 'feature' (default) or 'bug' (client-reported bug report)
+    taskType: str | None = None
+    # Structured bug report: {steps, expected, actual}
+    bugReport: dict | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -1025,6 +1034,89 @@ async def get_task(task_id: str):
     return task_to_dict(task)
 
 
+# Allowed image MIME types for materialized task attachments -> file extension
+_ATTACHMENT_ALLOWED_MIME = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/bmp": "bmp",
+    "image/svg+xml": "svg",
+}
+# Max decoded size per attachment (10 MB)
+_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _materialize_attachments(spec_dir: Path, metadata_dict: dict) -> None:
+    """Decode base64 ``attachedImages`` into files under ``<spec_dir>/attachments/``.
+
+    Replaces each image's inline base64 ``data``/``thumbnail`` blobs with a
+    lightweight on-disk reference ``{id, filename, path, mimeType, size}`` so
+    requirements.json stays small and agents can Read the files directly.
+
+    Backward compatible: absent/empty ``attachedImages`` (or entries already
+    materialized without inline ``data``) -> no-op. Mutates ``metadata_dict``
+    in place. Reuses the changelog image-writer validation (mime allowlist,
+    size cap, data-URL stripping).
+    """
+    images = metadata_dict.get("attachedImages")
+    if not images or not isinstance(images, list):
+        return
+
+    logger = logging.getLogger(__name__)
+    attachments_dir = spec_dir / "attachments"
+    new_images: list[dict] = []
+    idx = 0
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        data = image.get("data")
+        # Already materialized (has path, no inline data) -> keep the ref, drop any thumbnail.
+        if not data:
+            new_images.append({k: v for k, v in image.items() if k != "thumbnail"})
+            continue
+
+        mime = (image.get("mimeType") or "image/png").lower().strip()
+        ext = _ATTACHMENT_ALLOWED_MIME.get(mime)
+        if not ext:
+            logger.warning(f"[Attachments] Skipping disallowed mime type: {mime}")
+            continue
+
+        data_str = data.strip()
+        if data_str.startswith("data:") and "," in data_str:
+            data_str = data_str.split(",", 1)[1]
+        try:
+            raw = base64.b64decode(data_str)
+        except Exception as exc:
+            logger.warning(f"[Attachments] Failed to decode image data: {exc}")
+            continue
+        if not raw or len(raw) > _ATTACHMENT_MAX_BYTES:
+            logger.warning(
+                f"[Attachments] Image empty or exceeds size cap ({len(raw)} bytes); skipping"
+            )
+            continue
+
+        idx += 1
+        filename = f"img-{idx}.{ext}"
+        try:
+            attachments_dir.mkdir(parents=True, exist_ok=True)
+            (attachments_dir / filename).write_bytes(raw)
+        except OSError as exc:
+            logger.warning(f"[Attachments] Failed to write {filename}: {exc}")
+            continue
+
+        new_images.append({
+            "id": image.get("id"),
+            "filename": image.get("filename") or filename,
+            "path": f"attachments/{filename}",
+            "mimeType": mime,
+            "size": len(raw),
+        })
+
+    metadata_dict["attachedImages"] = new_images
+
+
 @router.post("", response_model=Task, status_code=status.HTTP_201_CREATED)
 async def create_task(task: TaskCreate):
     """Create a new task (spec) in a project."""
@@ -1071,11 +1163,16 @@ async def create_task(task: TaskCreate):
     if task.metadata:
         metadata_dict = task.metadata.model_dump(exclude_none=True)
         if metadata_dict:
+            # Materialize any pasted screenshots to <spec_dir>/attachments/ and
+            # replace the base64 blobs with lightweight on-disk references.
+            _materialize_attachments(spec_dir, metadata_dict)
+
             requirements["metadata"] = metadata_dict
 
             # Sync task_metadata.json for phase_config.py to read model/thinking settings
-            # Also include selectedSkills so agent_service.py can inject skill context
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills", "customBranchName"]
+            # Also include selectedSkills so agent_service.py can inject skill context,
+            # and taskType so bug tasks get the browser + reproduction protocol.
+            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills", "customBranchName", "taskType"]
             task_metadata = {field: metadata_dict[field] for field in model_fields if field in metadata_dict}
             if task_metadata:
                 (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))
@@ -1368,6 +1465,11 @@ async def update_task(task_id: str, update: TaskUpdate):
                     # Update the field
                     requirements["metadata"][field] = value
 
+            # Materialize any newly-pasted screenshots to <spec_dir>/attachments/
+            # and replace base64 blobs with on-disk references (idempotent for
+            # already-materialized entries).
+            _materialize_attachments(spec_dir, requirements["metadata"])
+
             # Sync task_metadata.json for phase_config.py to read model/thinking settings
             task_metadata_file = spec_dir / "task_metadata.json"
             task_metadata = {}
@@ -1379,7 +1481,8 @@ async def update_task(task_id: str, update: TaskUpdate):
 
             # Update model-related fields that phase_config.py expects
             # Also include selectedSkills so agent_service.py can inject skill context
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills"]
+            # and taskType so bug tasks get the browser + reproduction protocol.
+            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "taskType"]
             for field in model_fields:
                 if field in metadata_dict:
                     if metadata_dict[field] is None:
@@ -1981,6 +2084,46 @@ async def get_task_logs(task_id: str):
             break
 
     return result
+
+
+@router.get("/{task_id}/reproduction-report")
+async def get_reproduction_report(task_id: str):
+    """Return the bug reproduction report (markdown) and evidence file list.
+
+    Bug-report tasks produce ``<spec_dir>/reproduction_report.md`` and
+    ``<spec_dir>/evidence/*`` screenshots during QA. Returns
+    ``{exists, content, evidence: [{name, path}]}``. Non-bug tasks (or before QA
+    runs) return ``{exists: false}``. Prefers the main spec dir (synced from the
+    worktree); falls back to the worktree copy.
+    """
+    project_id, spec_id, project_path, spec_dir = _resolve_task(task_id)
+
+    worktree_spec = (
+        project_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
+        / ".magestic-ai" / "specs" / spec_id
+    )
+
+    _img_ext = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")
+    for base in (spec_dir, worktree_spec):
+        report_file = base / "reproduction_report.md"
+        if not report_file.exists():
+            continue
+        try:
+            content = report_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        evidence: list[dict] = []
+        evidence_dir = base / "evidence"
+        if evidence_dir.is_dir():
+            try:
+                for p in sorted(evidence_dir.iterdir()):
+                    if p.is_file() and p.suffix.lower() in _img_ext:
+                        evidence.append({"name": p.name, "path": str(p)})
+            except OSError:
+                pass
+        return {"exists": True, "content": content, "evidence": evidence}
+
+    return {"exists": False, "content": None, "evidence": []}
 
 
 @router.post("/{task_id}/logs/watch")

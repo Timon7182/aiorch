@@ -130,6 +130,29 @@ export interface ImageAttachment {
   thumbnail?: string;   // Base64 thumbnail for preview
 }
 
+// Task type discriminator (feature work vs a client-reported bug report)
+export type TaskType = 'feature' | 'bug';
+
+// Structured bug report (only meaningful when taskType === 'bug')
+export interface BugReport {
+  steps?: string;     // Steps to reproduce
+  expected?: string;  // Expected behavior
+  actual?: string;    // Actual behavior
+}
+
+// A piece of evidence captured during bug reproduction (screenshot)
+export interface ReproductionEvidence {
+  name: string;  // Filename (e.g., before-1.png)
+  path: string;  // Absolute path on the server
+}
+
+// Bug reproduction report produced by QA (reproduction_report.md + evidence)
+export interface ReproductionReport {
+  exists: boolean;
+  content: string | null;         // Markdown content of reproduction_report.md
+  evidence: ReproductionEvidence[];
+}
+
 // Referenced file types for task creation (files/folders from project)
 export interface ReferencedFile {
   id: string;           // Unique identifier (UUID)
@@ -159,6 +182,8 @@ export interface TaskDraft {
   referencedFiles: ReferencedFile[];
   requireReviewBeforeCoding?: boolean;
   selectedSkills?: SelectedSkill[];
+  taskType?: TaskType;
+  bugReport?: BugReport;
   savedAt: Date;
 }
 
@@ -246,6 +271,10 @@ export interface TaskMetadata {
 
   // Skills configuration
   selectedSkills?: SelectedSkill[];  // Skills/capabilities selected for this task
+
+  // Bug-report tasks
+  taskType?: TaskType;      // 'feature' (default) or 'bug'
+  bugReport?: BugReport;    // Structured bug report (steps/expected/actual)
 }
 
 export interface Task {

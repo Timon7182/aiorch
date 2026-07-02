@@ -1,4 +1,23 @@
 {
+  "bugReport": {
+    "typeLabel": "Tipo de tarefa",
+    "feature": "Funcionalidade",
+    "bug": "Relatório de bug",
+    "optional": "opcional",
+    "hint": "Descreva o bug para que o QA possa reproduzi-lo em um navegador real. Cole capturas de tela na descrição acima.",
+    "stepsLabel": "Passos para reproduzir",
+    "stepsPlaceholder": "1. Acesse…\n2. Clique em…\n3. Veja o erro",
+    "expectedLabel": "Comportamento esperado",
+    "expectedPlaceholder": "O que deveria acontecer",
+    "actualLabel": "Comportamento real",
+    "actualPlaceholder": "O que realmente acontece (o bug)"
+  },
+  "reproduction": {
+    "tab": "Reprodução",
+    "title": "Relatório de reprodução do bug",
+    "empty": "Ainda não há relatório de reprodução. Ele aparecerá assim que o QA reproduzir o bug em um navegador.",
+    "evidence": "Evidências"
+  },
   "status": {
     "backlog": "Backlog",
     "todo": "A Fazer",

@@ -1,4 +1,23 @@
 {
+  "bugReport": {
+    "typeLabel": "Type de tâche",
+    "feature": "Fonctionnalité",
+    "bug": "Rapport de bogue",
+    "optional": "facultatif",
+    "hint": "Décrivez le bogue pour que la QA puisse le reproduire dans un vrai navigateur. Collez des captures d'écran dans la description ci-dessus.",
+    "stepsLabel": "Étapes pour reproduire",
+    "stepsPlaceholder": "1. Aller à…\n2. Cliquer sur…\n3. Voir l'erreur",
+    "expectedLabel": "Comportement attendu",
+    "expectedPlaceholder": "Ce qui devrait se passer à la place",
+    "actualLabel": "Comportement réel",
+    "actualPlaceholder": "Ce qui se passe réellement (le bogue)"
+  },
+  "reproduction": {
+    "tab": "Reproduction",
+    "title": "Rapport de reproduction du bogue",
+    "empty": "Aucun rapport de reproduction pour l'instant. Il apparaîtra une fois que la QA aura reproduit le bogue dans un navigateur.",
+    "evidence": "Preuves"
+  },
   "preview": {
     "title": "Exécuter sur le serveur",
     "deploy": "Déployer un aperçu",
