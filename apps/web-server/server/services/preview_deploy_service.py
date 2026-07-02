@@ -224,7 +224,11 @@ def _write_preview_state(spec_dir: Path, patch: dict[str, Any]) -> dict[str, Any
 
 def get_preview(task_id: str) -> dict[str, Any]:
     ref = resolve_task(task_id)
-    return (_read_meta(ref.spec_dir).get("preview")) or {"status": "none"}
+    preview = (_read_meta(ref.spec_dir).get("preview")) or {"status": "none"}
+    if preview.get("strategy") in dc.LOCAL_STRATEGIES:
+        from . import local_preview_service as lps
+        return lps.reconcile(ref, preview)
+    return preview
 
 
 # ---------------------------------------------------------------------------
@@ -266,17 +270,32 @@ def _run_runner(profile: dict[str, Any], args: list[str], *, timeout: int = 1800
 # ---------------------------------------------------------------------------
 # Public operations
 # ---------------------------------------------------------------------------
-def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[str, Any]:
+def deploy_preview(
+    task_id: str,
+    *,
+    lane_override: str | None = None,
+    strategy_override: str | None = None,
+) -> dict[str, Any]:
     """Validate inputs, set state to 'building', and run the deploy in the
-    background. Returns the initial state immediately."""
+    background. Returns the initial state immediately.
+
+    Dispatches by ``strategy``: ``docker-remote`` (default) runs the existing
+    SSH/Docker path; ``dev-server`` / ``compose-local`` delegate to the local
+    preview service (no ServerProfile needed)."""
     ref = resolve_task(task_id)
     if not ref.worktree_path.exists():
         raise PreviewError("No worktree found for this task")
 
     config = dc.load_deploy_config(ref.project_path)
+    strategy = strategy_override or config.get("strategy") or "docker-remote"
+    config["strategy"] = strategy  # so validate + downstream see the override
     errors = dc.validate_config(config)
     if errors:
         raise PreviewError("invalid deploy config: " + "; ".join(errors))
+
+    if strategy in dc.LOCAL_STRATEGIES:
+        from . import local_preview_service as lps
+        return lps.start(ref, strategy, config)
 
     profile = find_target(config.get("target", ""))
     if not (profile.get("deploys") or {}).get(RUNNER_KEY):
@@ -342,9 +361,20 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
     if sha:
         args += ["--ref", sha]
 
+    from ..websockets import events as ws_events
+
+    def _emit(status: str, url: str | None = None, error: str | None = None) -> None:
+        # Runs on a background thread — schedule the broadcast onto the main loop.
+        ws_events.emit_threadsafe(ws_events.emit_preview_status(
+            task_id, ref.project_id, status, "docker-remote", url=url, error=error,
+        ))
+
+    _emit("building")
+
     def _worker() -> None:
         try:
             _write_preview_state(ref.spec_dir, {"status": "deploying"})
+            _emit("deploying")
             data = _run_runner(profile, args, timeout=2400)
             _write_preview_state(ref.spec_dir, {
                 "status": "running",
@@ -355,8 +385,10 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
                 "expiresAt": data.get("expiresAt"),
                 "error": None,
             })
+            _emit("running", url=data.get("url"))
         except Exception as exc:  # noqa: BLE001 — record failure for the UI
             _write_preview_state(ref.spec_dir, {"status": "failed", "error": str(exc)})
+            _emit("failed", error=str(exc))
 
     threading.Thread(target=_worker, name=f"preview-deploy-{ref.slug}", daemon=True).start()
     return state
@@ -364,6 +396,11 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
 
 def stop_preview(task_id: str) -> dict[str, Any]:
     ref = resolve_task(task_id)
+    strategy = (_read_meta(ref.spec_dir).get("preview") or {}).get("strategy") or "docker-remote"
+    if strategy in dc.LOCAL_STRATEGIES:
+        from . import local_preview_service as lps
+        return lps.stop(ref)
+
     config = dc.load_deploy_config(ref.project_path)
     profile = find_target(config.get("target", ""))
     try:
@@ -380,6 +417,9 @@ def extend_preview(task_id: str, hours: int = 1) -> dict[str, Any]:
     if hours < 1:
         raise PreviewError("hours must be >= 1")
     ref = resolve_task(task_id)
+    strategy = (_read_meta(ref.spec_dir).get("preview") or {}).get("strategy") or "docker-remote"
+    if strategy in dc.LOCAL_STRATEGIES:
+        raise PreviewError("extend is only supported for docker-remote previews")
     config = dc.load_deploy_config(ref.project_path)
     profile = find_target(config.get("target", ""))
     data = _run_runner(
@@ -390,6 +430,9 @@ def extend_preview(task_id: str, hours: int = 1) -> dict[str, Any]:
 
 def promote(task_id: str, *, lane_override: str | None = None) -> dict[str, Any]:
     ref = resolve_task(task_id)
+    strategy = (_read_meta(ref.spec_dir).get("preview") or {}).get("strategy") or "docker-remote"
+    if strategy in dc.LOCAL_STRATEGIES:
+        raise PreviewError("promote is only supported for docker-remote previews")
     config = dc.load_deploy_config(ref.project_path)
     profile = find_target(config.get("target", ""))
 
