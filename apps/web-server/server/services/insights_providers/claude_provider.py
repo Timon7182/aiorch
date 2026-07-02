@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -86,6 +87,85 @@ CODEGRAPH_SYSTEM_PROMPT = (
     "what calls what, call chains, symbol relationships, dead code, or complexity. "
     "Fall back to Read/Grep/Glob only for plain-text search or reading file contents."
 )
+
+
+# System-prompt nudge appended when the graphify graph is active so the model
+# reaches for the graph tools instead of grepping the tree by hand.
+GRAPHIFY_SYSTEM_PROMPT = (
+    "This project has a graphify knowledge graph and you have its MCP tools "
+    "available: mcp__graphify__query_graph, mcp__graphify__get_node, "
+    "mcp__graphify__get_neighbors, mcp__graphify__shortest_path. The graph links "
+    "docs, code, and cross-cutting concepts extracted from the project. Use these "
+    "tools to find where a concept lives, what relates to what, and how ideas "
+    "connect, before falling back to raw Grep/Glob. Use Read/Grep/Glob for plain "
+    "text search or reading file contents."
+)
+
+
+def _ensure_backend_on_path() -> bool:
+    """Put apps/backend on sys.path so backend helpers (e.g. the custom-MCP
+    validator in ``core.client``) import. Mirrors chat_memory._ensure_backend."""
+    # insights_providers -> services -> server -> web-server -> apps -> apps/backend
+    backend = Path(__file__).resolve().parents[4] / "backend"
+    if not backend.is_dir():
+        return False
+    if str(backend) not in sys.path:
+        sys.path.insert(0, str(backend))
+    return True
+
+
+def _validate_backend_mcp_server(server: dict) -> bool:
+    """Validate a command-type custom MCP server through the backend allowlist
+    (``core.client._validate_custom_mcp_server``). Fails closed: any import or
+    validation error means the server is not injected into chat."""
+    try:
+        if not _ensure_backend_on_path():
+            return False
+        from core.client import _validate_custom_mcp_server
+        return bool(_validate_custom_mcp_server(server))
+    except Exception as e:  # pragma: no cover - import shape varies by deploy
+        logger.warning("[ClaudeProvider] custom MCP validation unavailable: %s", e)
+        return False
+
+
+def graphify_available(run_dir: Path) -> bool:
+    """graphify chat tools are usable when the graph file exists and the layer
+    is not disabled. Shared by the provider and the availability route."""
+    if os.environ.get("GRAPHIFY_DISABLED", "").lower() == "true":
+        return False
+    return (run_dir / "graphify-out" / "graph.json").is_file()
+
+
+def docs_status(run_dir: Path) -> dict:
+    """Docs freshness for the dir the chat runs in.
+
+    Returns ``{hasDocs, headSha, docsSha, fresh}`` where ``headSha`` is the run
+    dir's current short HEAD and ``docsSha`` is ``head_sha`` recorded in
+    ``.magestic-ai/.docgen.json`` at the last docs generation. ``fresh`` is True
+    only when both SHAs are known and equal. All subprocess/IO failures degrade
+    to unknown (None) rather than raising into the chat path.
+    """
+    docs_dir = run_dir / "docs"
+    has_docs = docs_dir.is_dir()
+    docs_sha = None
+    marker = run_dir / ".magestic-ai" / ".docgen.json"
+    if marker.is_file():
+        try:
+            docs_sha = json.loads(marker.read_text(encoding="utf-8")).get("head_sha")
+        except Exception:
+            docs_sha = None
+    head_sha = None
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(run_dir), capture_output=True, text=True, timeout=5,
+        )
+        if res.returncode == 0:
+            head_sha = res.stdout.strip() or None
+    except Exception:
+        head_sha = None
+    fresh = bool(docs_sha and head_sha and docs_sha == head_sha)
+    return {"hasDocs": has_docs, "headSha": head_sha, "docsSha": docs_sha, "fresh": fresh}
 
 
 def resolve_codegraph_bin() -> str | None:
@@ -233,12 +313,51 @@ class ClaudeProvider(ProviderStrategy):
     def _resolve_code_search_mode(self, code_search: str | None, run_dir: Path) -> str:
         """Resolve the requested backend to a concrete one.
 
-        'cgc'/'files' are honored as-is; 'auto' (the default) prefers CodeGraph
-        when the project is indexed, otherwise falls back to plain file tools.
+        'cgc'/'graphify'/'files' are honored as-is; 'auto' (the default) prefers
+        CodeGraph when the project is indexed, then the graphify graph when its
+        graph.json exists, otherwise falls back to plain file tools.
         """
-        if code_search in ("cgc", "files"):
+        if code_search in ("cgc", "graphify", "files"):
             return code_search
-        return "cgc" if codegraph_available(run_dir) else "files"
+        if codegraph_available(run_dir):
+            return "cgc"
+        if graphify_available(run_dir):
+            return "graphify"
+        return "files"
+
+    def _build_graphify_mcp_config(self, run_dir: Path) -> dict | None:
+        """Build the inline --mcp-config payload for the graphify stdio server.
+
+        Mirrors the build-agent wiring in core.client: spawns
+        ``python -m graphify.serve <graph.json>`` (the web-server venv ships
+        ``graphifyy[mcp]``). Returns None when the graph file is missing or the
+        layer is disabled.
+        """
+        if not graphify_available(run_dir):
+            return None
+        graph_json = run_dir / "graphify-out" / "graph.json"
+        return {
+            "mcpServers": {
+                "graphify": {"command": sys.executable, "args": ["-m", "graphify.serve", str(graph_json)]}
+            }
+        }
+
+    def _build_logs_mcp_config(self) -> dict:
+        """Build the inline --mcp-config payload for the read-only logs MCP
+        server (``server.mcp.logs_mcp``). Spawned with the web-server Python and
+        PYTHONPATH pointed at the web-server root so ``-m server.mcp.logs_mcp``
+        resolves regardless of the CLI's cwd (which is the project dir)."""
+        # insights_providers -> services -> server -> web-server
+        web_root = Path(__file__).resolve().parents[3]
+        return {
+            "mcpServers": {
+                "logs": {
+                    "command": sys.executable,
+                    "args": ["-m", "server.mcp.logs_mcp"],
+                    "env": {"PYTHONPATH": str(web_root), "PYTHONUNBUFFERED": "1"},
+                }
+            }
+        }
 
     def _build_codegraph_mcp_config(self, run_dir: Path) -> dict | None:
         """Build the inline --mcp-config payload for the codegraph stdio server."""
@@ -287,11 +406,13 @@ class ClaudeProvider(ProviderStrategy):
     def _build_custom_mcp_config(self, project_path: Path) -> dict | None:
         """Build the inline --mcp-config payload for project-defined custom MCP
         servers (the same CUSTOM_MCP_SERVERS the build agents read from
-        .magestic-ai/.env), so chat can reach them too — e.g. an HTTP DB gateway.
+        .magestic-ai/.env), so chat can reach them too — e.g. an HTTP DB gateway
+        or a stdio command server.
 
-        Only HTTP servers are wired into chat; command servers are skipped here
-        (those are spawned only in the sandboxed build path). Returns None when
-        the project defines no usable HTTP custom MCP server.
+        HTTP servers are wired directly. Command (stdio) servers are validated
+        through the backend allowlist (core.client._validate_custom_mcp_server)
+        and skipped with a warning if they fail. Returns None when the project
+        defines no usable custom MCP server.
         """
         env_path = project_path / ".magestic-ai" / ".env"
         if not env_path.exists():
@@ -318,17 +439,46 @@ class ClaudeProvider(ProviderStrategy):
         mcp_servers: dict = {}
         lines: list[str] = []
         for s in servers:
-            if not isinstance(s, dict) or s.get("type") != "http":
+            if not isinstance(s, dict):
                 continue
-            sid, url = s.get("id"), s.get("url")
-            if not (isinstance(sid, str) and sid and isinstance(url, str) and url):
+            stype = s.get("type")
+            sid = s.get("id")
+            if not (isinstance(sid, str) and sid):
                 continue
-            cfg: dict = {"type": "http", "url": url}
-            headers = s.get("headers")
-            if isinstance(headers, dict) and all(
-                isinstance(k, str) and isinstance(v, str) for k, v in headers.items()
-            ):
-                cfg["headers"] = headers
+            cfg: dict
+            if stype == "http":
+                url = s.get("url")
+                if not (isinstance(url, str) and url):
+                    continue
+                cfg = {"type": "http", "url": url}
+                headers = s.get("headers")
+                if isinstance(headers, dict) and all(
+                    isinstance(k, str) and isinstance(v, str) for k, v in headers.items()
+                ):
+                    cfg["headers"] = headers
+            elif stype == "command":
+                # Command (stdio) servers are only injected after passing the
+                # backend security allowlist (safe commands, no dangerous flags).
+                if not _validate_backend_mcp_server(s):
+                    logger.warning(
+                        "[ClaudeProvider] skipping custom command MCP server %r "
+                        "(failed backend validation)", sid,
+                    )
+                    continue
+                command = s.get("command")
+                if not (isinstance(command, str) and command):
+                    continue
+                cfg = {"command": command}
+                args = s.get("args")
+                if isinstance(args, list) and all(isinstance(a, str) for a in args):
+                    cfg["args"] = args
+                env = s.get("env")
+                if isinstance(env, dict) and all(
+                    isinstance(k, str) and isinstance(v, str) for k, v in env.items()
+                ):
+                    cfg["env"] = env
+            else:
+                continue
             mcp_servers[sid] = cfg
             # One bullet per server: its name, tool prefix, and — crucially — the
             # user-provided description, so the model knows what each server is
@@ -415,7 +565,8 @@ class ClaudeProvider(ProviderStrategy):
         sys_prompt_appends: list[str] = []
 
         code_search = (model_config or {}).get("codeSearch") or "auto"
-        if self._resolve_code_search_mode(code_search, run_dir) == "cgc":
+        resolved_mode = self._resolve_code_search_mode(code_search, run_dir)
+        if resolved_mode == "cgc":
             cgc_config = self._build_codegraph_mcp_config(run_dir)
             if cgc_config:
                 mcp_servers.update(cgc_config["mcpServers"])
@@ -427,6 +578,36 @@ class ClaudeProvider(ProviderStrategy):
                     "[ClaudeProvider] CodeGraph requested but unavailable "
                     "(not indexed / disabled / CLI missing); using file tools"
                 )
+        elif resolved_mode == "graphify":
+            gf_config = self._build_graphify_mcp_config(run_dir)
+            if gf_config:
+                mcp_servers.update(gf_config["mcpServers"])
+                allowed_tools.append("mcp__graphify__*")
+                sys_prompt_appends.append(GRAPHIFY_SYSTEM_PROMPT)
+                logger.info("[ClaudeProvider] graphify MCP enabled for this turn")
+            else:
+                logger.info(
+                    "[ClaudeProvider] graphify requested but unavailable "
+                    "(no graph.json / disabled); using file tools"
+                )
+
+        # Project documentation grounding: tell the model the docs exist and are
+        # the fast path, with a staleness warning when code moved past the docs.
+        docs = docs_status(run_dir)
+        if docs["hasDocs"]:
+            doc_lines = [
+                "Project documentation is available — prefer it before grepping source:",
+                "- Human-readable docs live under docs/ (Markdown).",
+                "- Graph reports summarize structure: graphify-out/GRAPH_REPORT.md and "
+                ".codegraphcontext/CGC_REPORT.md.",
+                "Read these to orient before scanning files by hand.",
+            ]
+            if not docs["fresh"] and docs["docsSha"] and docs["headSha"]:
+                doc_lines.append(
+                    f"WARNING: docs were generated at {docs['docsSha']}, code is now at "
+                    f"{docs['headSha']} — verify anything load-bearing against the current source."
+                )
+            sys_prompt_appends.append("\n".join(doc_lines))
 
         db_profile_id = (model_config or {}).get("dbProfileId")
         if db_profile_id:
@@ -450,6 +631,23 @@ class ClaudeProvider(ProviderStrategy):
                 "[ClaudeProvider] Custom MCP enabled for chat: %s",
                 ", ".join(custom_cfg["mcpServers"].keys()),
             )
+
+        # Logs MCP server (read-only app/remote/docker log access) — opt-in per
+        # turn via the "Logs" toggle in the model selector.
+        if (model_config or {}).get("logsEnabled"):
+            logs_cfg = self._build_logs_mcp_config()
+            mcp_servers.update(logs_cfg["mcpServers"])
+            allowed_tools.append("mcp__logs__*")
+            sys_prompt_appends.append(
+                "You can read logs via the read-only mcp__logs__* tools: "
+                "mcp__logs__list_app_logs / mcp__logs__read_app_log (this "
+                "server's own logs), mcp__logs__list_remote_logs / "
+                "mcp__logs__tail_remote_log (allowlisted logs on configured "
+                "SSH servers), and mcp__logs__docker_logs (allowlisted "
+                "containers). Use them to investigate errors and runtime "
+                "behavior; all are read-only."
+            )
+            logger.info("[ClaudeProvider] Logs MCP enabled for this turn")
 
         if mcp_servers:
             # --allowedTools is variadic, so it must be followed by another flag

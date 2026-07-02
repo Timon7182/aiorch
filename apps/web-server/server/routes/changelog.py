@@ -929,12 +929,17 @@ async def insights_code_search_availability(
             ground_dir = FilePath(resolved)
 
     from ..services.branch_worktree import predicted_ground_dir
-    from ..services.insights_providers.claude_provider import codegraph_available
+    from ..services.insights_providers.claude_provider import (
+        codegraph_available,
+        docs_status,
+        graphify_available,
+    )
 
     run_dir = predicted_ground_dir(ground_dir, branch)
     return {
         "cgc": codegraph_available(run_dir),
-        "graphify": (run_dir / "graphify-out" / "graph.json").is_file(),
+        "graphify": graphify_available(run_dir),
+        "docs": docs_status(run_dir),
     }
 
 

@@ -227,7 +227,7 @@ export interface API {
   onPreviewLog: (callback: (data: { taskId: string; line: string }) => void) => () => void;
   // Databases (chat DB connection)
   listDatabases: () => Promise<IPCResult<import('./insights').DatabaseProfileSummary[]>>;
-  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) => Promise<IPCResult<import('./insights').DatabaseProfileSummary>>;
+  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string; projectIds?: string[] }) => Promise<IPCResult<import('./insights').DatabaseProfileSummary>>;
   deleteDatabase: (dbId: string) => Promise<IPCResult<{ status: string }>>;
   getForkInfo: (projectPath: string) => Promise<IPCResult<{
     isFork: boolean;
@@ -560,6 +560,7 @@ export interface API {
   detectInsightsProviders: (projectId: string) => Promise<IPCResult<InsightsProviderInfo[]>>;
   sendInsightsMessage: (projectId: string, message: string, attachments?: ChatAttachment[], modelConfig?: InsightsModelConfig, branch?: string, repo?: string) => void;
   getInsightsCodeSearchAvailability: (projectId: string, branch?: string, repo?: string) => Promise<IPCResult<CodeSearchAvailability>>;
+  refreshInsightsCodegraph: (projectId: string, repo?: string) => Promise<IPCResult<{ state?: string; error?: string }>>;
   stopInsightsMessage: (projectId: string) => Promise<IPCResult>;
   clearInsightsSession: (projectId: string) => Promise<IPCResult>;
   createTaskFromInsights: (

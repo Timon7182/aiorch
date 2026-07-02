@@ -248,13 +248,27 @@
       "codeSearch": {
         "label": "Code search",
         "auto": "Auto",
-        "autoDesc": "CodeGraph when indexed, else files",
+        "autoDesc": "CodeGraph when indexed, else Graphify, else files",
         "cgc": "CodeGraph",
         "cgcDesc": "Query the indexed code graph (Claude only)",
+        "graphify": "Graphify",
+        "graphifyDesc": "Query the docs + code knowledge graph (Claude only)",
         "files": "Files",
         "filesDesc": "Plain Read / Grep / Glob",
-        "cgcUnavailable": "Not indexed for this branch"
+        "cgcUnavailable": "Not available for this branch",
+        "graphifyUnavailable": "No graph built for this project"
+      },
+      "logs": {
+        "label": "Logs",
+        "enable": "Enable log access",
+        "desc": "Read app, server, and container logs (read-only)"
       }
+    },
+    "docsBanner": {
+      "message": "Documentation is outdated — it may not reflect the latest code.",
+      "refresh": "Refresh",
+      "refreshError": "Refresh failed — please try again.",
+      "dismiss": "Dismiss"
     },
     "createTask": {
       "button": "Create Task",
