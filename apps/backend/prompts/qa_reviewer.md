@@ -175,7 +175,7 @@ For each page/component in the QA Acceptance Criteria:
 
 ```
 # Use browser automation tools
-1. Navigate to URL
+1. Navigate to URL (prefer the PREVIEW_URL env var if set; else the local dev-server URL)
 2. Take screenshot
 3. Check for console errors
 4. Verify visual elements
