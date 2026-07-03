@@ -12,6 +12,7 @@ export const GLOBAL_VIEWS = ['hermes', 'members', 'transcripts', 'admin'] as con
  * `/p/:projectId/:view`.
  */
 export const PROJECT_VIEWS = [
+  'overview',
   'kanban',
   'terminals',
   'editor',

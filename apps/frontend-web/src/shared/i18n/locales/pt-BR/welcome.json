@@ -7,6 +7,21 @@
     "newProject": "Novo Projeto",
     "openProject": "Abrir Projeto"
   },
+  "dashboard": {
+  "title": "Painel do Projeto",
+  "subtitle": "Uma visao rapida da branch principal e da atualizacao do CodeGraph",
+  "activeProject": "Projeto ativo",
+  "mainBranch": "Branch principal",
+  "branchFreshness": "Atualidade da branch",
+  "noCommits": "Nenhum commit recente encontrado para esta branch",
+  "codegraphStatus": "Status do CodeGraph",
+  "lastCodegraphUpdate": "Ultima atualizacao do CodeGraph",
+  "codegraphState": "Estado do indice",
+  "codegraphReady": "O indice do CodeGraph esta disponivel",
+  "codegraphIndexing": "O CodeGraph esta indexando agora",
+  "codegraphMissing": "O indice do CodeGraph ainda nao foi gerado",
+  "codegraphNever": "Ainda nao atualizado"
+},
   "recentProjects": {
     "title": "Projetos Recentes",
     "empty": "Nenhum projeto ainda",
