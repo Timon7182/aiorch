@@ -53,6 +53,24 @@
     "strategyDockerRemote": "Docker distant",
     "logs": "Journaux"
   },
+  "jenkins": {
+    "title": "Déployer sur Jenkins",
+    "deploy": "Déployer",
+    "redeploy": "Redéployer",
+    "bumping": "Incrémentation de la version…",
+    "publishing": "Publication de la bibliothèque…",
+    "pushing": "Envoi des branches…",
+    "triggering": "Déclenchement de Jenkins…",
+    "queued": "En file d'attente sur Jenkins…",
+    "building": "Construction sur Jenkins…",
+    "success": "Déployé",
+    "failed": "Échec",
+    "deployed": "Le build Jenkins s'est terminé avec succès — la branche est déployée.",
+    "deployFailed": "Échec du déploiement",
+    "libVersion": "Version de bibliothèque publiée : {{version}}",
+    "build": "Build n°{{number}}",
+    "logs": "Journaux"
+  },
   "usage": {
     "title": "Consommation de tokens",
     "projectTitle": "Consommation de tokens du projet",

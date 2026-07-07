@@ -384,6 +384,33 @@ async def emit_preview_log(task_id: str, line: str):
     await broadcast_event("preview:log", {"taskId": task_id, "line": line})
 
 
+async def emit_jenkins_status(
+    task_id: str,
+    project_id: str | None,
+    status: str,
+    build_url: str | None = None,
+    error: str | None = None,
+):
+    """Emit a Jenkins deploy lifecycle transition (bumping -> publishing ->
+    pushing -> triggering -> queued -> building -> success/failed)."""
+    logger.info(
+        "[WebSocket] Emitting jenkins:status - taskId: %s, status: %s", task_id, status,
+    )
+    await broadcast_event("jenkins:status", {
+        "taskId": task_id,
+        "projectId": project_id,
+        "status": status,
+        "buildUrl": build_url,
+        "error": error,
+    })
+
+
+async def emit_jenkins_log(task_id: str, line: str):
+    """Emit a single line of Jenkins-deploy output (gradle publish / push /
+    trigger progress) for the live log panel."""
+    await broadcast_event("jenkins:log", {"taskId": task_id, "line": line})
+
+
 async def emit_subtask_update(task_id: str, subtask_id: str, status: str, previous_status: str | None = None):
     """Emit a subtask status change event for granular real-time updates.
 

@@ -19,6 +19,7 @@ import {
 import { Button } from '../../ui/button';
 import { Checkbox } from '../../ui/checkbox';
 import { PreviewDeploy } from './PreviewDeploy';
+import { JenkinsDeploy } from './JenkinsDeploy';
 import { cn, isWebMode } from '../../../lib/utils';
 import type { WorktreeStatus, MergeConflict, MergeStats, GitConflictInfo, SupportedIDE, SupportedTerminal, Task, TaskLogs } from '../../../shared/types';
 import { useSettingsStore } from '../../../stores/settings-store';
@@ -631,6 +632,10 @@ export function WorkspaceStatus({
 
           {/* Run on server — isolated preview deploy of this build */}
           <PreviewDeploy taskId={task.id} />
+
+          {/* Deploy on Jenkins — publish library + push branch + trigger the
+              project's Jenkins job (only for projects with a jenkins config) */}
+          <JenkinsDeploy taskId={task.id} />
         </div>
       )}
     </div>

@@ -3811,6 +3811,44 @@ async def extend_deploy_preview(task_id: str, options: ExtendPreviewOptions = No
     return {"success": True, "data": state}
 
 
+# --------------------------------------------------------------------------
+# Jenkins deploy ("Развернуть на Jenkins") — publish the task's library changes
+# (gradle uploadArchives + version bumps), push the task branches, and trigger
+# the project's parameterized Jenkins job. See services/jenkins_deploy_service.py.
+# --------------------------------------------------------------------------
+
+
+@router.post("/{task_id}/deploy-jenkins")
+async def deploy_jenkins(task_id: str):
+    """Start a Jenkins deploy of the task's branch. Returns immediately; poll
+    GET /deploy-jenkins for status (bumping -> publishing -> pushing ->
+    triggering -> queued -> building -> success/failed)."""
+    from ..services import jenkins_deploy_service as jds
+
+    try:
+        state = jds.deploy(task_id)
+    except jds.JenkinsError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"deploy-jenkins failed: {exc}"}
+    return {"success": True, "data": state}
+
+
+@router.get("/{task_id}/deploy-jenkins")
+async def get_deploy_jenkins(task_id: str):
+    """Current Jenkins deploy status + build URL for a task. ``enabled`` tells
+    the UI whether this project has a jenkins section in deploy.config.json."""
+    from ..services import jenkins_deploy_service as jds
+
+    try:
+        state = jds.get_state(task_id)
+    except jds.JenkinsError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"deploy-jenkins status failed: {exc}"}
+    return {"success": True, "data": state}
+
+
 @router.post("/{task_id}/promote")
 async def promote_preview(task_id: str, options: PromoteOptions = None):
     """Promote a validated preview onto its branch's static lane, then tear the

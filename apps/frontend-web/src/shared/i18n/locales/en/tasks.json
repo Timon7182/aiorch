@@ -53,6 +53,24 @@
     "strategyDockerRemote": "Remote Docker",
     "logs": "Logs"
   },
+  "jenkins": {
+    "title": "Deploy on Jenkins",
+    "deploy": "Deploy",
+    "redeploy": "Redeploy",
+    "bumping": "Bumping version…",
+    "publishing": "Publishing library…",
+    "pushing": "Pushing branches…",
+    "triggering": "Triggering Jenkins…",
+    "queued": "Queued on Jenkins…",
+    "building": "Building on Jenkins…",
+    "success": "Deployed",
+    "failed": "Failed",
+    "deployed": "Jenkins build finished successfully — the branch is deployed.",
+    "deployFailed": "Deploy failed",
+    "libVersion": "Library version published: {{version}}",
+    "build": "Build #{{number}}",
+    "logs": "Logs"
+  },
   "usage": {
     "title": "Token usage",
     "projectTitle": "Project token usage",

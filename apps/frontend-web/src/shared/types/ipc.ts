@@ -162,6 +162,32 @@ export interface PreviewState {
   expiresAt?: number | null;
 }
 
+export type JenkinsStatus =
+  | 'none'
+  | 'bumping'
+  | 'publishing'
+  | 'pushing'
+  | 'triggering'
+  | 'queued'
+  | 'building'
+  | 'success'
+  | 'failed';
+
+export interface JenkinsState {
+  status: JenkinsStatus;
+  /** Whether this project has a jenkins section in deploy.config.json (hides the panel otherwise). */
+  enabled?: boolean;
+  branch?: string;
+  /** Library version counter published during this deploy (when the library step ran). */
+  libVersion?: number | null;
+  buildUrl?: string | null;
+  buildNumber?: number | null;
+  result?: string | null;
+  error?: string | null;
+  startedAt?: number;
+  updatedAt?: number;
+}
+
 export interface API {
   // Project operations
   addProject: (projectPath: string) => Promise<IPCResult<Project>>;
@@ -234,6 +260,11 @@ export interface API {
   promotePreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
   onPreviewStatus: (callback: (data: { taskId: string; projectId?: string | null; status: PreviewStatus; strategy: PreviewStrategy; url?: string | null; error?: string | null }) => void) => () => void;
   onPreviewLog: (callback: (data: { taskId: string; line: string }) => void) => () => void;
+  // Jenkins deploy ("Развернуть на Jenkins")
+  deployJenkins: (taskId: string) => Promise<IPCResult<JenkinsState>>;
+  getJenkins: (taskId: string) => Promise<IPCResult<JenkinsState>>;
+  onJenkinsStatus: (callback: (data: { taskId: string; projectId?: string | null; status: JenkinsStatus; buildUrl?: string | null; error?: string | null }) => void) => () => void;
+  onJenkinsLog: (callback: (data: { taskId: string; line: string }) => void) => () => void;
   // Databases (chat DB connection)
   listDatabases: () => Promise<IPCResult<import('./insights').DatabaseProfileSummary[]>>;
   createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string; projectIds?: string[] }) => Promise<IPCResult<import('./insights').DatabaseProfileSummary>>;

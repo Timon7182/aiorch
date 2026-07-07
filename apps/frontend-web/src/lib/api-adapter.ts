@@ -41,6 +41,7 @@ import type {
   ProjectEnvConfig,
   PreviewStatus,
   PreviewStrategy,
+  JenkinsStatus,
 } from '../shared/types';
 
 // Event callback storage
@@ -383,6 +384,17 @@ export const webAPI: API & { _isWebMode: boolean } = {
     }),
   onPreviewLog: (callback) =>
     registerCallback('preview:log', (payload: { taskId: string; line: string }) => {
+      callback(payload);
+    }),
+  // ========== Jenkins deploy ("Развернуть на Jenkins") ==========
+  deployJenkins: (taskId: string) => post(`/tasks/${taskId}/deploy-jenkins`, {}),
+  getJenkins: (taskId: string) => get(`/tasks/${taskId}/deploy-jenkins`),
+  onJenkinsStatus: (callback) =>
+    registerCallback('jenkins:status', (payload: { taskId: string; projectId?: string | null; status: JenkinsStatus; buildUrl?: string | null; error?: string | null }) => {
+      callback(payload);
+    }),
+  onJenkinsLog: (callback) =>
+    registerCallback('jenkins:log', (payload: { taskId: string; line: string }) => {
       callback(payload);
     }),
   // ========== Databases (chat DB connection) ==========
