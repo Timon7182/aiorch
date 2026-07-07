@@ -87,7 +87,7 @@ function AuthenticatedApp() {
   // URL is the source of truth for which project/view/task is active, so every
   // screen is linkable. We derive these from the path instead of useState.
   const navigate = useNavigate();
-  const location = useLocation();
+  //const location = useLocation();
   const route = useWorkspaceRoute();
   const routeProjectId = route.projectId;
   const activeView: SidebarView = route.view ?? DEFAULT_PROJECT_VIEW;
@@ -124,6 +124,7 @@ function AuthenticatedApp() {
   // it falls back to the store's active project so the tab bar/wizard still work.
   const selectedProject = projects.find((p) => p.id === routeProjectId);
   const currentProjectId = routeProjectId ?? activeProjectId ?? selectedProjectId ?? null;
+  const dashboardProject = selectedProject ?? projects.find((p) => p.id === currentProjectId) ?? null;
 
   // Navigate to a sidebar view (global views live at /:view, project views at /p/:id/:view).
   const handleViewChange = useCallback((v: SidebarView) => {
@@ -233,13 +234,14 @@ function AuthenticatedApp() {
   // From the bare root, jump into the last active project's board. Only
   // redirect to a project that still exists, otherwise a stale id would
   // bounce back to root and loop.
-  useEffect(() => {
+  /*useEffect(() => {
     if (location.pathname !== '/') return;
     const pid = activeProjectId || selectedProjectId;
     if (pid && projects.some((p) => p.id === pid)) {
       navigate(`/p/${pid}/kanban`, { replace: true });
     }
-  }, [location.pathname, activeProjectId, selectedProjectId, projects, navigate]);
+  }, [location.pathname, activeProjectId, selectedProjectId, projects, navigate]);*/
+
 
   // Safety timeout: auto-clear stuck switching state after 10 seconds
   useEffect(() => {
@@ -361,6 +363,10 @@ function AuthenticatedApp() {
             isMobile={isMobile}
             mobileOpen={sidebarOpen}
             onMobileClose={() => setSidebarOpen(false)}
+            onProjectActivate={(projectId) => {
+              openProjectTab(projectId);
+              navigate(`/p/${projectId}/overview`);
+            }}
           />
 
           {/* Main content */}
@@ -385,8 +391,9 @@ function AuthenticatedApp() {
                   // Preserve the current view across project switches (unless it's
                   // a project-independent global view). The store sync effect
                   // updates activeProjectId from the new URL.
-                  const v = route.isGlobalView ? 'kanban' : activeView;
-                  navigate(`/p/${projectId}/${v}`);
+                  //const v = route.isGlobalView ? 'kanban' : activeView;
+                  //navigate(`/p/${projectId}/${v}`);
+                  navigate(`/p/${projectId}/overview`);
                 }}
                 onProjectClose={(projectId) => closeProjectTab(projectId)}
                 onAddProject={handleAddProject}
@@ -400,80 +407,93 @@ function AuthenticatedApp() {
               {/* View content stays mounted (preserving e.g. the terminal grid)
                   but is hidden while a task page is open. */}
               <div className={cn('h-full overflow-hidden', selectedTaskId && 'hidden')}>
-              {activeView === 'hermes' ? (
-                <HermesPage />
-              ) : activeView === 'members' ? (
-                <MembersPage />
-              ) : activeView === 'admin' ? (
-                <AdminPage />
-              ) : activeView === 'transcripts' ? (
-                <TranscriptsPage />
-              ) : selectedProject ? (
-                <>
-                  {activeView === 'kanban' && (
-                    <KanbanBoard
-                      tasks={tasks}
-                      onTaskClick={handleTaskClick}
-                      onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
-                      isInitialized={!!selectedProject?.autoBuildPath}
-                      onOpenUsage={() => handleViewChange('usage')}
-                    />
-                  )}
-                  {/* TerminalGrid stays mounted but hidden to preserve xterm instances and PTY connections */}
-                  <div className={activeView === 'terminals' ? 'h-full' : 'hidden'}>
-                    <TerminalGrid
-                      projectPath={selectedProject?.path}
-                      onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
-                      isActive={activeView === 'terminals'}
-                    />
-                  </div>
-                  {activeView === 'editor' && (
-                    <EditorPage projectPath={selectedProject?.path} />
-                  )}
-                  {activeView === 'worktrees' && (
-                    <Worktrees projectId={selectedProject?.id || ''} />
-                  )}
-                  {activeView === 'context' && (
-                    <Context projectId={selectedProject?.id || ''} />
-                  )}
-                  {activeView === 'github-issues' && (
-                    <GitHubIssues
-                      onOpenSettings={() => setIsSettingsDialogOpen(true)}
-                      onNavigateToTask={(taskId) => {
-                        if (currentProjectId) navigate(`/p/${currentProjectId}/tasks/${taskId}`);
-                      }}
-                    />
-                  )}
-                  {activeView === 'github-prs' && (
-                    <GitHubPRs
-                      onOpenSettings={() => setIsSettingsDialogOpen(true)}
-                      isActive={true}
-                    />
-                  )}
-                  {activeView === 'changelog' && <Changelog />}
-                  {activeView === 'usage' && (
-                    <UsageView projectId={selectedProject?.id || ''} />
-                  )}
-                  {activeView === 'insights' && (
-                    <Insights projectId={selectedProject?.id || ''} onNavigate={handleViewChange} />
-                  )}
-                  {activeView === 'agent-tools' && <AgentTools />}
-                  {activeView === 'skills' && <SkillsPage />}
-                  {activeView === 'docs' && selectedProject && (
-                    <DocumentationView projectId={selectedProject.id} />
-                  )}
-                </>
-              ) : (
-                <WelcomeScreen
-                  projects={projects}
-                  onNewProject={handleAddProject}
-                  onOpenProject={handleAddProject}
-                  onSelectProject={(projectId) => {
-                    openProjectTab(projectId);
-                    navigate(`/p/${projectId}/kanban`);
-                  }}
-                />
-              )}
+                {activeView === 'hermes' ? (
+                  <HermesPage />
+                ) : activeView === 'members' ? (
+                  <MembersPage />
+                ) : activeView === 'admin' ? (
+                  <AdminPage />
+                ) : activeView === 'transcripts' ? (
+                  <TranscriptsPage />
+                ) : selectedProject ? (
+                  <>
+                    {activeView === 'overview' && (
+                      <WelcomeScreen
+                        projects={projects}
+                        activeProject={selectedProject}
+                        onNewProject={handleAddProject}
+                        onOpenProject={handleAddProject}
+                        onSelectProject={(projectId) => {
+                          openProjectTab(projectId);
+                          navigate(`/p/${projectId}/overview`);
+                        }}
+                      />
+                    )}
+                    {activeView === 'kanban' && (
+                      <KanbanBoard
+                        tasks={tasks}
+                        onTaskClick={handleTaskClick}
+                        onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
+                        isInitialized={!!selectedProject?.autoBuildPath}
+                        onOpenUsage={() => handleViewChange('usage')}
+                      />
+                    )}
+                    {/* TerminalGrid stays mounted but hidden to preserve xterm instances and PTY connections */}
+                    <div className={activeView === 'terminals' ? 'h-full' : 'hidden'}>
+                      <TerminalGrid
+                        projectPath={selectedProject?.path}
+                        onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
+                        isActive={activeView === 'terminals'}
+                      />
+                    </div>
+                    {activeView === 'editor' && (
+                      <EditorPage projectPath={selectedProject?.path} />
+                    )}
+                    {activeView === 'worktrees' && (
+                      <Worktrees projectId={selectedProject?.id || ''} />
+                    )}
+                    {activeView === 'context' && (
+                      <Context projectId={selectedProject?.id || ''} />
+                    )}
+                    {activeView === 'github-issues' && (
+                      <GitHubIssues
+                        onOpenSettings={() => setIsSettingsDialogOpen(true)}
+                        onNavigateToTask={(taskId) => {
+                          if (currentProjectId) navigate(`/p/${currentProjectId}/tasks/${taskId}`);
+                        }}
+                      />
+                    )}
+                    {activeView === 'github-prs' && (
+                      <GitHubPRs
+                        onOpenSettings={() => setIsSettingsDialogOpen(true)}
+                        isActive={true}
+                      />
+                    )}
+                    {activeView === 'changelog' && <Changelog />}
+                    {activeView === 'usage' && (
+                      <UsageView projectId={selectedProject?.id || ''} />
+                    )}
+                    {activeView === 'insights' && (
+                      <Insights projectId={selectedProject?.id || ''} onNavigate={handleViewChange} />
+                    )}
+                    {activeView === 'agent-tools' && <AgentTools />}
+                    {activeView === 'skills' && <SkillsPage />}
+                    {activeView === 'docs' && selectedProject && (
+                      <DocumentationView projectId={selectedProject.id} />
+                    )}
+                  </>
+                ) : (
+                  <WelcomeScreen
+                    projects={projects}
+                    activeProject={dashboardProject}
+                    onNewProject={handleAddProject}
+                    onOpenProject={handleAddProject}
+                    onSelectProject={(projectId) => {
+                      openProjectTab(projectId);
+                      navigate(`/p/${projectId}/kanban`);
+                    }}
+                  />
+                )}
               </div>
               {/* Task detail — full page with its own URL (/p/:projectId/tasks/:taskId) */}
               {selectedTaskId && (

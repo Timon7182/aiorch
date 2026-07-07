@@ -117,7 +117,8 @@ class SuggestVersionCommitsRequest(BaseModel):
 class CommitsPreviewRequest(BaseModel):
     options: dict
     mode: str  # 'history' or 'branch-diff'
-    repo: str | None = None  # selected child repo path for multi-repo projects
+    repo: str | None = None
+    branch: str | None = None  # selected child repo path for multi-repo projects
 
 
 class SaveImageRequest(BaseModel):
@@ -628,27 +629,34 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
             compare_branch = options.get("compareBranchRef") or options.get("compareBranch", "HEAD")
             cmd.append(f"{base_branch}..{compare_branch}")
         else:
-            # History mode with various options
             history_type = options.get("type", "last-n")
+            history_target = request.branch or "HEAD"
 
             if history_type == "last-n":
                 count = options.get("count", 20)
-                cmd.extend(["-n", str(count)])
+                cmd.extend(["-n", str(count), history_target])
             elif history_type == "since-date":
                 since_date = options.get("sinceDate")
                 if since_date:
-                    cmd.extend(["--since", since_date])
+                    cmd.extend(["--since", since_date, history_target])
+                else:
+                    cmd.append(history_target)
             elif history_type == "since-version":
                 from_tag = options.get("fromTag")
                 if from_tag:
-                    cmd.append(f"{from_tag}..HEAD")
+                    cmd.append(f"{from_tag}..{history_target}")
+                else:
+                    cmd.append(history_target)
             elif history_type == "tag-range":
                 from_tag = options.get("fromTag")
-                to_tag = options.get("toTag", "HEAD")
+                to_tag = options.get("toTag") or history_target
                 if from_tag:
                     cmd.append(f"{from_tag}..{to_tag}")
+                else:
+                    cmd.append(to_tag)
+            else:
+                cmd.append(history_target)
 
-            # Optionally exclude merge commits
             if not options.get("includeMergeCommits", True):
                 cmd.append("--no-merges")
 

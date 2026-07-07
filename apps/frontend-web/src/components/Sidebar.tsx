@@ -64,7 +64,26 @@ import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus, ProjectEnvConfig } from '../shared/types';
 
-export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts' | 'docs' | 'usage' | 'admin';
+//export type SidebarView = 'kanban' | 'terminals' | 'editor' | 'context' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'skills' | 'hermes' | 'members' | 'transcripts' | 'docs' | 'usage' | 'admin';
+export type SidebarView =
+  | 'overview'
+  | 'kanban'
+  | 'terminals'
+  | 'editor'
+  | 'context'
+  | 'github-issues'
+  | 'github-prs'
+  | 'changelog'
+  | 'insights'
+  | 'worktrees'
+  | 'agent-tools'
+  | 'skills'
+  | 'hermes'
+  | 'members'
+  | 'transcripts'
+  | 'docs'
+  | 'usage'
+  | 'admin';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -78,6 +97,7 @@ interface SidebarProps {
   mobileOpen?: boolean;
   /** Called to dismiss the mobile drawer (backdrop tap, nav selection, close button). */
   onMobileClose?: () => void;
+  onProjectActivate?: (projectId: string) => void;
 }
 
 interface NavItem {
@@ -128,7 +148,8 @@ export function Sidebar({
   onViewChange,
   isMobile = false,
   mobileOpen = false,
-  onMobileClose
+  onMobileClose,
+  onProjectActivate,
 }: SidebarProps) {
   const { t } = useTranslation(['navigation', 'dialogs', 'common']);
   const projects = useProjectStore((state) => state.projects);
@@ -476,6 +497,7 @@ export function Sidebar({
                             const store = useProjectStore.getState();
                             store.selectProject(proj.id);
                             store.openProjectTab(proj.id);
+                            onProjectActivate?.(proj.id);
                           }}
                           className={cn(
                             'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent/50',

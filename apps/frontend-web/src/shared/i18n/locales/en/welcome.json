@@ -12,5 +12,20 @@
     "empty": "No projects yet",
     "emptyDescription": "Create a new project or open an existing one to get started",
     "openFolder": "Open Folder"
+  },
+    "dashboard": {
+    "title": "Project Dashboard",
+    "subtitle": "A quick view of your main branch and CodeGraph freshness",
+    "activeProject": "Active project",
+    "mainBranch": "Main branch",
+    "branchFreshness": "Branch freshness",
+    "noCommits": "No recent commits found for this branch yet",
+    "codegraphStatus": "CodeGraph status",
+    "lastCodegraphUpdate": "Last CodeGraph update",
+    "codegraphState": "Index state",
+    "codegraphReady": "CodeGraph index is available",
+    "codegraphIndexing": "CodeGraph is indexing now",
+    "codegraphMissing": "CodeGraph index has not been built yet",
+    "codegraphNever": "Not updated yet"
   }
 }
