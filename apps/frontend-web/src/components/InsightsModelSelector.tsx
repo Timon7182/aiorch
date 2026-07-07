@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Sliders, Check, Loader2, Database, ScrollText } from 'lucide-react';
+import { Sliders, Check, Loader2, Database, ScrollText, Globe } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   DropdownMenu,
@@ -111,6 +111,15 @@ export function InsightsModelSelector({
     onConfigChange({ ...base, logsEnabled: !currentConfig?.logsEnabled });
   }, [onConfigChange, currentConfig]);
   const logsEnabled = currentConfig?.logsEnabled ?? false;
+
+  // Toggle the headless-browser (Playwright) MCP for UI checks, preserving provider/model.
+  const handleToggleUiCheck = useCallback(() => {
+    const base: InsightsModelConfig = currentConfig ?? {
+      provider: 'claude', profileId: 'custom', model: 'sonnet', thinkingLevel: 'medium',
+    };
+    onConfigChange({ ...base, uiCheckEnabled: !currentConfig?.uiCheckEnabled });
+  }, [onConfigChange, currentConfig]);
+  const uiCheckEnabled = currentConfig?.uiCheckEnabled ?? false;
 
   // Build display text
   const getDisplayText = () => {
@@ -279,6 +288,25 @@ export function InsightsModelSelector({
               </div>
             </div>
             {logsEnabled && <Check className="h-4 w-4 shrink-0 text-primary" />}
+          </DropdownMenuItem>
+
+          {/* UI check (headless browser via Playwright MCP) */}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="flex items-center gap-1.5">
+            <Globe className="h-3.5 w-3.5" />
+            {t('common:insights.modelSelector.uiCheck.label', 'UI check')}
+          </DropdownMenuLabel>
+          <DropdownMenuItem
+            onClick={(e) => { e.preventDefault(); handleToggleUiCheck(); }}
+            className="flex cursor-pointer items-center gap-2 pl-4"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-sm">{t('common:insights.modelSelector.uiCheck.enable', 'Enable browser checks')}</div>
+              <div className="text-xs text-muted-foreground">
+                {t('common:insights.modelSelector.uiCheck.desc', 'Verify frontend functionality in a headless browser (screenshots, console, network)')}
+              </div>
+            </div>
+            {uiCheckEnabled && <Check className="h-4 w-4 shrink-0 text-primary" />}
           </DropdownMenuItem>
 
           {/* Custom */}

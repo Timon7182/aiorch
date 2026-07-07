@@ -130,14 +130,46 @@ export interface ImageAttachment {
   thumbnail?: string;   // Base64 thumbnail for preview
 }
 
-// Task type discriminator (feature work vs a client-reported bug report)
-export type TaskType = 'feature' | 'bug';
+// Task type discriminator (feature work, a client-reported bug report,
+// or an on-demand browser UI verification)
+export type TaskType = 'feature' | 'bug' | 'ui_check';
 
 // Structured bug report (only meaningful when taskType === 'bug')
 export interface BugReport {
   steps?: string;     // Steps to reproduce
   expected?: string;  // Expected behavior
   actual?: string;    // Actual behavior
+}
+
+// UI-check parameters (only meaningful when taskType === 'ui_check')
+export interface UiCheckParams {
+  url?: string;           // Direct target URL (http/https)
+  environment?: string;   // Named environment from deploy.config.json
+  role?: string;          // Role/test-account label (selects creds env prefix)
+  preconditions?: string; // Optional preconditions
+  steps?: string;         // Steps to perform (free text; agent derives if empty)
+  expected?: string;      // Expected result
+  attempts?: number;      // 1..3 (retries for flaky checks)
+}
+
+// Verdicts a UI check can produce (mirrors backend ui_check.md protocol)
+export type UiCheckVerdict =
+  | 'PASS'
+  | 'FAIL'
+  | 'BUG_CONFIRMED'
+  | 'BUG_NOT_REPRODUCED'
+  | 'BUG_INTERMITTENT'
+  | 'FIX_CONFIRMED'
+  | 'FIX_FAILED'
+  | 'BLOCKED';
+
+// UI-check report produced by the ui_checker agent
+// (ui_check_report.md + ui_check_result.json + evidence-ui-check/)
+export interface UiCheckReport {
+  exists: boolean;
+  verdict: UiCheckVerdict | null;
+  content: string | null;              // Markdown content of ui_check_report.md
+  evidence: ReproductionEvidence[];    // Same {name, path} shape as bug evidence
 }
 
 // A piece of evidence captured during bug reproduction (screenshot)
@@ -184,6 +216,7 @@ export interface TaskDraft {
   selectedSkills?: SelectedSkill[];
   taskType?: TaskType;
   bugReport?: BugReport;
+  uiCheck?: UiCheckParams;
   savedAt: Date;
 }
 
@@ -273,8 +306,11 @@ export interface TaskMetadata {
   selectedSkills?: SelectedSkill[];  // Skills/capabilities selected for this task
 
   // Bug-report tasks
-  taskType?: TaskType;      // 'feature' (default) or 'bug'
+  taskType?: TaskType;      // 'feature' (default), 'bug', or 'ui_check'
   bugReport?: BugReport;    // Structured bug report (steps/expected/actual)
+
+  // UI-check tasks
+  uiCheck?: UiCheckParams;  // Browser verification parameters (taskType === 'ui_check')
 }
 
 export interface Task {

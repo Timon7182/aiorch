@@ -250,6 +250,16 @@
         "files": "Arquivos",
         "filesDesc": "Read / Grep / Glob simples",
         "cgcUnavailable": "Não indexado para esta branch"
+      },
+      "logs": {
+        "label": "Logs",
+        "enable": "Ativar acesso aos logs",
+        "desc": "Ler logs de aplicação, servidor e contêiner (somente leitura)"
+      },
+      "uiCheck": {
+        "label": "Verificação de UI",
+        "enable": "Ativar verificações no navegador",
+        "desc": "Verificar o funcionamento do frontend em um navegador headless (capturas, console, rede)"
       }
     },
     "createTask": {

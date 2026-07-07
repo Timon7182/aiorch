@@ -21,6 +21,7 @@ import type {
   TaskMetadata,
   TaskLogs,
   ReproductionReport,
+  UiCheckReport,
   IPCResult,
   TerminalCreateOptions,
   TerminalSession,
@@ -888,6 +889,9 @@ export const webAPI: API & { _isWebMode: boolean } = {
   },
   getReproductionReport: async (projectId: string, specId: string): Promise<IPCResult<ReproductionReport | null>> => {
     return get<ReproductionReport | null>(`/projects/${projectId}/tasks/${specId}/reproduction-report`);
+  },
+  getUiCheckReport: async (projectId: string, specId: string): Promise<IPCResult<UiCheckReport | null>> => {
+    return get<UiCheckReport | null>(`/projects/${projectId}/tasks/${specId}/ui-check-report`);
   },
   watchTaskLogs: (projectId: string, specId: string) =>
     post(`/projects/${projectId}/tasks/${specId}/logs/watch`),

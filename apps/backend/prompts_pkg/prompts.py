@@ -391,6 +391,135 @@ def _get_bug_repro_context(spec_dir: Path, role: str) -> str:
     return client_report + protocol + role_note + "\n\n---\n\n"
 
 
+def _is_safe_target_url(url: str | None) -> bool:
+    """Only http(s) URLs with a host are acceptable UI-check browser targets.
+
+    Mirrors server.services.ui_check_service.is_valid_target_url (web-server);
+    duplicated here because the backend must also gate direct CLI runs where
+    agent_service's resolution never happened.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def get_ui_check_prompt(spec_dir: Path, project_dir: Path) -> str:
+    """Build the full prompt for a standalone UI-check session.
+
+    Used by ``run.py --spec X --ui-check`` (agent_type ``ui_checker``). Assembles:
+    1. Spec context (paths the agent may write to)
+    2. CHECK PARAMETERS from ``task_metadata.json`` ``uiCheck`` +
+       ``requirements.json`` (description as functionality fallback)
+    3. Credential placeholder names from the ``UI_CHECK_SECRET_VARS`` env var
+       (names only — values are substituted by the MCP secret proxy and never
+       enter the session)
+    4. The ``ui_check.md`` protocol
+
+    Args:
+        spec_dir: Directory containing the spec files
+        project_dir: Root directory of the project
+
+    Returns:
+        The assembled UI-check prompt
+    """
+    protocol = _load_prompt_file("ui_check.md")
+
+    ui_check = {}
+    try:
+        tm_file = spec_dir / "task_metadata.json"
+        if tm_file.is_file():
+            ui_check = (json.loads(tm_file.read_text()) or {}).get("uiCheck") or {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        ui_check = {}
+
+    title, description = "", ""
+    try:
+        req_file = spec_dir / "requirements.json"
+        if req_file.is_file():
+            req = json.loads(req_file.read_text()) or {}
+            title = req.get("title") or ""
+            description = req.get("description") or ""
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+
+    # URL: agent_service resolves the final target (metadata → named env →
+    # preview) and exports UI_CHECK_TARGET_URL; metadata is the fallback for
+    # direct CLI runs. Only http(s) targets are acceptable browser targets —
+    # a file:// / data: / javascript: value from metadata must never reach the
+    # prompt (the liveness probe curls it and Playwright would navigate to it).
+    raw_url = os.environ.get("UI_CHECK_TARGET_URL") or ui_check.get("url") or ""
+    target_url = raw_url if _is_safe_target_url(raw_url) else ""
+
+    params = "## CHECK PARAMETERS\n\n"
+    params += f"- **Target URL:** {target_url or '(NOT PROVIDED — see rule 6: BLOCKED)'}\n"
+    if ui_check.get("environment"):
+        params += f"- **Environment:** {ui_check['environment']}\n"
+    params += f"- **Role/account:** {ui_check.get('role') or 'none specified'}\n"
+    attempts = ui_check.get("attempts") or 1
+    try:
+        attempts = max(1, min(3, int(attempts)))
+    except (TypeError, ValueError):
+        attempts = 1
+    params += f"- **Attempts requested:** {attempts}\n\n"
+    if title or description:
+        params += f"**Functionality under check:** {title}\n\n{description}\n\n"
+    if ui_check.get("preconditions"):
+        params += f"**Preconditions:**\n{ui_check['preconditions']}\n\n"
+    if ui_check.get("steps"):
+        params += f"**Steps to perform:**\n{ui_check['steps']}\n\n"
+    else:
+        params += (
+            "**Steps to perform:** none provided — derive minimal steps from the "
+            "functionality description and mark them as derived in the report.\n\n"
+        )
+    if ui_check.get("expected"):
+        params += f"**Expected result:**\n{ui_check['expected']}\n\n"
+
+    secret_vars = [
+        v.strip()
+        for v in os.environ.get("UI_CHECK_SECRET_VARS", "").split(",")
+        if v.strip()
+    ]
+    if secret_vars:
+        placeholders = "\n".join(f"- `${{{v}}}`" for v in secret_vars)
+        params += (
+            "**Credential placeholders** (type these EXACT literal strings into "
+            "login fields; real values are substituted outside your session):\n"
+            f"{placeholders}\n\n"
+        )
+    else:
+        params += (
+            "**Credentials:** none configured. If the app requires login, the "
+            "verdict is BLOCKED (state that credentials are required).\n\n"
+        )
+
+    spec_context = f"""## SPEC LOCATION
+
+- Spec directory (the ONLY place you write files): `{spec_dir}`
+- Report output: `{spec_dir}/ui_check_report.md`
+- Result JSON: `{spec_dir}/ui_check_result.json`
+- Evidence directory: `{spec_dir}/evidence-ui-check/`
+- Project root (read-only for you): `{project_dir}`
+
+---
+
+"""
+
+    return (
+        spec_context
+        + params
+        + "---\n\n"
+        + _get_attachments_context(spec_dir)
+        + protocol
+    )
+
+
 def _load_prompt_file(filename: str) -> str:
     """
     Load a prompt file from the prompts directory.

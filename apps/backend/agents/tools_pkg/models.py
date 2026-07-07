@@ -126,6 +126,7 @@ PLAYWRIGHT_TOOLS = [
     "mcp__playwright__browser_evaluate",
     "mcp__playwright__browser_snapshot",
     "mcp__playwright__browser_console_messages",
+    "mcp__playwright__browser_network_requests",
     "mcp__playwright__browser_press_key",
     "mcp__playwright__browser_wait_for",
     "mcp__playwright__browser_navigate_back",
@@ -241,6 +242,20 @@ AGENT_CONFIGS = {
             TOOL_UPDATE_QA_STATUS,
             TOOL_RECORD_GOTCHA,
             TOOL_TEST_MEMORY_INTEGRATION,
+        ],
+        "thinking_default": "medium",
+    },
+    "ui_checker": {
+        # On-demand browser UI verification (taskType == "ui_check").
+        # Runs standalone via `run.py --spec X --ui-check` — no planner/coder,
+        # no worktree. Writes only ui_check_report.md / ui_check_result.json /
+        # evidence-ui-check/ into the spec dir. Browser is mandatory: the
+        # "browser" placeholder resolves via the same gates as QA, and
+        # agent_service forces it with AGENT_MCP_ui_checker_ADD=playwright.
+        "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS,
+        "mcp_servers": ["magestic-ai", "browser"],
+        "magestic_ai_tools": [
+            TOOL_GET_SESSION_CONTEXT,
         ],
         "thinking_default": "medium",
     },

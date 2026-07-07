@@ -262,6 +262,11 @@
         "label": "Journaux",
         "enable": "Activer l'accès aux journaux",
         "desc": "Lire les journaux d'application, serveur et conteneur (lecture seule)"
+      },
+      "uiCheck": {
+        "label": "Vérification UI",
+        "enable": "Activer les vérifications navigateur",
+        "desc": "Vérifier le fonctionnement du frontend dans un navigateur headless (captures, console, réseau)"
       }
     },
     "docsBanner": {

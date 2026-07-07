@@ -46,7 +46,8 @@ import type {
   TaskMetadata,
   TaskLogs,
   TaskLogStreamChunk,
-  ReproductionReport
+  ReproductionReport,
+  UiCheckReport
 } from './task';
 import type {
   TerminalCreateOptions,
@@ -634,6 +635,7 @@ export interface API {
   // Task logs operations
   getTaskLogs: (projectId: string, specId: string) => Promise<IPCResult<TaskLogs | null>>;
   getReproductionReport: (projectId: string, specId: string) => Promise<IPCResult<ReproductionReport | null>>;
+  getUiCheckReport: (projectId: string, specId: string) => Promise<IPCResult<UiCheckReport | null>>;
   watchTaskLogs: (projectId: string, specId: string) => Promise<IPCResult>;
   unwatchTaskLogs: (projectId: string, specId: string) => Promise<IPCResult>;
 

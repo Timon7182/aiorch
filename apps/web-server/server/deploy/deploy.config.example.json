@@ -31,6 +31,11 @@
     "postgres": { "strategy": "clone", "image": "postgres:16" },
     "minio": { "strategy": "shared" }
   },
+  "$environments_comment": "Optional named environments for on-demand UI checks (taskType 'ui_check' and the chat 'UI check' toggle). Each entry maps a name to a base URL; credsPrefix names the env-var prefix for that environment's test account in <project>/.magestic-ai/.env: <prefix>_USERNAME / <prefix>_PASSWORD (role-specific override: <prefix>_<ROLE>_USERNAME / _PASSWORD; generic fallback: UI_CHECK_USERNAME / UI_CHECK_PASSWORD). Passwords never go in this file.",
+  "environments": {
+    "test": { "url": "http://192.168.88.55:3100", "credsPrefix": "UI_CHECK_TEST" },
+    "prod": { "url": "https://app.example.com", "credsPrefix": "UI_CHECK_PROD" }
+  },
   "$jenkins_comment": "Optional Jenkins deploy section ('Deploy on Jenkins' button on finished tasks). Credentials live in <project>/.magestic-ai/.env: JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN (+ JENKINS_DEPLOY_JAVA_HOME / JENKINS_DEPLOY_GRADLE_USER_HOME for the gradle library step). This example matches kms (CUBA app + talentsuite library published to Nexus via uploadArchives).",
   "jenkins": {
     "enabled": true,

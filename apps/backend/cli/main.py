@@ -23,6 +23,7 @@ from .batch_commands import (
 )
 from .build_commands import handle_build_command
 from .followup_commands import handle_followup_command
+from .ui_check_commands import handle_ui_check_command
 from .qa_commands import (
     handle_qa_command,
     handle_qa_status_command,
@@ -181,6 +182,11 @@ Environment Variables:
         "--skip-qa",
         action="store_true",
         help="Skip automatic QA validation after build completes",
+    )
+    parser.add_argument(
+        "--ui-check",
+        action="store_true",
+        help="Run a standalone browser UI check (taskType ui_check): no planner/coder, single browser-verification session",
     )
 
     # Follow-up options
@@ -380,6 +386,15 @@ def main() -> None:
 
     if args.review_status:
         handle_review_status_command(spec_dir)
+        return
+
+    if args.ui_check:
+        handle_ui_check_command(
+            project_dir=project_dir,
+            spec_dir=spec_dir,
+            model=model,
+            verbose=args.verbose,
+        )
         return
 
     if args.qa:

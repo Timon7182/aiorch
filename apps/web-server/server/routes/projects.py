@@ -1473,7 +1473,7 @@ async def create_project_task(project_id: str, task_data: TaskCreateRequest):
         # Also include selectedSkills so agent_service.py can inject skill context
         # baseBranch/repoPath persisted here so the build honors the user's git
         # choices even though the "Start" request doesn't re-send them.
-        model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "baseBranch", "repoPath", "repoPaths"]
+        model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "baseBranch", "repoPath", "repoPaths", "taskType", "bugReport", "uiCheck"]
         for field in model_fields:
             if field in task_data.metadata:
                 task_metadata[field] = task_data.metadata[field]
@@ -1551,6 +1551,15 @@ async def get_project_task_reproduction_report(project_id: str, spec_id: str):
 
     task_id = f"{project_id}:{spec_id}"
     return await tasks_module.get_reproduction_report(task_id)
+
+
+@router.get("/{project_id}/tasks/{spec_id}/ui-check-report")
+async def get_project_task_ui_check_report(project_id: str, spec_id: str):
+    """Get the UI-check report for a task (delegates to tasks router)."""
+    from . import tasks as tasks_module
+
+    task_id = f"{project_id}:{spec_id}"
+    return await tasks_module.get_ui_check_report(task_id)
 
 
 # --------------------------------------------------------------------------

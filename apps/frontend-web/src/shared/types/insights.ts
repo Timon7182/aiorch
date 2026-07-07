@@ -45,6 +45,7 @@ export interface InsightsModelConfig {
   codeSearch?: CodeSearchBackend; // Code navigation backend (default: 'auto')
   dbProfileId?: string;          // Connect the chat to a registered DB (read-only); undefined = none
   logsEnabled?: boolean;         // Give the chat the read-only logs MCP server
+  uiCheckEnabled?: boolean;      // Give the chat a headless browser (Playwright MCP) for UI checks
 }
 
 // A saved database connection profile (from the Databases extension)

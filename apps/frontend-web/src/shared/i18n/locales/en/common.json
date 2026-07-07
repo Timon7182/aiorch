@@ -262,6 +262,11 @@
         "label": "Logs",
         "enable": "Enable log access",
         "desc": "Read app, server, and container logs (read-only)"
+      },
+      "uiCheck": {
+        "label": "UI check",
+        "enable": "Enable browser checks",
+        "desc": "Verify frontend functionality in a headless browser (screenshots, console, network)"
       }
     },
     "docsBanner": {

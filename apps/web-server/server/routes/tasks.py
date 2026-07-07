@@ -131,10 +131,14 @@ class TaskMetadata(BaseModel):
     archivedInVersion: str | None = None
     # Skills attached to this task
     selectedSkills: list[SelectedSkill] | None = None
-    # Task type: 'feature' (default) or 'bug' (client-reported bug report)
+    # Task type: 'feature' (default), 'bug' (client-reported bug report),
+    # or 'ui_check' (on-demand browser UI verification)
     taskType: str | None = None
     # Structured bug report (only meaningful when taskType == 'bug')
     bugReport: dict | None = None
+    # UI-check parameters: {url, environment, role, preconditions, steps,
+    # expected, attempts} (only meaningful when taskType == 'ui_check')
+    uiCheck: dict | None = None
 
 
 class Task(TaskBase):
@@ -192,10 +196,14 @@ class TaskMetadataUpdate(BaseModel):
     referencedFiles: list | None = None
     # Skills attached to this task (can be null to clear)
     selectedSkills: list[SelectedSkill] | None = None
-    # Task type: 'feature' (default) or 'bug' (client-reported bug report)
+    # Task type: 'feature' (default), 'bug' (client-reported bug report),
+    # or 'ui_check' (on-demand browser UI verification)
     taskType: str | None = None
     # Structured bug report: {steps, expected, actual}
     bugReport: dict | None = None
+    # UI-check parameters: {url, environment, role, preconditions, steps,
+    # expected, attempts}
+    uiCheck: dict | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -510,6 +518,20 @@ def load_spec_metadata(spec_dir: Path) -> dict:
                             metadata["reviewReason"] = "completed"
         except (json.JSONDecodeError, KeyError):
             pass
+
+    # UI-check tasks: the verdict file is the completion signal (these tasks
+    # have no implementation plan / QA files). A finished check is "done" —
+    # the report is the deliverable, there is nothing to merge or review-gate.
+    try:
+        _uic_tm_file = spec_dir / "task_metadata.json"
+        _uic_tm = json.loads(_uic_tm_file.read_text()) if _uic_tm_file.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        _uic_tm = {}
+    if str(_uic_tm.get("taskType", "")).lower() == "ui_check":
+        if metadata["status"] != "in_progress" and (spec_dir / "ui_check_result.json").exists():
+            metadata["status"] = "done"
+            metadata["phase"] = "complete"
+            metadata["reviewReason"] = None
 
     # Try to load implementation_plan.json for status/subtasks
     plan_file = spec_dir / "implementation_plan.json"
@@ -1200,7 +1222,7 @@ async def create_task(task: TaskCreate):
             # Sync task_metadata.json for phase_config.py to read model/thinking settings
             # Also include selectedSkills so agent_service.py can inject skill context,
             # and taskType so bug tasks get the browser + reproduction protocol.
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills", "customBranchName", "taskType"]
+            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills", "customBranchName", "taskType", "uiCheck"]
             task_metadata = {field: metadata_dict[field] for field in model_fields if field in metadata_dict}
             if task_metadata:
                 (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))
@@ -1510,7 +1532,7 @@ async def update_task(task_id: str, update: TaskUpdate):
             # Update model-related fields that phase_config.py expects
             # Also include selectedSkills so agent_service.py can inject skill context
             # and taskType so bug tasks get the browser + reproduction protocol.
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "taskType"]
+            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "taskType", "uiCheck"]
             for field in model_fields:
                 if field in metadata_dict:
                     if metadata_dict[field] is None:
@@ -2155,6 +2177,66 @@ async def get_reproduction_report(task_id: str):
         return {"exists": True, "content": content, "evidence": evidence}
 
     return {"exists": False, "content": None, "evidence": []}
+
+
+@router.get("/{task_id}/ui-check-report")
+async def get_ui_check_report(task_id: str):
+    """Return the UI-check report (markdown), verdict, and evidence file list.
+
+    UI-check tasks produce ``<spec_dir>/ui_check_report.md``,
+    ``<spec_dir>/ui_check_result.json`` and ``<spec_dir>/evidence-ui-check/*``
+    screenshots. Returns ``{exists, verdict, content, evidence: [{name, path}]}``.
+    Before the check runs, returns ``{exists: false}``. Prefers the main spec
+    dir; falls back to the worktree copy (defensive — UI checks normally run
+    without a worktree).
+    """
+    project_id, spec_id, project_path, spec_dir = _resolve_task(task_id)
+
+    worktree_spec = (
+        project_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
+        / ".magestic-ai" / "specs" / spec_id
+    )
+
+    _img_ext = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")
+    for base in (spec_dir, worktree_spec):
+        report_file = base / "ui_check_report.md"
+        if not report_file.exists():
+            continue
+        try:
+            content = report_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        verdict = None
+        result_file = base / "ui_check_result.json"
+        if result_file.exists():
+            try:
+                verdict = (json.loads(result_file.read_text()) or {}).get("verdict")
+            except (json.JSONDecodeError, OSError, TypeError):
+                verdict = None
+        # Normalise for the frontend's verdict-pill lookup (uppercase keys).
+        if isinstance(verdict, str):
+            verdict = verdict.upper()
+        evidence: list[dict] = []
+        evidence_dir = base / "evidence-ui-check"
+        if evidence_dir.is_dir():
+            try:
+                for p in sorted(evidence_dir.iterdir()):
+                    if p.is_file() and p.suffix.lower() in _img_ext:
+                        # Spec-dir-relative paths only (matches report refs);
+                        # never expose absolute server paths to the client.
+                        evidence.append(
+                            {"name": p.name, "path": f"evidence-ui-check/{p.name}"}
+                        )
+            except OSError:
+                pass
+        return {
+            "exists": True,
+            "verdict": verdict,
+            "content": content,
+            "evidence": evidence,
+        }
+
+    return {"exists": False, "verdict": None, "content": None, "evidence": []}
 
 
 @router.post("/{task_id}/logs/watch")

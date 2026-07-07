@@ -16,6 +16,7 @@ import copy
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -833,15 +834,30 @@ def create_client(
         # Version is PINNED (not @latest) for reproducible QA runs — an
         # unattended agent must not silently pick up a breaking MCP release.
         # Bump this deliberately after verifying the new version.
-        mcp_servers["playwright"] = {
-            "command": "npx",
-            "args": [
-                "@playwright/mcp@0.0.41",
-                "--headless",
-                "--browser", "chromium",
-                "--viewport-size", "1280x720",
-            ],
-        }
+        playwright_cmd = [
+            "npx",
+            "@playwright/mcp@0.0.41",
+            "--headless",
+            "--browser", "chromium",
+            "--viewport-size", "1280x720",
+        ]
+        # UI checks with test-account credentials: route the server through the
+        # secret-substitution proxy so the model only ever handles ${VAR}
+        # placeholders while the browser receives real values (and responses
+        # are redacted). UI_CHECK_SECRET_VARS names the env vars to protect.
+        secret_vars = os.environ.get("UI_CHECK_SECRET_VARS", "").strip()
+        if secret_vars:
+            proxy_script = Path(__file__).parent / "mcp_secret_proxy.py"
+            mcp_servers["playwright"] = {
+                "command": sys.executable,
+                "args": [str(proxy_script), "--"] + playwright_cmd,
+                "env": {"MCP_PROXY_SECRET_VARS": secret_vars},
+            }
+        else:
+            mcp_servers["playwright"] = {
+                "command": playwright_cmd[0],
+                "args": playwright_cmd[1:],
+            }
 
     # Graphiti MCP server for knowledge graph memory
     if graphiti_mcp_enabled:

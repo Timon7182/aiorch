@@ -1278,6 +1278,8 @@ class AgentService:
             "qa_report.md",
             "QA_FIX_REQUEST.md",
             "reproduction_report.md",  # Bug-report tasks: browser reproduction + verification
+            "ui_check_report.md",  # UI-check tasks: browser verification report
+            "ui_check_result.json",  # UI-check tasks: machine-readable verdict
             "spec.md",
             "requirements.json",
         ]
@@ -1286,6 +1288,7 @@ class AgentService:
         dirs_to_sync = [
             "memory",  # Session insights and memory data
             "evidence",  # Bug-report tasks: before/after browser screenshots
+            "evidence-ui-check",  # UI-check tasks: step/error screenshots
         ]
 
         synced_count = 0
@@ -2712,6 +2715,60 @@ class AgentService:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(
                 f"[AgentService] Could not read task_metadata for bug/preview wiring ({task_id}): {e}"
+            )
+
+        # UI-check tasks: replace the build pipeline with the standalone browser
+        # verification runner (single ui_checker session — no planner/coder/worktree).
+        try:
+            uic_spec_dir = project_path / ".magestic-ai" / "specs" / spec_id
+            uic_meta_file = uic_spec_dir / "task_metadata.json"
+            uic_meta = {}
+            if uic_meta_file.exists():
+                uic_meta = json.loads(uic_meta_file.read_text())
+            if str(uic_meta.get("taskType", "")).lower() == "ui_check":
+                from .ui_check_service import (
+                    resolve_ui_check_credentials,
+                    resolve_ui_check_target,
+                )
+
+                cmd = [
+                    sys.executable,
+                    str(self.backend_path / "run.py"),
+                    "--spec", spec_id,
+                    "--project-dir", str(project_path),
+                    "--ui-check",
+                ]
+                env.pop("QUICK_MODE", None)
+                env["AGENT_MCP_ui_checker_ADD"] = "playwright"
+
+                ui_check_meta = uic_meta.get("uiCheck") or {}
+                target_url, env_entry = resolve_ui_check_target(
+                    project_path, ui_check_meta, env.get("PREVIEW_URL")
+                )
+                if target_url:
+                    env["UI_CHECK_TARGET_URL"] = target_url
+                    logger.info(
+                        f"[AgentService] UI check {task_id}: target={target_url}"
+                    )
+                else:
+                    logger.warning(
+                        f"[AgentService] UI check {task_id}: no valid target URL — "
+                        "the agent will report BLOCKED asking for one"
+                    )
+
+                # Credentials come from the already-merged env (project
+                # .magestic-ai/.env was loaded above). Only var NAMES ever reach
+                # the prompt; values are substituted by the MCP secret proxy.
+                creds = resolve_ui_check_credentials(env, ui_check_meta, env_entry)
+                if creds:
+                    env.update(creds)
+                    logger.info(
+                        f"[AgentService] UI check {task_id}: credentials wired "
+                        f"({creds.get('UI_CHECK_SECRET_VARS')})"
+                    )
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(
+                f"[AgentService] Could not wire UI check for {task_id}: {e}"
             )
 
         exec_model_display = self._task_profiles.get(task_id, {}).get("model", "sonnet")
