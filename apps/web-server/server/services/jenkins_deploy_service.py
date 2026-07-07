@@ -203,6 +203,41 @@ def _base_branch_of(worktree: Path) -> str | None:
     return None
 
 
+def _fork_point(worktree: Path) -> str | None:
+    """The commit the task branch was created at (oldest reflog entry).
+
+    More reliable than diffing against the repo's checked-out base branch:
+    when base auto-detection cut the worktree from a different branch than the
+    main checkout (e.g. talentsuite worktree from ``master`` while the checkout
+    sits on ``kms-master``), a base-branch diff reports the whole divergence as
+    "task changes". The branch's creation point never lies about that.
+    """
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], worktree)
+    if branch.returncode != 0 or not branch.stdout.strip():
+        return None
+    out = _git(["log", "-g", "--format=%H", branch.stdout.strip()], worktree)
+    if out.returncode != 0:
+        return None
+    lines = [ln for ln in out.stdout.splitlines() if ln.strip()]
+    return lines[-1] if lines else None
+
+
+def _task_changed_repo(worktree: Path, fallback: bool) -> bool:
+    """Did the task itself change this repo? Commits since the branch's fork
+    point, or dirty tracked files. Falls back to the caller's flag when the
+    reflog is unavailable."""
+    dirty = _git(["status", "--porcelain", "--untracked-files=no"], worktree)
+    if dirty.returncode == 0 and dirty.stdout.strip():
+        return True
+    fork = _fork_point(worktree)
+    if not fork:
+        return fallback
+    cnt = _git(["rev-list", "--count", f"{fork}..HEAD"], worktree)
+    if cnt.returncode != 0:
+        return fallback
+    return cnt.stdout.strip() != "0"
+
+
 # ---------------------------------------------------------------------------
 # Version bump helpers
 # ---------------------------------------------------------------------------
@@ -376,7 +411,9 @@ def _publish_library(
     if not lib or not lib.get("repo"):
         return None
     lib_entry = next((w for w in worktrees if w["name"] == lib["repo"]), None)
-    if lib_entry is None or not lib_entry.get("changed"):
+    if lib_entry is None or not _task_changed_repo(
+        lib_entry["path"], bool(lib_entry.get("changed"))
+    ):
         on_line(f"[library] {lib.get('repo')}: no changes — skipping publish")
         return None
     lib_wt: Path = lib_entry["path"]
@@ -512,7 +549,9 @@ def deploy(task_id: str) -> dict[str, Any]:
             # consumer branches (the library push is informational; the deploy
             # branch push is what Jenkins builds).
             for w in worktrees:
-                if not w.get("changed") and w["path"] != deploy_wt:
+                if w["path"] != deploy_wt and not _task_changed_repo(
+                    w["path"], bool(w.get("changed"))
+                ):
                     continue
                 wt_branch = _git_ok(["rev-parse", "--abbrev-ref", "HEAD"], w["path"])
                 _on_line(f"[push] {w['name']}: {wt_branch}")
