@@ -191,10 +191,13 @@ class MultiRepoWorkspace:
         )
 
     def _detect_base_branch(self, repo_path: Path) -> str:
-        """Per-repo base branch: DEFAULT_BRANCH env, else main/master, else current.
+        """Per-repo base branch: DEFAULT_BRANCH env, else current, else main/master.
 
         Detected per repo because two repos can legitimately differ (one on
-        ``main``, one on ``master``).
+        ``main``, one on ``master``). The checked-out branch beats the
+        main/master fallback: it is the merge target the deploy/merge flows use,
+        and a repo can carry an unrelated local ``master`` (e.g. talentsuite's
+        cts line while the checkout sits on ``kms-master``).
         """
         if self.base_branch:
             chk = self._run_git(
@@ -207,12 +210,15 @@ class MultiRepoWorkspace:
             chk = self._run_git(["rev-parse", "--verify", env_branch], repo_path)
             if chk.returncode == 0:
                 return env_branch
+        cur = self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path)
+        current = cur.stdout.strip()
+        if cur.returncode == 0 and current and current != "HEAD":
+            return current
         for branch in ("main", "master"):
             chk = self._run_git(["rev-parse", "--verify", branch], repo_path)
             if chk.returncode == 0:
                 return branch
-        cur = self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path)
-        return cur.stdout.strip() or "main"
+        return "main"
 
     def _branch_name(self) -> str:
         """Branch used across all repos for this task (custom or feature/{spec})."""

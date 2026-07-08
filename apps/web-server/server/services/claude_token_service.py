@@ -16,17 +16,20 @@ refresh-grant body — when Anthropic changes any of that, the CLI
 incorporates the change and our code keeps working.
 
 Seeding (and re-seeding from the host):
-    Option 1 — mount ``/home/saya/.claude/.credentials.json`` into the
-    container at ``/home/magesticai/.claude-seed.json``. The service copies
-    it to ``~/.claude/.credentials.json`` when the container has no
-    credentials, and also re-adopts it on (re)start when the container's
-    own credentials have gone stale and the host seed is fresher. Anthropic
-    rotates the refresh token on every refresh, so a single subscription
-    can't be shared by two clients that both refresh — the container loses
-    the race whenever the host refreshes. Re-seeding lets a host re-login
-    propagate into the container on the next restart/redeploy. (The seed is
-    a single-file bind mount, so the container must be re-created — a deploy
-    force-recreate — to see a host file the host replaced via atomic rename.)
+    Option 1 — mount the host's ``~/.claude`` DIRECTORY read-only at
+    ``/home/magesticai/.claude-seed``. The service copies its
+    ``.credentials.json`` to ``~/.claude/.credentials.json`` when the
+    container has no credentials, and re-adopts it (on start and every
+    periodic cycle) when the container's own credentials have gone stale
+    and the host seed is fresher. Anthropic rotates the refresh token on
+    every refresh, so a single credential chain can't be shared by two
+    clients that both refresh — the container loses the race whenever the
+    host refreshes. With the directory mount the host's atomic-rename
+    rewrites are always visible, so a host re-login propagates into the
+    container within one refresh cycle with no restart. (The old
+    single-file mount at ``~/.claude-seed.json`` pinned the inode from
+    container-creation time and went permanently stale after the first
+    host-side rotation; it is still read as a fallback.)
     Option 2 — set ``CLAUDE_CODE_OAUTH_REFRESH_TOKEN`` env var alongside
     ``CLAUDE_CODE_OAUTH_TOKEN``. The service constructs a minimal
     credentials.json from these (only when there is no usable seed).
@@ -56,7 +59,15 @@ REFRESH_SUBPROCESS_TIMEOUT_SECONDS = 30
 PERIODIC_REFRESH_INTERVAL_SECONDS = 30 * 60
 
 _CREDS_PATH = Path.home() / ".claude" / ".credentials.json"
-_SEED_PATH = Path.home() / ".claude-seed.json"
+# Directory-mount seed (preferred): the host's ~/.claude is bind-mounted
+# read-only at ~/.claude-seed, so the CLI's atomic-rename rewrites of
+# .credentials.json on the host are always visible here. The legacy
+# single-file mount (~/.claude-seed.json) stays pinned to the inode that
+# existed at container creation — after the host rotates its refresh token,
+# that inode holds dead credentials forever (recurring 401s) — so it is only
+# kept as a fallback for containers still running the old compose mount.
+_SEED_DIR_PATH = Path.home() / ".claude-seed" / ".credentials.json"
+_LEGACY_SEED_PATH = Path.home() / ".claude-seed.json"
 
 
 class ClaudeTokenService:
@@ -154,7 +165,7 @@ class ClaudeTokenService:
                     except OSError:
                         pass
                     logger.info(
-                        f"[ClaudeToken] (re)seeded credentials from host {_SEED_PATH}"
+                        "[ClaudeToken] (re)seeded credentials from host seed"
                     )
                     return
                 except OSError as exc:
@@ -206,17 +217,23 @@ class ClaudeTokenService:
             return None
 
     def _read_seed(self) -> dict | None:
-        """Read the host-mounted seed credentials, if present and well-formed."""
-        if not _SEED_PATH.exists():
-            return None
-        try:
-            data = json.loads(_SEED_PATH.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning(f"[ClaudeToken] seed read failed: {exc}")
-            return None
-        if not data.get("claudeAiOauth", {}).get("accessToken"):
-            return None
-        return data
+        """Read the host-mounted seed credentials, if present and well-formed.
+
+        Prefers the directory mount (always current) over the legacy
+        single-file mount (pinned to a stale inode after the host rewrites
+        its credentials via atomic rename).
+        """
+        for path in (_SEED_DIR_PATH, _LEGACY_SEED_PATH):
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text())
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning(f"[ClaudeToken] seed read failed ({path}): {exc}")
+                continue
+            if data.get("claudeAiOauth", {}).get("accessToken"):
+                return data
+        return None
 
     def _needs_refresh(self, creds: dict) -> bool:
         expires_at_ms = int(creds.get("claudeAiOauth", {}).get("expiresAt") or 0)

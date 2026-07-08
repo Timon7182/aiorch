@@ -34,6 +34,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { cn } from '../lib/utils';
+import { getAuthToken } from '../lib/auth';
 import {
   useInsightsStore,
   loadInsightsSession,
@@ -953,6 +954,33 @@ function MessageFileDownloads({
   const files = useMemo(() => extractDownloadableFiles(content), [content]);
   if (files.length === 0) return null;
 
+  const triggerDownload = (url: string, name: string) => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  // Binary download via /files/serve (streams any file with its real MIME
+  // type; /files/read refuses binaries). Needs projectPath as the serve root.
+  const downloadViaServe = async (abs: string, name: string): Promise<boolean> => {
+    if (!projectPath) return false;
+    const params = new URLSearchParams({ path: abs, root: projectPath });
+    // Token goes in the header, not the query string, so it never lands in
+    // server access logs (the query-param form is only for <img>/HTML assets).
+    const resp = await fetch(`/api/files/serve?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${getAuthToken() || ''}` },
+    });
+    if (!resp.ok) return false;
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, name);
+    URL.revokeObjectURL(url);
+    return true;
+  };
+
   const handleDownload = async (rel: string) => {
     const name = rel.split('/').pop() || 'file';
     const abs = rel.startsWith('/')
@@ -960,22 +988,26 @@ function MessageFileDownloads({
       : projectPath
         ? `${projectPath.replace(/\/+$/, '')}/${rel}`
         : rel;
+    const isBinary = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|mp4|webm)$/i.test(name);
     setBusy(rel);
     try {
+      // Screenshots and other binaries can't go through /files/read
+      // ("Cannot read binary file") — stream them via /files/serve instead.
+      if (isBinary) {
+        if (await downloadViaServe(abs, name)) return;
+        toast({ variant: 'destructive', title: t('common:chatFiles.downloadFailed', { name }) });
+        return;
+      }
       const res = await window.API.readFile(abs);
       if (!res.success || typeof res.data?.content !== 'string') {
+        if (await downloadViaServe(abs, name)) return;
         toast({ variant: 'destructive', title: t('common:chatFiles.downloadFailed', { name }) });
         return;
       }
       const url = URL.createObjectURL(
         new Blob([res.data.content], { type: 'text/plain;charset=utf-8' })
       );
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = name;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      triggerDownload(url, name);
       URL.revokeObjectURL(url);
     } catch {
       toast({ variant: 'destructive', title: t('common:chatFiles.downloadFailed', { name }) });

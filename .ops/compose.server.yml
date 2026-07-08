@@ -25,10 +25,16 @@ services:
       # (Docker creates the volume with the right ownership for the
       # container user on first start).
       - magesticai-claude-config:/home/magesticai/.claude
-      # Seed file (read-only) for the very first start when the named
-      # volume above is empty. UID 1000 on host → only readable by root in
-      # the container, but the env-var bootstrap covers the common case.
-      - /home/saya/.claude/.credentials.json:/home/magesticai/.claude-seed.json:ro
+      # Seed (read-only) for first start / re-adoption when the container's
+      # own credentials go stale. Mount the DIRECTORY, not the file: the
+      # Claude CLI on the host replaces .credentials.json via atomic rename,
+      # and a single-file bind mount stays pinned to the old inode — the
+      # container keeps seeing a dead, rotated-out refresh token until the
+      # next force-recreate (the recurring "401 Invalid authentication
+      # credentials"). A directory mount always resolves the current file,
+      # so claude_token_service self-heals from a host re-login within one
+      # 30-min refresh cycle, no container recreate needed.
+      - /home/saya/.claude:/home/magesticai/.claude-seed:ro
     cap_add:
       - NET_ADMIN
     # Loaded by ABSOLUTE path so secrets reach the container on ANY deploy
