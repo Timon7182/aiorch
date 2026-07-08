@@ -397,6 +397,16 @@ Update `implementation_plan.json`:
 "status": "in_progress"
 ```
 
+### Single Agent Mode Override
+
+If the prompt context says this task is running in `SINGLE AGENT MODE`, these rules override everything below:
+
+- Do NOT spawn subagents
+- Do NOT use the `Task` tool
+- Do NOT parallelize the work
+- Complete the task alone in this session
+- Treat any suggestion to split the work as disallowed for this run
+
 ### Using Subagents for Complex Work (Optional)
 
 **For complex subtasks**, you can spawn subagents to work in parallel. Subagents are lightweight Claude Code instances that:

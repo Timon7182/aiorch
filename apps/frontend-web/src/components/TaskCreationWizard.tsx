@@ -38,7 +38,7 @@ import { TaskClarificationWizard } from './TaskClarificationWizard';
 import { createTask, saveDraft, loadDraft, clearDraft, isDraftEmpty } from '../stores/task-store';
 import { useProjectStore } from '../stores/project-store';
 import { cn } from '../lib/utils';
-import type { Task, TaskCategory, TaskPriority, TaskComplexity, TaskImpact, TaskMetadata, ImageAttachment, TaskDraft, ModelType, ThinkingLevel, ReferencedFile, SelectedSkill, GitRepoInfo, TaskType } from '../shared/types';
+import type { Task, TaskCategory, TaskPriority, TaskComplexity, TaskImpact, TaskMetadata, ImageAttachment, TaskDraft, ModelType, ThinkingLevel, ReferencedFile, SelectedSkill, GitRepoInfo, TaskType, AgentExecutionMode } from '../shared/types';
 import type { PhaseModelConfig, PhaseThinkingConfig } from '../shared/types/settings';
 import {
   TASK_CATEGORY_LABELS,
@@ -52,6 +52,7 @@ import {
   DEFAULT_PHASE_THINKING
 } from '../shared/constants';
 import { useSettingsStore } from '../stores/settings-store';
+
 
 interface TaskCreationWizardProps {
   projectId: string;
@@ -147,6 +148,7 @@ export function TaskCreationWizard({
 
   // Execution mode: 'quick' uses simplified prompts (~70% fewer tokens)
   const [mode, setMode] = useState<'quick' | 'full'>('full');
+  const [agentMode, setAgentMode] = useState<AgentExecutionMode>('multi');
 
   // Review setting
   const [requireReviewBeforeCoding, setRequireReviewBeforeCoding] = useState(false);
@@ -213,6 +215,7 @@ export function TaskCreationWizard({
         setRequireReviewBeforeCoding(draft.requireReviewBeforeCoding ?? false);
         setSelectedSkills(draft.selectedSkills ?? []);
         setMode(draft.mode || 'full');
+        setAgentMode(draft.agentMode || 'multi');
         setTaskType(draft.taskType ?? 'feature');
         setBugSteps(draft.bugReport?.steps ?? '');
         setBugExpected(draft.bugReport?.expected ?? '');
@@ -242,6 +245,8 @@ export function TaskCreationWizard({
         // draft so we never clobber the user's in-progress edits.
         if (initialTitle) setTitle(initialTitle);
         if (initialDescription) setDescription(initialDescription);
+        setMode('full');
+        setAgentMode('multi');
       }
     }
   }, [open, projectId, settings.selectedAgentProfile, settings.customPhaseModels, settings.customPhaseThinking, selectedProfile.model, selectedProfile.thinkingLevel, initialTitle, initialDescription]);
@@ -251,7 +256,7 @@ export function TaskCreationWizard({
     if (open && projectPath) {
       fetchRepos();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, projectPath]);
 
   // (Re)load branches and the default branch whenever the target repo changes.
@@ -261,7 +266,7 @@ export function TaskCreationWizard({
       fetchBranches();
       fetchProjectDefaultBranch();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, selectedRepo, projectPath]);
 
   const fetchRepos = async () => {
@@ -353,6 +358,7 @@ export function TaskCreationWizard({
     impact,
     profileId,
     mode,
+    agentMode,
     model,
     thinkingLevel,
     phaseModels,
@@ -373,7 +379,7 @@ export function TaskCreationWizard({
       attempts: uiCheckAttempts
     },
     savedAt: new Date()
-  }), [projectId, title, description, category, priority, complexity, impact, profileId, mode, model, thinkingLevel, phaseModels, phaseThinking, images, referencedFiles, requireReviewBeforeCoding, selectedSkills, taskType, bugSteps, bugExpected, bugActual, uiCheckUrl, uiCheckEnvironment, uiCheckRole, uiCheckPreconditions, uiCheckSteps, uiCheckExpected, uiCheckAttempts]);
+  }), [projectId, title, description, category, priority, complexity, impact, profileId, mode, agentMode, model, thinkingLevel, phaseModels, phaseThinking, images, referencedFiles, requireReviewBeforeCoding, selectedSkills, taskType, bugSteps, bugExpected, bugActual, uiCheckUrl, uiCheckEnvironment, uiCheckRole, uiCheckPreconditions, uiCheckSteps, uiCheckExpected, uiCheckAttempts]);
   /**
    * Handle paste event for screenshot support
    * Strategy: Let browser handle text paste naturally, we only process images separately
@@ -781,6 +787,7 @@ export function TaskCreationWizard({
       }
       // Execution mode: 'quick' uses simplified prompts (~70% fewer tokens)
       if (mode) metadata.mode = mode;
+      if (agentMode) metadata.agentMode = agentMode;
       // Skills: inject selected skills for AI context during execution
       if (selectedSkills.length > 0) metadata.selectedSkills = selectedSkills;
       // Bug-report tasks: mark the type and attach any structured reproduction
@@ -901,814 +908,867 @@ export function TaskCreationWizard({
 
   return (
     <>
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent
-        className={cn(
-          "max-h-[90vh] p-0 overflow-hidden transition-all duration-300 ease-out bg-[hsl(204,80%,16%)]",
-          showFileExplorer ? "sm:max-w-[60vw]" : "sm:max-w-[50vw] sm:min-w-[550px]"
-        )}
-        hideCloseButton={showFileExplorer}
-      >
-        <div className="flex h-full min-h-0 overflow-hidden">
-          {/* Form content */}
-          <div
-            ref={formContainerRef}
-            onDragOver={handleContainerDragOver}
-            className="flex-1 flex flex-col p-6 min-w-0 min-h-0 overflow-y-auto relative"
-          >
-        <DialogHeader>
-          <div className="flex items-center justify-between">
-            <DialogTitle className="text-foreground">Create New Task</DialogTitle>
-            {isDraftRestored && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs bg-info/10 text-info px-2 py-1 rounded-md">
-                  Draft restored
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
-                  onClick={handleDiscardDraft}
-                >
-                  <RotateCcw className="h-3 w-3 mr-1" />
-                  Start Fresh
-                </Button>
-              </div>
-            )}
-          </div>
-          <DialogDescription>
-            Describe what you want to build. The AI will analyze your request and
-            create a detailed specification.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-5 py-4">
-          {/* Task type: Feature vs client-reported Bug report */}
-          <div className="space-y-2">
-            <Label className="text-sm font-medium text-foreground">
-              {t('bugReport.typeLabel')}
-            </Label>
-            <div className="inline-flex rounded-md border border-border p-0.5" role="group">
-              <Button
-                type="button"
-                variant={taskType === 'feature' ? 'default' : 'ghost'}
-                size="sm"
-                disabled={isCreating}
-                onClick={() => setTaskType('feature')}
-              >
-                {t('bugReport.feature')}
-              </Button>
-              <Button
-                type="button"
-                variant={taskType === 'bug' ? 'default' : 'ghost'}
-                size="sm"
-                disabled={isCreating}
-                onClick={() => setTaskType('bug')}
-              >
-                {t('bugReport.bug')}
-              </Button>
-              <Button
-                type="button"
-                variant={taskType === 'ui_check' ? 'default' : 'ghost'}
-                size="sm"
-                disabled={isCreating}
-                onClick={() => setTaskType('ui_check')}
-              >
-                {t('uiCheck.typeButton')}
-              </Button>
-            </div>
-          </div>
-
-          {/* UI-check fields - only for ui_check tasks */}
-          {taskType === 'ui_check' && (
-            <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
-              <p className="text-xs text-muted-foreground">{t('uiCheck.hint')}</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="ui-check-url" className="text-sm font-medium text-foreground">
-                    {t('uiCheck.urlLabel')}
-                  </Label>
-                  <Input
-                    id="ui-check-url"
-                    placeholder="http://192.168.88.55:3100"
-                    value={uiCheckUrl}
-                    onChange={(e) => setUiCheckUrl(e.target.value)}
-                    disabled={isCreating}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="ui-check-environment" className="text-sm font-medium text-foreground">
-                    {t('uiCheck.environmentLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
-                  </Label>
-                  <Input
-                    id="ui-check-environment"
-                    placeholder={t('uiCheck.environmentPlaceholder')}
-                    value={uiCheckEnvironment}
-                    onChange={(e) => setUiCheckEnvironment(e.target.value)}
-                    disabled={isCreating}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="ui-check-role" className="text-sm font-medium text-foreground">
-                    {t('uiCheck.roleLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
-                  </Label>
-                  <Input
-                    id="ui-check-role"
-                    placeholder={t('uiCheck.rolePlaceholder')}
-                    value={uiCheckRole}
-                    onChange={(e) => setUiCheckRole(e.target.value)}
-                    disabled={isCreating}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="ui-check-attempts" className="text-sm font-medium text-foreground">
-                    {t('uiCheck.attemptsLabel')}
-                  </Label>
-                  <Input
-                    id="ui-check-attempts"
-                    type="number"
-                    min={1}
-                    max={3}
-                    value={uiCheckAttempts}
-                    onChange={(e) => setUiCheckAttempts(Math.max(1, Math.min(3, Number(e.target.value) || 1)))}
-                    disabled={isCreating}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ui-check-preconditions" className="text-sm font-medium text-foreground">
-                  {t('uiCheck.preconditionsLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
-                </Label>
-                <Textarea
-                  id="ui-check-preconditions"
-                  placeholder={t('uiCheck.preconditionsPlaceholder')}
-                  value={uiCheckPreconditions}
-                  onChange={(e) => setUiCheckPreconditions(e.target.value)}
-                  rows={2}
-                  disabled={isCreating}
-                  className="resize-y"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ui-check-steps" className="text-sm font-medium text-foreground">
-                  {t('uiCheck.stepsLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
-                </Label>
-                <Textarea
-                  id="ui-check-steps"
-                  placeholder={t('uiCheck.stepsPlaceholder')}
-                  value={uiCheckSteps}
-                  onChange={(e) => setUiCheckSteps(e.target.value)}
-                  rows={3}
-                  disabled={isCreating}
-                  className="resize-y"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ui-check-expected" className="text-sm font-medium text-foreground">
-                  {t('uiCheck.expectedLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
-                </Label>
-                <Textarea
-                  id="ui-check-expected"
-                  placeholder={t('uiCheck.expectedPlaceholder')}
-                  value={uiCheckExpected}
-                  onChange={(e) => setUiCheckExpected(e.target.value)}
-                  rows={2}
-                  disabled={isCreating}
-                  className="resize-y"
-                />
-              </div>
-            </div>
+      <Dialog open={open} onOpenChange={handleClose}>
+        <DialogContent
+          className={cn(
+            "max-h-[90vh] p-0 overflow-hidden transition-all duration-300 ease-out bg-[hsl(204,80%,16%)]",
+            showFileExplorer ? "sm:max-w-[60vw]" : "sm:max-w-[50vw] sm:min-w-[550px]"
           )}
-
-          {/* Bug-report fields (optional) - only for bug tasks */}
-          {taskType === 'bug' && (
-            <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
-              <p className="text-xs text-muted-foreground">{t('bugReport.hint')}</p>
-              <div className="space-y-1.5">
-                <Label htmlFor="bug-steps" className="text-sm font-medium text-foreground">
-                  {t('bugReport.stepsLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
-                </Label>
-                <Textarea
-                  id="bug-steps"
-                  placeholder={t('bugReport.stepsPlaceholder')}
-                  value={bugSteps}
-                  onChange={(e) => setBugSteps(e.target.value)}
-                  rows={3}
-                  disabled={isCreating}
-                  className="resize-y"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bug-expected" className="text-sm font-medium text-foreground">
-                  {t('bugReport.expectedLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
-                </Label>
-                <Textarea
-                  id="bug-expected"
-                  placeholder={t('bugReport.expectedPlaceholder')}
-                  value={bugExpected}
-                  onChange={(e) => setBugExpected(e.target.value)}
-                  rows={2}
-                  disabled={isCreating}
-                  className="resize-y"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bug-actual" className="text-sm font-medium text-foreground">
-                  {t('bugReport.actualLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
-                </Label>
-                <Textarea
-                  id="bug-actual"
-                  placeholder={t('bugReport.actualPlaceholder')}
-                  value={bugActual}
-                  onChange={(e) => setBugActual(e.target.value)}
-                  rows={2}
-                  disabled={isCreating}
-                  className="resize-y"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Description (Primary - Required) */}
-          <div className="space-y-2">
-            <Label htmlFor="description" className="text-sm font-medium text-foreground">
-              Description <span className="text-destructive">*</span>
-            </Label>
-            {/* Wrap textarea for file @mentions */}
-            <div className="relative">
-              {/* Syntax highlight overlay for @mentions */}
-              <div
-                className="absolute inset-0 pointer-events-none overflow-hidden rounded-md border border-transparent"
-                style={{
-                  padding: '0.5rem 0.75rem',
-                  font: 'inherit',
-                  lineHeight: '1.5',
-                  wordWrap: 'break-word',
-                  whiteSpace: 'pre-wrap',
-                  color: 'transparent'
-                }}
-              >
-                {description.split(/(@[\w\-./\\]+\.\w+)/g).map((part, i) => {
-                  // Check if this part is an @mention
-                  if (part.match(/^@[\w\-./\\]+\.\w+$/)) {
-                    return (
-                      <span
-                        key={i}
-                        className="underline decoration-info/60 underline-offset-2"
-                      >
-                        {part}
+          hideCloseButton={showFileExplorer}
+        >
+          <div className="flex h-full min-h-0 overflow-hidden">
+            {/* Form content */}
+            <div
+              ref={formContainerRef}
+              onDragOver={handleContainerDragOver}
+              className="flex-1 flex flex-col p-6 min-w-0 min-h-0 overflow-y-auto relative"
+            >
+              <DialogHeader>
+                <div className="flex items-center justify-between">
+                  <DialogTitle className="text-foreground">Create New Task</DialogTitle>
+                  {isDraftRestored && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs bg-info/10 text-info px-2 py-1 rounded-md">
+                        Draft restored
                       </span>
-                    );
-                  }
-                  return <span key={i}>{part}</span>;
-                })}
-              </div>
-              <Textarea
-                ref={descriptionRef}
-                id="description"
-                placeholder="Describe the feature, bug fix, or improvement you want to implement. Be as specific as possible about requirements, constraints, and expected behavior. Type @ to reference files."
-                value={description}
-                onChange={handleDescriptionChange}
-                onPaste={handlePaste}
-                onDragOver={handleTextareaDragOver}
-                onDragLeave={handleTextareaDragLeave}
-                onDrop={handleTextareaDrop}
-                rows={5}
-                disabled={isCreating}
-                className={cn(
-                  "resize-y min-h-[120px] max-h-[400px] relative bg-transparent",
-                  // Visual feedback when dragging over textarea
-                  isDragOverTextarea && !isCreating && "border-primary bg-primary/5 ring-2 ring-primary/20"
-                )}
-                style={{ caretColor: 'auto' }}
-              />
-              {/* File autocomplete popup */}
-              {autocomplete?.show && projectPath && (
-                <FileAutocomplete
-                  query={autocomplete.query}
-                  projectPath={projectPath}
-                  position={autocomplete.position}
-                  onSelect={handleAutocompleteSelect}
-                  onClose={handleAutocompleteClose}
-                />
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Files and images can be copy/pasted or dragged & dropped into the description.
-            </p>
-
-            {/* Image Thumbnails - displayed inline below description */}
-            {images.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-2">
-                {images.map((image) => (
-                  <div
-                    key={image.id}
-                    className="relative group rounded-md border border-border overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary/50 transition-all"
-                    style={{ width: '64px', height: '64px' }}
-                    onClick={() => {
-                      // Open full-size image in a new window/modal could be added here
-                    }}
-                    title={image.filename}
-                  >
-                    {image.thumbnail ? (
-                      <img
-                        src={image.thumbnail}
-                        alt={image.filename}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-muted">
-                        <ImageIcon className="h-6 w-6 text-muted-foreground" />
-                      </div>
-                    )}
-                    {/* Remove button */}
-                    {!isCreating && (
-                      <button
-                        type="button"
-                        className="absolute top-0.5 right-0.5 h-4 w-4 flex items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setImages(prev => prev.filter(img => img.id !== image.id));
-                        }}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+                        onClick={handleDiscardDraft}
                       >
-                        <X className="h-3 w-3" />
-                      </button>
+                        <RotateCcw className="h-3 w-3 mr-1" />
+                        Start Fresh
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                <DialogDescription>
+                  Describe what you want to build. The AI will analyze your request and
+                  create a detailed specification.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-5 py-4">
+                {/* Task type: Feature vs client-reported Bug report */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-foreground">
+                    {t('bugReport.typeLabel')}
+                  </Label>
+                  <div className="inline-flex rounded-md border border-border p-0.5" role="group">
+                    <Button
+                      type="button"
+                      variant={taskType === 'feature' ? 'default' : 'ghost'}
+                      size="sm"
+                      disabled={isCreating}
+                      onClick={() => setTaskType('feature')}
+                    >
+                      {t('bugReport.feature')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={taskType === 'bug' ? 'default' : 'ghost'}
+                      size="sm"
+                      disabled={isCreating}
+                      onClick={() => setTaskType('bug')}
+                    >
+                      {t('bugReport.bug')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={taskType === 'ui_check' ? 'default' : 'ghost'}
+                      size="sm"
+                      disabled={isCreating}
+                      onClick={() => setTaskType('ui_check')}
+                    >
+                      {t('uiCheck.typeButton')}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* UI-check fields - only for ui_check tasks */}
+                {taskType === 'ui_check' && (
+                  <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">{t('uiCheck.hint')}</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ui-check-url" className="text-sm font-medium text-foreground">
+                          {t('uiCheck.urlLabel')}
+                        </Label>
+                        <Input
+                          id="ui-check-url"
+                          placeholder="http://192.168.88.55:3100"
+                          value={uiCheckUrl}
+                          onChange={(e) => setUiCheckUrl(e.target.value)}
+                          disabled={isCreating}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ui-check-environment" className="text-sm font-medium text-foreground">
+                          {t('uiCheck.environmentLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
+                        </Label>
+                        <Input
+                          id="ui-check-environment"
+                          placeholder={t('uiCheck.environmentPlaceholder')}
+                          value={uiCheckEnvironment}
+                          onChange={(e) => setUiCheckEnvironment(e.target.value)}
+                          disabled={isCreating}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ui-check-role" className="text-sm font-medium text-foreground">
+                          {t('uiCheck.roleLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
+                        </Label>
+                        <Input
+                          id="ui-check-role"
+                          placeholder={t('uiCheck.rolePlaceholder')}
+                          value={uiCheckRole}
+                          onChange={(e) => setUiCheckRole(e.target.value)}
+                          disabled={isCreating}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ui-check-attempts" className="text-sm font-medium text-foreground">
+                          {t('uiCheck.attemptsLabel')}
+                        </Label>
+                        <Input
+                          id="ui-check-attempts"
+                          type="number"
+                          min={1}
+                          max={3}
+                          value={uiCheckAttempts}
+                          onChange={(e) => setUiCheckAttempts(Math.max(1, Math.min(3, Number(e.target.value) || 1)))}
+                          disabled={isCreating}
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="ui-check-preconditions" className="text-sm font-medium text-foreground">
+                        {t('uiCheck.preconditionsLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
+                      </Label>
+                      <Textarea
+                        id="ui-check-preconditions"
+                        placeholder={t('uiCheck.preconditionsPlaceholder')}
+                        value={uiCheckPreconditions}
+                        onChange={(e) => setUiCheckPreconditions(e.target.value)}
+                        rows={2}
+                        disabled={isCreating}
+                        className="resize-y"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="ui-check-steps" className="text-sm font-medium text-foreground">
+                        {t('uiCheck.stepsLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
+                      </Label>
+                      <Textarea
+                        id="ui-check-steps"
+                        placeholder={t('uiCheck.stepsPlaceholder')}
+                        value={uiCheckSteps}
+                        onChange={(e) => setUiCheckSteps(e.target.value)}
+                        rows={3}
+                        disabled={isCreating}
+                        className="resize-y"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="ui-check-expected" className="text-sm font-medium text-foreground">
+                        {t('uiCheck.expectedLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
+                      </Label>
+                      <Textarea
+                        id="ui-check-expected"
+                        placeholder={t('uiCheck.expectedPlaceholder')}
+                        value={uiCheckExpected}
+                        onChange={(e) => setUiCheckExpected(e.target.value)}
+                        rows={2}
+                        disabled={isCreating}
+                        className="resize-y"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Bug-report fields (optional) - only for bug tasks */}
+                {taskType === 'bug' && (
+                  <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">{t('bugReport.hint')}</p>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bug-steps" className="text-sm font-medium text-foreground">
+                        {t('bugReport.stepsLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
+                      </Label>
+                      <Textarea
+                        id="bug-steps"
+                        placeholder={t('bugReport.stepsPlaceholder')}
+                        value={bugSteps}
+                        onChange={(e) => setBugSteps(e.target.value)}
+                        rows={3}
+                        disabled={isCreating}
+                        className="resize-y"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bug-expected" className="text-sm font-medium text-foreground">
+                        {t('bugReport.expectedLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
+                      </Label>
+                      <Textarea
+                        id="bug-expected"
+                        placeholder={t('bugReport.expectedPlaceholder')}
+                        value={bugExpected}
+                        onChange={(e) => setBugExpected(e.target.value)}
+                        rows={2}
+                        disabled={isCreating}
+                        className="resize-y"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bug-actual" className="text-sm font-medium text-foreground">
+                        {t('bugReport.actualLabel')} <span className="text-muted-foreground font-normal">({t('bugReport.optional')})</span>
+                      </Label>
+                      <Textarea
+                        id="bug-actual"
+                        placeholder={t('bugReport.actualPlaceholder')}
+                        value={bugActual}
+                        onChange={(e) => setBugActual(e.target.value)}
+                        rows={2}
+                        disabled={isCreating}
+                        className="resize-y"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Description (Primary - Required) */}
+                <div className="space-y-2">
+                  <Label htmlFor="description" className="text-sm font-medium text-foreground">
+                    Description <span className="text-destructive">*</span>
+                  </Label>
+                  {/* Wrap textarea for file @mentions */}
+                  <div className="relative">
+                    {/* Syntax highlight overlay for @mentions */}
+                    <div
+                      className="absolute inset-0 pointer-events-none overflow-hidden rounded-md border border-transparent"
+                      style={{
+                        padding: '0.5rem 0.75rem',
+                        font: 'inherit',
+                        lineHeight: '1.5',
+                        wordWrap: 'break-word',
+                        whiteSpace: 'pre-wrap',
+                        color: 'transparent'
+                      }}
+                    >
+                      {description.split(/(@[\w\-./\\]+\.\w+)/g).map((part, i) => {
+                        // Check if this part is an @mention
+                        if (part.match(/^@[\w\-./\\]+\.\w+$/)) {
+                          return (
+                            <span
+                              key={i}
+                              className="underline decoration-info/60 underline-offset-2"
+                            >
+                              {part}
+                            </span>
+                          );
+                        }
+                        return <span key={i}>{part}</span>;
+                      })}
+                    </div>
+                    <Textarea
+                      ref={descriptionRef}
+                      id="description"
+                      placeholder="Describe the feature, bug fix, or improvement you want to implement. Be as specific as possible about requirements, constraints, and expected behavior. Type @ to reference files."
+                      value={description}
+                      onChange={handleDescriptionChange}
+                      onPaste={handlePaste}
+                      onDragOver={handleTextareaDragOver}
+                      onDragLeave={handleTextareaDragLeave}
+                      onDrop={handleTextareaDrop}
+                      rows={5}
+                      disabled={isCreating}
+                      className={cn(
+                        "resize-y min-h-[120px] max-h-[400px] relative bg-transparent",
+                        // Visual feedback when dragging over textarea
+                        isDragOverTextarea && !isCreating && "border-primary bg-primary/5 ring-2 ring-primary/20"
+                      )}
+                      style={{ caretColor: 'auto' }}
+                    />
+                    {/* File autocomplete popup */}
+                    {autocomplete?.show && projectPath && (
+                      <FileAutocomplete
+                        query={autocomplete.query}
+                        projectPath={projectPath}
+                        position={autocomplete.position}
+                        onSelect={handleAutocompleteSelect}
+                        onClose={handleAutocompleteClose}
+                      />
                     )}
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Title (Optional - Auto-generated if empty) */}
-          <div className="space-y-2">
-            <Label htmlFor="title" className="text-sm font-medium text-foreground">
-              Task Title <span className="text-muted-foreground font-normal">(optional)</span>
-            </Label>
-            <Input
-              id="title"
-              placeholder="Leave empty to auto-generate from description"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={isCreating}
-            />
-            <p className="text-xs text-muted-foreground">
-              A short, descriptive title will be generated automatically if left empty.
-            </p>
-          </div>
-
-          {/* Execution Mode Selector */}
-          <div className="space-y-2">
-            <Label className="text-sm font-medium text-foreground">
-              Execution Mode
-            </Label>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('quick');
-                  setRequireReviewBeforeCoding(false); // Quick Mode skips review by default
-                }}
-                disabled={isCreating}
-                className={cn(
-                  "flex-1 p-3 rounded-lg border-2 transition-all text-left",
-                  mode === 'quick'
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/50 hover:bg-muted/50"
-                )}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-lg">⚡</span>
-                  <span className="font-medium text-foreground">Quick Mode</span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  ~70% fewer tokens, faster execution
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode('full')}
-                disabled={isCreating}
-                className={cn(
-                  "flex-1 p-3 rounded-lg border-2 transition-all text-left",
-                  mode === 'full'
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/50 hover:bg-muted/50"
-                )}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-lg">📋</span>
-                  <span className="font-medium text-foreground">Full Mode</span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Comprehensive analysis (default)
-                </p>
-              </button>
-            </div>
-            {mode === 'quick' && (
-              <p className="text-xs text-info bg-info/10 p-2 rounded-md">
-                Quick Mode uses simplified prompts and skips human review before coding for faster execution.
-              </p>
-            )}
-          </div>
-
-          {/* Agent Profile Selection */}
-          <AgentProfileSelector
-            profileId={profileId}
-            model={model}
-            thinkingLevel={thinkingLevel}
-            phaseModels={phaseModels}
-            phaseThinking={phaseThinking}
-            onProfileChange={(newProfileId, newModel, newThinkingLevel) => {
-              setProfileId(newProfileId);
-              setModel(newModel);
-              setThinkingLevel(newThinkingLevel);
-            }}
-            onModelChange={setModel}
-            onThinkingLevelChange={setThinkingLevel}
-            onPhaseModelsChange={setPhaseModels}
-            onPhaseThinkingChange={setPhaseThinking}
-            disabled={isCreating}
-          />
-
-          {/* Paste Success Indicator */}
-          {pasteSuccess && (
-            <div className="flex items-center gap-2 text-sm text-success animate-in fade-in slide-in-from-top-1 duration-200">
-              <ImageIcon className="h-4 w-4" />
-              Image added successfully!
-            </div>
-          )}
-
-          {/* AI Skills Section */}
-          <div className="rounded-lg border border-border">
-            <button
-              type="button"
-              onClick={() => setShowSkillsBrowser(!showSkillsBrowser)}
-              className={cn(
-                'flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors',
-                'w-full justify-between py-2 px-3 rounded-lg hover:bg-muted/50'
-              )}
-              disabled={isCreating}
-            >
-              <span className="flex items-center gap-2 font-medium">
-                {t('skills.title')}
-                {selectedSkills.length > 0 && (
-                  <Badge variant="secondary" className="h-5 px-1.5 text-xs">
-                    {selectedSkills.length}
-                  </Badge>
-                )}
-              </span>
-              <ChevronDown
-                className={cn(
-                  'h-4 w-4 transition-transform duration-200',
-                  showSkillsBrowser && 'rotate-180'
-                )}
-              />
-            </button>
-            {showSkillsBrowser && (
-              <SkillsBrowser
-                selectedSkills={selectedSkills}
-                onSkillsChange={setSelectedSkills}
-                taskDescription={description}
-                maxSkills={5}
-              />
-            )}
-          </div>
-
-          {/* Advanced Options Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className={cn(
-              'flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors',
-              'w-full justify-between py-2 px-3 rounded-md hover:bg-muted/50'
-            )}
-            disabled={isCreating}
-          >
-            <span>Classification (optional)</span>
-            {showAdvanced ? (
-              <ChevronUp className="h-4 w-4" />
-            ) : (
-              <ChevronDown className="h-4 w-4" />
-            )}
-          </button>
-
-          {/* Advanced Options */}
-          {showAdvanced && (
-            <div className="space-y-4 p-4 rounded-lg border border-border bg-muted/30">
-              <div className="grid grid-cols-2 gap-4">
-                {/* Category */}
-                <div className="space-y-2">
-                  <Label htmlFor="category" className="text-xs font-medium text-muted-foreground">
-                    Category
-                  </Label>
-                  <Select
-                    value={category}
-                    onValueChange={(value) => setCategory(value as TaskCategory)}
-                    disabled={isCreating}
-                  >
-                    <SelectTrigger id="category" className="h-9">
-                      <SelectValue placeholder="Select category" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(TASK_CATEGORY_LABELS).map(([value, label]) => (
-                        <SelectItem key={value} value={value}>
-                          {label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Priority */}
-                <div className="space-y-2">
-                  <Label htmlFor="priority" className="text-xs font-medium text-muted-foreground">
-                    Priority
-                  </Label>
-                  <Select
-                    value={priority}
-                    onValueChange={(value) => setPriority(value as TaskPriority)}
-                    disabled={isCreating}
-                  >
-                    <SelectTrigger id="priority" className="h-9">
-                      <SelectValue placeholder="Select priority" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(TASK_PRIORITY_LABELS).map(([value, label]) => (
-                        <SelectItem key={value} value={value}>
-                          {label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Complexity */}
-                <div className="space-y-2">
-                  <Label htmlFor="complexity" className="text-xs font-medium text-muted-foreground">
-                    Complexity
-                  </Label>
-                  <Select
-                    value={complexity}
-                    onValueChange={(value) => setComplexity(value as TaskComplexity)}
-                    disabled={isCreating}
-                  >
-                    <SelectTrigger id="complexity" className="h-9">
-                      <SelectValue placeholder="Select complexity" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(TASK_COMPLEXITY_LABELS).map(([value, label]) => (
-                        <SelectItem key={value} value={value}>
-                          {label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Impact */}
-                <div className="space-y-2">
-                  <Label htmlFor="impact" className="text-xs font-medium text-muted-foreground">
-                    Impact
-                  </Label>
-                  <Select
-                    value={impact}
-                    onValueChange={(value) => setImpact(value as TaskImpact)}
-                    disabled={isCreating}
-                  >
-                    <SelectTrigger id="impact" className="h-9">
-                      <SelectValue placeholder="Select impact" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(TASK_IMPACT_LABELS).map(([value, label]) => (
-                        <SelectItem key={value} value={value}>
-                          {label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <p className="text-xs text-muted-foreground">
-                These labels help organize and prioritize tasks. They&apos;re optional but useful for filtering.
-              </p>
-            </div>
-          )}
-
-          {/* Review Requirement Toggle */}
-          <div className="flex items-start gap-3 p-4 rounded-lg border border-border bg-muted/30">
-            <Checkbox
-              id="require-review"
-              checked={requireReviewBeforeCoding}
-              onCheckedChange={(checked) => setRequireReviewBeforeCoding(checked === true)}
-              disabled={isCreating}
-              className="mt-0.5"
-            />
-            <div className="flex-1 space-y-1">
-              <Label
-                htmlFor="require-review"
-                className="text-sm font-medium text-foreground cursor-pointer"
-              >
-                Require human review before coding
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                When enabled, you&apos;ll be prompted to review the spec and implementation plan before the coding phase begins. This allows you to approve, request changes, or provide feedback.
-              </p>
-            </div>
-          </div>
-
-          {/* Git Options Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowGitOptions(!showGitOptions)}
-            className={cn(
-              'flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors',
-              'w-full justify-between py-2 px-3 rounded-md hover:bg-muted/50'
-            )}
-            disabled={isCreating}
-          >
-            <span className="flex items-center gap-2">
-              <GitBranch className="h-4 w-4" />
-              Git Options (optional)
-              {baseBranch && baseBranch !== PROJECT_DEFAULT_BRANCH && (
-                <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
-                  {baseBranch}
-                </span>
-              )}
-            </span>
-            {showGitOptions ? (
-              <ChevronUp className="h-4 w-4" />
-            ) : (
-              <ChevronDown className="h-4 w-4" />
-            )}
-          </button>
-
-          {/* Git Options */}
-          {showGitOptions && (
-            <div className="space-y-4 p-4 rounded-lg border border-border bg-muted/30">
-              {repos.length > 1 && (
-                <div className="space-y-2">
-                  <Label htmlFor="target-repo" className="text-sm font-medium text-foreground">
-                    Repository
-                  </Label>
-                  <Select
-                    value={selectedRepo}
-                    onValueChange={(value) => {
-                      setSelectedRepo(value);
-                      // Branches differ per repo — reset to the new repo's default.
-                      setBaseBranch(PROJECT_DEFAULT_BRANCH);
-                    }}
-                    disabled={isCreating}
-                  >
-                    <SelectTrigger id="target-repo" className="h-9">
-                      <SelectValue placeholder="Select repository" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL_REPOS}>
-                        All repositories ({repos.filter((r) => !r.isRoot).map((r) => r.name).join(' + ')})
-                      </SelectItem>
-                      {repos.map((repo) => (
-                        <SelectItem key={repo.path} value={repo.path}>
-                          {repo.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                   <p className="text-xs text-muted-foreground">
-                    This project contains multiple git repositories. Build them all together
-                    (the task spans every repo) or pick a single one.
+                    Files and images can be copy/pasted or dragged & dropped into the description.
+                  </p>
+
+                  {/* Image Thumbnails - displayed inline below description */}
+                  {images.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {images.map((image) => (
+                        <div
+                          key={image.id}
+                          className="relative group rounded-md border border-border overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary/50 transition-all"
+                          style={{ width: '64px', height: '64px' }}
+                          onClick={() => {
+                            // Open full-size image in a new window/modal could be added here
+                          }}
+                          title={image.filename}
+                        >
+                          {image.thumbnail ? (
+                            <img
+                              src={image.thumbnail}
+                              alt={image.filename}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-muted">
+                              <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                            </div>
+                          )}
+                          {/* Remove button */}
+                          {!isCreating && (
+                            <button
+                              type="button"
+                              className="absolute top-0.5 right-0.5 h-4 w-4 flex items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setImages(prev => prev.filter(img => img.id !== image.id));
+                              }}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Title (Optional - Auto-generated if empty) */}
+                <div className="space-y-2">
+                  <Label htmlFor="title" className="text-sm font-medium text-foreground">
+                    Task Title <span className="text-muted-foreground font-normal">(optional)</span>
+                  </Label>
+                  <Input
+                    id="title"
+                    placeholder="Leave empty to auto-generate from description"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    disabled={isCreating}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    A short, descriptive title will be generated automatically if left empty.
                   </p>
                 </div>
-              )}
-              <div className="space-y-2">
-                <Label htmlFor="base-branch" className="text-sm font-medium text-foreground">
-                  Base Branch (optional)
-                </Label>
-                <Select
-                  value={baseBranch}
-                  onValueChange={setBaseBranch}
-                  disabled={isCreating || isLoadingBranches}
-                >
-                  <SelectTrigger id="base-branch" className="h-9">
-                    <SelectValue placeholder={`Use project default${projectDefaultBranch ? ` (${projectDefaultBranch})` : ''}`} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={PROJECT_DEFAULT_BRANCH}>
-                      Use project default{projectDefaultBranch ? ` (${projectDefaultBranch})` : ''}
-                    </SelectItem>
-                    {branches.map((branch) => (
-                      <SelectItem key={branch} value={branch}>
-                        {branch}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Override the branch this task&apos;s worktree will be created from. Leave empty to use the project&apos;s configured default branch.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="custom-branch-name" className="text-sm font-medium text-foreground">
-                  Branch Name (optional)
-                </Label>
-                <Input
-                  id="custom-branch-name"
-                  value={customBranchName}
-                  onChange={(e) => setCustomBranchName(e.target.value)}
-                  placeholder="hotfix/32_task"
+
+                {/* Execution Mode Selector */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-foreground">
+                    Execution Mode
+                  </Label>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('quick');
+                        setRequireReviewBeforeCoding(false); // Quick Mode skips review by default
+                      }}
+                      disabled={isCreating}
+                      className={cn(
+                        "flex-1 p-3 rounded-lg border-2 transition-all text-left",
+                        mode === 'quick'
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50 hover:bg-muted/50"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">⚡</span>
+                        <span className="font-medium text-foreground">Quick Mode</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        ~70% fewer tokens, faster execution
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMode('full')}
+                      disabled={isCreating}
+                      className={cn(
+                        "flex-1 p-3 rounded-lg border-2 transition-all text-left",
+                        mode === 'full'
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50 hover:bg-muted/50"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">📋</span>
+                        <span className="font-medium text-foreground">Full Mode</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Comprehensive analysis (default)
+                      </p>
+                    </button>
+                  </div>
+                  {mode === 'quick' && (
+                    <p className="text-xs text-info bg-info/10 p-2 rounded-md">
+                      Quick Mode uses simplified prompts and skips human review before coding for faster execution.
+                    </p>
+                  )}
+                </div>
+                {/* Agent Orchestration Mode */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-foreground">
+                    Agent Orchestration
+                  </Label>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setAgentMode('single')}
+                      disabled={isCreating}
+                      className={cn(
+                        "flex-1 p-3 rounded-lg border-2 transition-all text-left",
+                        agentMode === 'single'
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50 hover:bg-muted/50"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">1</span>
+                        <span className="font-medium text-foreground">Single Agent Mode</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        One agent handles the whole task alone without spawning subagents
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setAgentMode('multi')}
+                      disabled={isCreating}
+                      className={cn(
+                        "flex-1 p-3 rounded-lg border-2 transition-all text-left",
+                        agentMode === 'multi'
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50 hover:bg-muted/50"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">∞</span>
+                        <span className="font-medium text-foreground">Multi Agent Mode</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Planner may split work into subtasks and coder may use subagents
+                      </p>
+                    </button>
+                  </div>
+
+                  {agentMode === 'single' && (
+                    <p className="text-xs text-info bg-info/10 p-2 rounded-md">
+                      Single Agent Mode keeps the task as one unit: one planner subtask and no Task-tool subagents during implementation.
+                    </p>
+                  )}
+                </div>
+
+                {/* Agent Profile Selection */}
+                <AgentProfileSelector
+                  profileId={profileId}
+                  model={model}
+                  thinkingLevel={thinkingLevel}
+                  phaseModels={phaseModels}
+                  phaseThinking={phaseThinking}
+                  onProfileChange={(newProfileId, newModel, newThinkingLevel) => {
+                    setProfileId(newProfileId);
+                    setModel(newModel);
+                    setThinkingLevel(newThinkingLevel);
+                  }}
+                  onModelChange={setModel}
+                  onThinkingLevelChange={setThinkingLevel}
+                  onPhaseModelsChange={setPhaseModels}
+                  onPhaseThinkingChange={setPhaseThinking}
                   disabled={isCreating}
-                  className="h-9 font-mono"
-                  spellCheck={false}
-                  autoCapitalize="none"
-                  autoCorrect="off"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Name the branch created for this task (e.g. <code>hotfix/32_task</code>). Leave empty to use the default <code>feature/&lt;task&gt;</code>.
-                </p>
+
+                {/* Paste Success Indicator */}
+                {pasteSuccess && (
+                  <div className="flex items-center gap-2 text-sm text-success animate-in fade-in slide-in-from-top-1 duration-200">
+                    <ImageIcon className="h-4 w-4" />
+                    Image added successfully!
+                  </div>
+                )}
+
+                {/* AI Skills Section */}
+                <div className="rounded-lg border border-border">
+                  <button
+                    type="button"
+                    onClick={() => setShowSkillsBrowser(!showSkillsBrowser)}
+                    className={cn(
+                      'flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors',
+                      'w-full justify-between py-2 px-3 rounded-lg hover:bg-muted/50'
+                    )}
+                    disabled={isCreating}
+                  >
+                    <span className="flex items-center gap-2 font-medium">
+                      {t('skills.title')}
+                      {selectedSkills.length > 0 && (
+                        <Badge variant="secondary" className="h-5 px-1.5 text-xs">
+                          {selectedSkills.length}
+                        </Badge>
+                      )}
+                    </span>
+                    <ChevronDown
+                      className={cn(
+                        'h-4 w-4 transition-transform duration-200',
+                        showSkillsBrowser && 'rotate-180'
+                      )}
+                    />
+                  </button>
+                  {showSkillsBrowser && (
+                    <SkillsBrowser
+                      selectedSkills={selectedSkills}
+                      onSkillsChange={setSelectedSkills}
+                      taskDescription={description}
+                      maxSkills={5}
+                    />
+                  )}
+                </div>
+
+                {/* Advanced Options Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className={cn(
+                    'flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors',
+                    'w-full justify-between py-2 px-3 rounded-md hover:bg-muted/50'
+                  )}
+                  disabled={isCreating}
+                >
+                  <span>Classification (optional)</span>
+                  {showAdvanced ? (
+                    <ChevronUp className="h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" />
+                  )}
+                </button>
+
+                {/* Advanced Options */}
+                {showAdvanced && (
+                  <div className="space-y-4 p-4 rounded-lg border border-border bg-muted/30">
+                    <div className="grid grid-cols-2 gap-4">
+                      {/* Category */}
+                      <div className="space-y-2">
+                        <Label htmlFor="category" className="text-xs font-medium text-muted-foreground">
+                          Category
+                        </Label>
+                        <Select
+                          value={category}
+                          onValueChange={(value) => setCategory(value as TaskCategory)}
+                          disabled={isCreating}
+                        >
+                          <SelectTrigger id="category" className="h-9">
+                            <SelectValue placeholder="Select category" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(TASK_CATEGORY_LABELS).map(([value, label]) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Priority */}
+                      <div className="space-y-2">
+                        <Label htmlFor="priority" className="text-xs font-medium text-muted-foreground">
+                          Priority
+                        </Label>
+                        <Select
+                          value={priority}
+                          onValueChange={(value) => setPriority(value as TaskPriority)}
+                          disabled={isCreating}
+                        >
+                          <SelectTrigger id="priority" className="h-9">
+                            <SelectValue placeholder="Select priority" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(TASK_PRIORITY_LABELS).map(([value, label]) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Complexity */}
+                      <div className="space-y-2">
+                        <Label htmlFor="complexity" className="text-xs font-medium text-muted-foreground">
+                          Complexity
+                        </Label>
+                        <Select
+                          value={complexity}
+                          onValueChange={(value) => setComplexity(value as TaskComplexity)}
+                          disabled={isCreating}
+                        >
+                          <SelectTrigger id="complexity" className="h-9">
+                            <SelectValue placeholder="Select complexity" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(TASK_COMPLEXITY_LABELS).map(([value, label]) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Impact */}
+                      <div className="space-y-2">
+                        <Label htmlFor="impact" className="text-xs font-medium text-muted-foreground">
+                          Impact
+                        </Label>
+                        <Select
+                          value={impact}
+                          onValueChange={(value) => setImpact(value as TaskImpact)}
+                          disabled={isCreating}
+                        >
+                          <SelectTrigger id="impact" className="h-9">
+                            <SelectValue placeholder="Select impact" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(TASK_IMPACT_LABELS).map(([value, label]) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-muted-foreground">
+                      These labels help organize and prioritize tasks. They&apos;re optional but useful for filtering.
+                    </p>
+                  </div>
+                )}
+
+                {/* Review Requirement Toggle */}
+                <div className="flex items-start gap-3 p-4 rounded-lg border border-border bg-muted/30">
+                  <Checkbox
+                    id="require-review"
+                    checked={requireReviewBeforeCoding}
+                    onCheckedChange={(checked) => setRequireReviewBeforeCoding(checked === true)}
+                    disabled={isCreating}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1 space-y-1">
+                    <Label
+                      htmlFor="require-review"
+                      className="text-sm font-medium text-foreground cursor-pointer"
+                    >
+                      Require human review before coding
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      When enabled, you&apos;ll be prompted to review the spec and implementation plan before the coding phase begins. This allows you to approve, request changes, or provide feedback.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Git Options Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowGitOptions(!showGitOptions)}
+                  className={cn(
+                    'flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors',
+                    'w-full justify-between py-2 px-3 rounded-md hover:bg-muted/50'
+                  )}
+                  disabled={isCreating}
+                >
+                  <span className="flex items-center gap-2">
+                    <GitBranch className="h-4 w-4" />
+                    Git Options (optional)
+                    {baseBranch && baseBranch !== PROJECT_DEFAULT_BRANCH && (
+                      <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
+                        {baseBranch}
+                      </span>
+                    )}
+                  </span>
+                  {showGitOptions ? (
+                    <ChevronUp className="h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" />
+                  )}
+                </button>
+
+                {/* Git Options */}
+                {showGitOptions && (
+                  <div className="space-y-4 p-4 rounded-lg border border-border bg-muted/30">
+                    {repos.length > 1 && (
+                      <div className="space-y-2">
+                        <Label htmlFor="target-repo" className="text-sm font-medium text-foreground">
+                          Repository
+                        </Label>
+                        <Select
+                          value={selectedRepo}
+                          onValueChange={(value) => {
+                            setSelectedRepo(value);
+                            // Branches differ per repo — reset to the new repo's default.
+                            setBaseBranch(PROJECT_DEFAULT_BRANCH);
+                          }}
+                          disabled={isCreating}
+                        >
+                          <SelectTrigger id="target-repo" className="h-9">
+                            <SelectValue placeholder="Select repository" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={ALL_REPOS}>
+                              All repositories ({repos.filter((r) => !r.isRoot).map((r) => r.name).join(' + ')})
+                            </SelectItem>
+                            {repos.map((repo) => (
+                              <SelectItem key={repo.path} value={repo.path}>
+                                {repo.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          This project contains multiple git repositories. Build them all together
+                          (the task spans every repo) or pick a single one.
+                        </p>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label htmlFor="base-branch" className="text-sm font-medium text-foreground">
+                        Base Branch (optional)
+                      </Label>
+                      <Select
+                        value={baseBranch}
+                        onValueChange={setBaseBranch}
+                        disabled={isCreating || isLoadingBranches}
+                      >
+                        <SelectTrigger id="base-branch" className="h-9">
+                          <SelectValue placeholder={`Use project default${projectDefaultBranch ? ` (${projectDefaultBranch})` : ''}`} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={PROJECT_DEFAULT_BRANCH}>
+                            Use project default{projectDefaultBranch ? ` (${projectDefaultBranch})` : ''}
+                          </SelectItem>
+                          {branches.map((branch) => (
+                            <SelectItem key={branch} value={branch}>
+                              {branch}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Override the branch this task&apos;s worktree will be created from. Leave empty to use the project&apos;s configured default branch.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="custom-branch-name" className="text-sm font-medium text-foreground">
+                        Branch Name (optional)
+                      </Label>
+                      <Input
+                        id="custom-branch-name"
+                        value={customBranchName}
+                        onChange={(e) => setCustomBranchName(e.target.value)}
+                        placeholder="hotfix/32_task"
+                        disabled={isCreating}
+                        className="h-9 font-mono"
+                        spellCheck={false}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Name the branch created for this task (e.g. <code>hotfix/32_task</code>). Leave empty to use the default <code>feature/&lt;task&gt;</code>.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error */}
+                {error && (
+                  <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
+                    <X className="h-4 w-4 mt-0.5 shrink-0" />
+                    <span>{error}</span>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
 
-          {/* Error */}
-          {error && (
-            <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
-              <X className="h-4 w-4 mt-0.5 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <div className="flex items-center gap-2">
-            {/* File Explorer Toggle Button */}
-            {/* Only render Browse Files button when projectPath is available.
+              <DialogFooter>
+                <div className="flex items-center gap-2">
+                  {/* File Explorer Toggle Button */}
+                  {/* Only render Browse Files button when projectPath is available.
                 Without a valid project path, the file explorer cannot load files.
                 This was the root cause of the button not appearing - App.tsx was
                 passing the wrong projectId in multi-tab scenarios. */}
+                  {projectPath && (
+                    <Button
+                      type="button"
+                      variant={showFileExplorer ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => {
+                        setShowFileExplorer(!showFileExplorer);
+                      }}
+                      disabled={isCreating}
+                      className="gap-1.5"
+                    >
+                      <FolderTree className="h-4 w-4" />
+                      {showFileExplorer ? 'Hide Files' : 'Browse Files'}
+                    </Button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" onClick={handleClose} disabled={isCreating}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleCreate} disabled={isCreating || !description.trim()}>
+                    {isCreating ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      'Create Task'
+                    )}
+                  </Button>
+                </div>
+              </DialogFooter>
+            </div>
+
+            {/* File Explorer Drawer */}
+            {/* Only mount the drawer when projectPath is available.
+              This prevents the component from trying to load files without a valid path. */}
             {projectPath && (
-              <Button
-                type="button"
-                variant={showFileExplorer ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => {
-                  setShowFileExplorer(!showFileExplorer);
-                }}
-                disabled={isCreating}
-                className="gap-1.5"
-              >
-                <FolderTree className="h-4 w-4" />
-                {showFileExplorer ? 'Hide Files' : 'Browse Files'}
-              </Button>
+              <TaskFileExplorerDrawer
+                isOpen={showFileExplorer}
+                onClose={() => setShowFileExplorer(false)}
+                projectPath={projectPath}
+              />
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handleClose} disabled={isCreating}>
-              Cancel
-            </Button>
-            <Button onClick={handleCreate} disabled={isCreating || !description.trim()}>
-              {isCreating ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                'Create Task'
-              )}
-            </Button>
-          </div>
-        </DialogFooter>
-          </div>
+        </DialogContent>
+      </Dialog>
 
-          {/* File Explorer Drawer */}
-          {/* Only mount the drawer when projectPath is available.
-              This prevents the component from trying to load files without a valid path. */}
-          {projectPath && (
-            <TaskFileExplorerDrawer
-              isOpen={showFileExplorer}
-              onClose={() => setShowFileExplorer(false)}
-              projectPath={projectPath}
-            />
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-
-    {clarificationTask && (
-      <TaskClarificationWizard
-        open={clarificationOpen}
-        onOpenChange={(isOpen) => {
-          setClarificationOpen(isOpen);
-          if (!isOpen) setClarificationTask(null);
-        }}
-        taskId={clarificationTask.id}
-        taskTitle={clarificationTask.title}
-        taskDescription={clarificationTask.description}
-        projectId={projectId}
-      />
-    )}
+      {clarificationTask && (
+        <TaskClarificationWizard
+          open={clarificationOpen}
+          onOpenChange={(isOpen) => {
+            setClarificationOpen(isOpen);
+            if (!isOpen) setClarificationTask(null);
+          }}
+          taskId={clarificationTask.id}
+          taskTitle={clarificationTask.title}
+          taskDescription={clarificationTask.description}
+          projectId={projectId}
+        />
+      )}
     </>
   );
 }

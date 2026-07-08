@@ -133,6 +133,8 @@ export interface ImageAttachment {
 // Task type discriminator (feature work, a client-reported bug report,
 // or an on-demand browser UI verification)
 export type TaskType = 'feature' | 'bug' | 'ui_check';
+export type AgentExecutionMode = 'single' | 'multi';
+
 
 // Structured bug report (only meaningful when taskType === 'bug')
 export interface BugReport {
@@ -205,6 +207,7 @@ export interface TaskDraft {
   impact: TaskImpact | '';
   profileId?: string;  // Agent profile ID ('auto', 'complex', 'balanced', 'quick', 'custom')
   mode?: 'quick' | 'full'; // Execution mode
+  agentMode?: AgentExecutionMode;
   model: ModelType | '';
   thinkingLevel: ThinkingLevel | '';
   // Auto profile - per-phase configuration
@@ -297,6 +300,8 @@ export interface TaskMetadata {
 
   // Execution mode
   mode?: 'quick' | 'full';  // 'quick' uses simplified prompts (~70% fewer tokens), 'full' for comprehensive
+  // Agent orchestration mode
+  agentMode?: AgentExecutionMode;  // 'single' = one agent, no subagents; 'multi' = current default orchestration
 
   // Archive status
   archivedAt?: string;  // ISO date when task was archived

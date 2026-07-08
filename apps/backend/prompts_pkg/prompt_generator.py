@@ -75,6 +75,25 @@ relative to this location. Do NOT use absolute paths.
 """
 
 
+def _load_task_metadata(spec_dir: Path) -> dict:
+    """Load task_metadata.json if present."""
+    task_metadata_file = spec_dir / "task_metadata.json"
+    if not task_metadata_file.exists():
+        return {}
+
+    try:
+        return json.loads(task_metadata_file.read_text())
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _get_agent_mode(spec_dir: Path) -> str:
+    """Return 'single' or 'multi' (default)."""
+    metadata = _load_task_metadata(spec_dir)
+    mode = metadata.get("agentMode")
+    return "single" if mode == "single" else "multi"
+
+
 def generate_subtask_prompt(
     spec_dir: Path,
     project_dir: Path,
@@ -108,6 +127,8 @@ def generate_subtask_prompt(
     # Get relative spec path
     relative_spec = get_relative_spec_path(spec_dir, project_dir)
 
+    agent_mode = _get_agent_mode(spec_dir)
+
     # Build the prompt
     sections = []
 
@@ -115,7 +136,8 @@ def generate_subtask_prompt(
     sections.append(generate_environment_context(project_dir, spec_dir))
 
     # Header
-    sections.append(f"""# Subtask Implementation Task
+    sections.append(
+        f"""# Subtask Implementation Task
 
 **Subtask ID:** `{subtask_id}`
 **Phase:** {phase.get("name", phase.get("id", "Unknown"))}
@@ -124,16 +146,19 @@ def generate_subtask_prompt(
 ## Description
 
 {description}
-""")
+"""
+    )
 
     # Recovery context if this is a retry
     if attempt_count > 0:
-        sections.append(f"""
+        sections.append(
+            f"""
 ## ⚠️ RETRY ATTEMPT ({attempt_count + 1})
 
 This subtask has been attempted {attempt_count} time(s) before without success.
 You MUST use a DIFFERENT approach than previous attempts.
-""")
+"""
+        )
         if recovery_hints:
             sections.append("**Previous attempt insights:**")
             for hint in recovery_hints:
@@ -166,29 +191,35 @@ You MUST use a DIFFERENT approach than previous attempts.
     v_type = verification.get("type", "manual")
 
     if v_type == "command":
-        sections.append(f"""Run this command to verify:
+        sections.append(
+            f"""Run this command to verify:
 ```bash
 {verification.get("command", 'echo "No command specified"')}
 ```
 Expected: {verification.get("expected", "Success")}
-""")
+"""
+        )
     elif v_type == "api":
         method = verification.get("method", "GET")
         url = verification.get("url", "http://localhost")
         body = verification.get("body", {})
         expected_status = verification.get("expected_status", 200)
-        sections.append(f"""Test the API endpoint:
+        sections.append(
+            f"""Test the API endpoint:
 ```bash
 curl -X {method} {url} -H "Content-Type: application/json" {f"-d '{json.dumps(body)}'" if body else ""}
 ```
 Expected status: {expected_status}
-""")
+"""
+        )
     elif v_type == "browser":
         url = verification.get("url", "http://localhost:3000")
         checks = verification.get("checks", [])
-        sections.append(f"""Open in browser: {url}
+        sections.append(
+            f"""Open in browser: {url}
 
-Verify:""")
+Verify:"""
+        )
         for check in checks:
             sections.append(f"- [ ] {check}")
         sections.append("")
@@ -203,7 +234,8 @@ Verify:""")
         sections.append(f"**Manual Verification:**\n{instructions}\n")
 
     # Instructions
-    sections.append(f"""## Instructions
+    sections.append(
+        f"""## Instructions
 
 1. **Read the pattern files** to understand code style and conventions
 2. **Read the files to modify** (if any) to understand current implementation
@@ -230,7 +262,25 @@ Before marking complete, verify:
 - Focus ONLY on this subtask - don't modify unrelated code
 - If verification fails, FIX IT before committing
 - If you encounter a blocker, document it in build-progress.txt
-""")
+"""
+    )
+
+    if agent_mode == "single":
+        sections.append(
+            """## SINGLE AGENT MODE CONSTRAINTS
+
+This task is running in SINGLE AGENT MODE.
+
+Rules:
+- Do NOT spawn subagents
+- Do NOT use the Task tool
+- Do NOT split the work across parallel agents
+- Implement the task sequentially by yourself from start to finish
+- Stay within this single execution context
+
+If the task feels large, still continue alone and finish it yourself.
+"""
+        )
 
     return "\n".join(sections)
 
@@ -287,6 +337,28 @@ not in the spec directory.
 ---
 
 """
+
+    agent_mode = _get_agent_mode(spec_dir)
+
+    if agent_mode == "single":
+        header += """## SINGLE AGENT MODE
+
+This task is running in SINGLE AGENT MODE.
+
+Planning rules:
+- Create exactly ONE phase
+- Create exactly ONE subtask for the whole task
+- Do NOT split the work into multiple subtasks
+- Do NOT break the work into parallel workstreams
+- The single subtask should represent the full implementation end-to-end
+
+The coding agent will execute the whole task alone, so your implementation_plan.json
+must stay intentionally simple: one phase, one subtask, one sequential flow.
+
+---
+
+"""
+
     return header + prompt
 
 

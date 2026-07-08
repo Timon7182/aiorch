@@ -244,6 +244,8 @@ Do NOT just describe what the file should contain - you must actually call the W
 
 Based on the workflow type and services involved, create the implementation plan.
 
+If the environment or spec context says `SINGLE AGENT MODE`, create exactly one phase with exactly one subtask covering the full task. Do not decompose further.
+
 ### Plan Structure
 
 ```json

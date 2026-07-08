@@ -2539,6 +2539,10 @@ class AgentService:
                     if "requireReviewBeforeCoding" in frontend_metadata:
                         task_metadata["requireReviewBeforeCoding"] = frontend_metadata["requireReviewBeforeCoding"]
 
+                    # Sync agentMode from frontend to backend
+                    if "agentMode" in frontend_metadata:
+                        task_metadata["agentMode"] = frontend_metadata["agentMode"]
+
                     # Save updated task_metadata.json
                     task_metadata_file.write_text(json.dumps(task_metadata, indent=2))
 
