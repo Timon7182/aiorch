@@ -813,9 +813,10 @@ class InsightsMessageRequest(BaseModel):
     # Chat history stays keyed to the project, shared across repos.
     repo: str | None = None
     # Files/images attached to this message. Each item is a ChatAttachment dict:
-    # {id, kind: 'image'|'text', filename, mimeType, size, data (base64), thumbnail?}.
-    # Text files are inlined into the prompt; images are written to disk and read
-    # by the agent (Claude vision). None => no attachments.
+    # {id, kind: 'image'|'text'|'document', filename, mimeType, size, data (base64), thumbnail?}.
+    # Text files are inlined into the prompt; images and documents (PDF/DOCX) are
+    # written to disk and read by the agent (Claude vision reads images/PDFs
+    # natively; DOCX is text-extracted server-side). None => no attachments.
     attachments: list[dict] | None = None
 
 

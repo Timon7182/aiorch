@@ -73,11 +73,13 @@ export type InsightsChatRole = 'user' | 'assistant';
 
 // An attachment sent with a chat message. Images are forwarded to vision-capable
 // models (written to disk + read by the agent); text/code files have their
-// contents inlined into the prompt. `data` is always base64 (no data-URL prefix)
-// for a uniform transport contract — the backend decodes both kinds.
+// contents inlined into the prompt; documents (PDF/DOCX) are written to disk and
+// read by the agent (PDFs natively, DOCX via server-side text extraction).
+// `data` is always base64 (no data-URL prefix) for a uniform transport contract —
+// for images/documents it's the raw bytes, for text the UTF-8 contents.
 export interface ChatAttachment {
   id: string;
-  kind: 'image' | 'text';
+  kind: 'image' | 'text' | 'document';
   filename: string;
   mimeType: string;
   size: number;        // bytes (decoded size)

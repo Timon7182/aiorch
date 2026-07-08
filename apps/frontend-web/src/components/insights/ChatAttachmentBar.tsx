@@ -14,7 +14,10 @@ import {
 /** Per-file cap for inlined text/code attachments (their contents go into the prompt). */
 export const MAX_TEXT_ATTACHMENT_SIZE = 256 * 1024; // 256 KB
 
-/** Max attachments per message (images + text combined). */
+/** Per-file cap for binary document attachments (PDF/DOCX). */
+export const MAX_DOCUMENT_ATTACHMENT_SIZE = 10 * 1024 * 1024; // 10 MB
+
+/** Max attachments per message (images + text + documents combined). */
 export const MAX_CHAT_ATTACHMENTS = 10;
 
 // File extensions we treat as inlinable text/code even when the browser reports
@@ -34,12 +37,30 @@ const TEXT_MIME_TYPES = [
   'application/x-httpd-php',
 ];
 
-/** Accept attribute for the chat file picker: images plus common text/code types. */
+// Rich binary documents (PDF / Word). Sent as raw bytes (base64) and read by
+// the agent from disk — never inlined as UTF-8 text in the browser.
+const DOCUMENT_EXTENSIONS = ['.pdf', '.docx'];
+
+const DOCUMENT_MIME_TYPES = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+];
+
+/** Accept attribute for the chat file picker: images, PDF/DOCX docs, and text/code. */
 export const CHAT_FILE_ACCEPT = [
   ...ALLOWED_IMAGE_TYPES,
+  ...DOCUMENT_MIME_TYPES,
+  ...DOCUMENT_EXTENSIONS,
   'text/*',
   ...TEXT_EXTENSIONS,
 ].join(',');
+
+/** Whether a file is a supported rich document (PDF or Word), sent as raw bytes. */
+function looksLikeDocument(file: File): boolean {
+  if (DOCUMENT_MIME_TYPES.includes(file.type)) return true;
+  const lower = file.name.toLowerCase();
+  return DOCUMENT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
 
 /** Whether a file should be treated as an inlinable text/code attachment. */
 function looksLikeText(file: File): boolean {
@@ -83,17 +104,37 @@ export async function processChatFiles(
 
   for (const file of toProcess) {
     const isImage = isValidImageType(file);
-    const isText = !isImage && looksLikeText(file);
+    const isDoc = !isImage && looksLikeDocument(file);
+    const isText = !isImage && !isDoc && looksLikeText(file);
 
-    if (!isImage && !isText) {
-      errors.push(`"${file.name}" is not a supported type (images or text/code files only).`);
+    if (!isImage && !isDoc && !isText) {
+      errors.push(`"${file.name}" is not a supported type (images, PDF/DOCX documents, or text/code files only).`);
       continue;
     }
 
     try {
       const filename = resolveFilename(file.name, [...takenNames, ...out.map((a) => a.filename)]);
 
-      if (isImage) {
+      if (isDoc) {
+        if (file.size > MAX_DOCUMENT_ATTACHMENT_SIZE) {
+          errors.push(`"${file.name}" exceeds ${formatFileSize(MAX_DOCUMENT_ATTACHMENT_SIZE)}. Attach a smaller document.`);
+          continue;
+        }
+        const lower = filename.toLowerCase();
+        const dataUrl = await fileToBase64(file); // raw bytes, base64 (data-URL prefix stripped below)
+        out.push({
+          id: generateImageId(),
+          kind: 'document',
+          filename,
+          mimeType:
+            file.type ||
+            (lower.endsWith('.pdf')
+              ? 'application/pdf'
+              : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+          size: file.size,
+          data: dataUrl.split(',')[1],
+        });
+      } else if (isImage) {
         if (file.size > MAX_IMAGE_SIZE) {
           errors.push(`"${file.name}" is larger than 10MB. Consider compressing it.`);
           // Still allow the upload, just warn (mirrors task image-upload behavior).
@@ -173,7 +214,7 @@ export function ChatAttachmentBar({ attachments, onRemove, error, className }: C
                   {att.filename}
                 </p>
                 <p className="text-[10px] text-muted-foreground">
-                  {att.kind === 'image' ? 'Image' : 'Text'} · {formatFileSize(att.size)}
+                  {att.kind === 'image' ? 'Image' : att.kind === 'document' ? 'Document' : 'Text'} · {formatFileSize(att.size)}
                 </p>
               </div>
               {onRemove && (

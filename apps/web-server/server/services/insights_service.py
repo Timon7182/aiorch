@@ -7,11 +7,14 @@ Streams responses via WebSocket and persists sessions to disk.
 
 import asyncio
 import base64
+import html
+import io
 import json
 import logging
 import re
 import shutil
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +25,32 @@ from .branch_worktree import ensure_branch_worktree
 from .insights_providers import get_provider
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_docx_text(raw: bytes) -> str | None:
+    """Best-effort text extraction from a .docx, using only the stdlib.
+
+    A ``.docx`` is a zip archive whose body lives in ``word/document.xml``. We
+    map paragraph / line-break / tab tags to their whitespace equivalents, strip
+    the remaining XML tags, and unescape entities. This is good enough to feed a
+    work order, letter, or spec into the prompt — it is not a full converter
+    (tables collapse to plain lines, images/embeds are dropped). Returns ``None``
+    if the file isn't a readable Word document.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8", errors="replace")
+    except (zipfile.BadZipFile, KeyError, OSError) as e:
+        logger.warning(f"[InsightsService] Could not read .docx body: {e}")
+        return None
+    # Paragraph and break boundaries -> newlines; tabs -> tabs.
+    xml = re.sub(r"</w:p>", "\n", xml)
+    xml = re.sub(r"<w:br\s*/?>", "\n", xml)
+    xml = re.sub(r"<w:tab\s*/?>", "\t", xml)
+    text = re.sub(r"<[^>]+>", "", xml)
+    text = html.unescape(text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text or None
 
 
 def _parse_task_json(raw: str) -> dict:
@@ -348,12 +377,12 @@ class InsightsService:
         Returns ``(claude_suffix, generic_suffix, attachment_dir)``:
 
         - ``claude_suffix`` — instructs the agent to ``Read`` the written files
-          (text *and* images). Keeping large content off the CLI argv avoids
-          command-line length limits (notably 32 KB on Windows) and lets Claude
-          view images as vision input.
-        - ``generic_suffix`` — inlines text-file contents (truncated) and notes
-          images, for providers without file tools (they get the message via an
-          API body, so length isn't an argv concern).
+          (text, images, PDFs, and extracted-DOCX text). Keeping large content
+          off the CLI argv avoids command-line length limits (notably 32 KB on
+          Windows) and lets Claude view images/PDFs as vision input.
+        - ``generic_suffix`` — inlines text-file and extracted-DOCX contents
+          (truncated) and notes images/PDFs, for providers without file tools
+          (they get the message via an API body, so length isn't an argv concern).
         - ``attachment_dir`` — the per-turn directory to grant the Claude CLI via
           ``--add-dir`` so it can read the files regardless of cwd / branch
           worktree. ``None`` when nothing was written.
@@ -365,9 +394,10 @@ class InsightsService:
             project_path / ".magestic-ai" / "insights" / "attachments" / session_id / turn_id
         )
         written_any = False
-        read_paths: list[Path] = []   # text + image paths for the Claude Read instruction
+        read_paths: list[Path] = []   # text + image + doc paths for the Claude Read instruction
         inline_blocks: list[str] = [] # inlined text contents for generic providers
         image_notes: list[str] = []   # image filenames noted for generic providers
+        doc_notes: list[str] = []     # binary doc (PDF) filenames noted for generic providers
 
         for att in attachments:
             if not isinstance(att, dict):
@@ -413,6 +443,55 @@ class InsightsService:
                     snippet = snippet[: self.MAX_INLINE_TEXT_CHARS] + "\n… [truncated]"
                 inline_blocks.append(f"\n\n--- Attached file: {safe_name} ---\n```\n{snippet}\n```")
 
+            elif kind == "document":
+                try:
+                    raw = base64.b64decode(data_b64)
+                except Exception as e:
+                    logger.warning(f"[InsightsService] Failed to decode document attachment {safe_name!r}: {e}")
+                    continue
+                lower = safe_name.lower()
+                is_pdf = lower.endswith(".pdf") or att.get("mimeType") == "application/pdf"
+
+                if is_pdf:
+                    # Claude's Read tool renders PDFs natively (text + layout), so
+                    # write the raw bytes and let the agent read them. Generic
+                    # providers can't ingest a binary PDF, so we only note it.
+                    try:
+                        turn_dir.mkdir(parents=True, exist_ok=True)
+                        dest = turn_dir / safe_name
+                        dest.write_bytes(raw)
+                        dest.chmod(0o600)
+                        written_any = True
+                        read_paths.append(dest)
+                        doc_notes.append(safe_name)
+                    except Exception as e:
+                        logger.warning(f"[InsightsService] Failed to write PDF attachment {safe_name!r}: {e}")
+                    continue
+
+                # .docx (or other Word doc): the Read tool can't parse the binary
+                # zip, so extract text server-side and write it as a .txt sidecar.
+                text = _extract_docx_text(raw)
+                if not text:
+                    doc_notes.append(safe_name)
+                    logger.warning(f"[InsightsService] No extractable text in document {safe_name!r}")
+                    continue
+                try:
+                    turn_dir.mkdir(parents=True, exist_ok=True)
+                    dest = turn_dir / f"{safe_name}.txt"
+                    dest.write_text(text, encoding="utf-8")
+                    dest.chmod(0o600)
+                    written_any = True
+                    read_paths.append(dest)
+                except Exception as e:
+                    logger.warning(f"[InsightsService] Failed to write document text for {safe_name!r}: {e}")
+                # Generic path: inline the (truncated) extracted text.
+                snippet = text
+                if len(snippet) > self.MAX_INLINE_TEXT_CHARS:
+                    snippet = snippet[: self.MAX_INLINE_TEXT_CHARS] + "\n… [truncated]"
+                inline_blocks.append(
+                    f"\n\n--- Attached document (extracted text): {safe_name} ---\n```\n{snippet}\n```"
+                )
+
         claude_suffix = ""
         if read_paths:
             listed = ", ".join(str(p) for p in read_paths)
@@ -426,6 +505,11 @@ class InsightsService:
             generic_parts.append(
                 f"\n\n[The user also attached image(s): {', '.join(image_notes)}. "
                 "Image viewing is only supported with the Claude provider.]"
+            )
+        if doc_notes:
+            generic_parts.append(
+                f"\n\n[The user also attached document(s): {', '.join(doc_notes)}. "
+                "Reading PDF documents is only supported with the Claude provider.]"
             )
         generic_suffix = "".join(generic_parts)
 
