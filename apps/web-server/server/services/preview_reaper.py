@@ -7,9 +7,13 @@ down previews older than the TTL. Keeps disk usage bounded without anyone clicki
 Runs as a daemon thread (ssh_service/paramiko is blocking). Started/stopped from
 the FastAPI lifespan handler.
 
+Each preview now carries its own ``expires_at`` (set at deploy, bumped by the
+``extend`` op), so the TTL passed here is only a fallback for legacy previews that
+predate that field — the runner reaps on ``expires_at`` first.
+
 Env:
-  PREVIEW_TTL_HOURS          default 24  — previews older than this are reaped
-  PREVIEW_REAP_INTERVAL_MIN  default 30  — sweep cadence
+  PREVIEW_TTL_HOURS          default 2   — fallback lifespan for previews w/o expires_at
+  PREVIEW_REAP_INTERVAL_MIN  default 5   — sweep cadence (short, to honor 1-2h TTLs)
   PREVIEW_REAPER_ENABLED     default 1   — set 0 to disable
 """
 
@@ -30,16 +34,16 @@ _thread: threading.Thread | None = None
 
 def _ttl_hours() -> int:
     try:
-        return max(1, int(os.environ.get("PREVIEW_TTL_HOURS", "24")))
+        return max(1, int(os.environ.get("PREVIEW_TTL_HOURS", "2")))
     except ValueError:
-        return 24
+        return 2
 
 
 def _interval_seconds() -> int:
     try:
-        return max(60, int(os.environ.get("PREVIEW_REAP_INTERVAL_MIN", "30")) * 60)
+        return max(60, int(os.environ.get("PREVIEW_REAP_INTERVAL_MIN", "5")) * 60)
     except ValueError:
-        return 1800
+        return 300
 
 
 def _sweep() -> None:

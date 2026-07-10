@@ -12,11 +12,12 @@
 # a free-form eval surface here.
 #
 # Subcommands:
-#   deploy   --task <slug> --lane <A|B> --src <abs worktree> --config <abs deploy.config.json> [--ref <sha>]
+#   deploy   --task <slug> --lane <A|B> --src <abs worktree> --config <abs deploy.config.json> [--ref <sha>] [--ttl-hours <n>]
 #   teardown --task <slug>
 #   promote  --task <slug> --lane <A|B>
+#   extend   --task <slug> [--hours <n>]   (bump the preview's expiry; default +1h)
 #   list
-#   reap     --ttl-hours <n>
+#   reap     [--ttl-hours <n>]   (fallback only; previews carry their own expires_at)
 #   doctor
 #
 # Contract: human-readable logs go to STDERR; the LAST line of STDOUT is a single
@@ -54,6 +55,7 @@ GOLDEN_DB_B="${PREVIEW_GOLDEN_DB_B:-cts_golden_b}"
 STATIC_DB_A="${PREVIEW_STATIC_DB_A:-$GOLDEN_DB_A}"
 STATIC_DB_B="${PREVIEW_STATIC_DB_B:-$GOLDEN_DB_B}"
 MAX_PREVIEWS="${PREVIEW_MAX_CONCURRENT:-2}"
+PREVIEW_TTL_HOURS="${PREVIEW_TTL_HOURS:-2}"     # default preview lifespan (hours); extendable
 # Postgres connection for clone/drop comes from standard PG* env (PGHOST, PGPORT,
 # PGUSER, PGPASSWORD) defined in preview.env. We never echo these.
 
@@ -93,19 +95,36 @@ psql_admin() { PGDATABASE="${PGADMIN_DB:-postgres}" psql -v ON_ERROR_STOP=1 -qtA
 # ---------------------------------------------------------------------------
 # Arg parsing
 # ---------------------------------------------------------------------------
-ARG_TASK=""; ARG_LANE=""; ARG_SRC=""; ARG_CONFIG=""; ARG_REF=""; ARG_TTL=""
+ARG_TASK=""; ARG_LANE=""; ARG_SRC=""; ARG_CONFIG=""; ARG_REF=""; ARG_TTL=""; ARG_HOURS=""
+# Multi-repo / change-aware deploy: per-repo source paths + "did it change" flags.
+# When a half didn't change, the cts recipe reuses the static lane's artifact
+# instead of rebuilding it. Empty/unset means "single-repo, treat as changed".
+ARG_BACKEND_SRC=""; ARG_FRONTEND_SRC=""; ARG_BACKEND_CHANGED=""; ARG_FRONTEND_CHANGED=""
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --task)       ARG_TASK="${2:-}"; shift 2;;
-      --lane)       ARG_LANE="${2:-}"; shift 2;;
-      --src)        ARG_SRC="${2:-}"; shift 2;;
-      --config)     ARG_CONFIG="${2:-}"; shift 2;;
-      --ref)        ARG_REF="${2:-}"; shift 2;;
-      --ttl-hours)  ARG_TTL="${2:-}"; shift 2;;
+      --task)              ARG_TASK="${2:-}"; shift 2;;
+      --lane)              ARG_LANE="${2:-}"; shift 2;;
+      --src)               ARG_SRC="${2:-}"; shift 2;;
+      --config)            ARG_CONFIG="${2:-}"; shift 2;;
+      --ref)               ARG_REF="${2:-}"; shift 2;;
+      --ttl-hours)         ARG_TTL="${2:-}"; shift 2;;
+      --hours)             ARG_HOURS="${2:-}"; shift 2;;
+      --backend-src)       ARG_BACKEND_SRC="${2:-}"; shift 2;;
+      --frontend-src)      ARG_FRONTEND_SRC="${2:-}"; shift 2;;
+      --backend-changed)   ARG_BACKEND_CHANGED="${2:-}"; shift 2;;
+      --frontend-changed)  ARG_FRONTEND_CHANGED="${2:-}"; shift 2;;
       *) die "unknown argument: $1";;
     esac
   done
+}
+
+# Lifespan: --ttl-hours arg wins, else PREVIEW_TTL_HOURS env, else 2. Used to stamp
+# expires_at at deploy time; the reaper tears a preview down once now > expires_at.
+deploy_ttl_hours() {
+  local h="${ARG_TTL:-$PREVIEW_TTL_HOURS}"
+  [[ "$h" =~ ^[1-9][0-9]*$ ]] || h=2
+  echo "$h"
 }
 
 # ---------------------------------------------------------------------------
@@ -116,8 +135,15 @@ db_clone_from_golden() {
   [[ -z "${PGHOST:-}" ]] && { log "no PGHOST configured — skipping DB clone"; return 0; }
   need psql
   log "cloning DB $target from template $golden"
+  # A previous preview's backend may still be connected to $target (redeploy of a
+  # task that already has a live preview). Without terminating those sessions the
+  # DROP fails ("database is being accessed by other users") and, under
+  # ON_ERROR_STOP + set -e, aborts the whole runner with no JSON result.
+  psql_admin -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$target' AND pid<>pg_backend_pid();" >/dev/null 2>&1 || true
   # Drop a stale clone of the same name, then CREATE ... TEMPLATE (fast copy).
   psql_admin -c "DROP DATABASE IF EXISTS \"$target\";"
+  # CREATE ... TEMPLATE also requires no active sessions on the template DB.
+  psql_admin -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$golden' AND pid<>pg_backend_pid();" >/dev/null 2>&1 || true
   psql_admin -c "CREATE DATABASE \"$target\" TEMPLATE \"$golden\";"
 }
 
@@ -191,7 +217,8 @@ build_images() {
     root="${src_override:-$src}"
     [[ -d "$root" ]] || die "build root not found for component $name: $root"
     log "building image preview-${task}-${name} (root=$root dockerfile=$dockerfile context=$context)"
-    docker build -t "preview-${task}-${name}:latest" -f "${root}/${dockerfile}" "${root}/${context}" >&2
+    docker build -t "preview-${task}-${name}:latest" -f "${root}/${dockerfile}" "${root}/${context}" >&2 \
+      || die "docker build failed for component $name (${root}/${dockerfile})"
   done
 }
 
@@ -240,6 +267,10 @@ cmd_deploy_cts() {
   need docker; need jq
   local proj sdir lane_lc golden identity_db hangfire_db dbname net front_dist back_df bport fport
   proj=$(proj_name "$ARG_TASK"); sdir="${STATE_DIR}/${proj}"; mkdir -p "$sdir"
+  # Redeploy: stop this task's prior preview containers FIRST so nothing is still
+  # connected to the preview DB when we re-clone it below (the old backend holds an
+  # open session that would otherwise make DROP DATABASE fail). Guarded || true.
+  docker rm -f "${proj}-backend" "${proj}-frontend" >&2 2>/dev/null || true
   cp "$ARG_CONFIG" "${sdir}/deploy.config.json"
   lane_lc=$(echo "$ARG_LANE" | tr 'A-Z' 'a-z')
   golden=$(golden_db_for "$ARG_LANE")
@@ -249,53 +280,104 @@ cmd_deploy_cts() {
   net="${PREVIEW_DOCKER_NETWORK:-cts-static}"
   front_dist=$(jq -r '.cts.frontendDist // "/home/saya/projects/cts/frontend/dist"' "$ARG_CONFIG")
   back_df=$(jq -r '.cts.backendDockerfile // "Dockerfile"' "$ARG_CONFIG")
-  [[ -d "$front_dist" ]] || die "frontend dist not found: $front_dist (build it: npm install && VITE_SERVER_URL=/v1 npx vite build)"
-  [[ -f "${ARG_SRC}/${back_df}" ]] || die "backend Dockerfile not found: ${ARG_SRC}/${back_df}"
 
-  # 1. own main DB cloned from the lane golden; Identity/Hangfire shared with the lane.
-  db_clone_from_golden "$dbname" "$golden"
+  # Change-aware inputs. For a single-repo task the per-repo flags are unset, so
+  # both halves default to "changed" and the recipe behaves exactly as before.
+  # For a composite task the service passes the backend/frontend worktree paths
+  # and whether each changed — unchanged halves reuse the static lane's artifact.
+  local backend_src back_changed front_changed serve_dist backend_target
+  backend_src="${ARG_BACKEND_SRC:-$ARG_SRC}"
+  back_changed="${ARG_BACKEND_CHANGED:-true}"
+  front_changed="${ARG_FRONTEND_CHANGED:-true}"
 
-  # 2. build the task's backend from the worktree, stripping the corporate proxy ENV
-  #    (unreachable off the corp network; the host reaches nuget.org/telerik directly).
-  log "building backend image preview-${ARG_TASK}-backend from $ARG_SRC"
-  sed -E '/ENV (HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)/d' "${ARG_SRC}/${back_df}" > "${sdir}/backend.Dockerfile"
-  docker build -f "${sdir}/backend.Dockerfile" -t "preview-${ARG_TASK}-backend:latest" "$ARG_SRC" >&2
+  # ---- Backend: rebuild from source if it changed, else reuse the lane's. ----
+  if [[ "$back_changed" == "false" ]]; then
+    backend_target="cts-static-${lane_lc}-backend"
+    if docker inspect "$backend_target" >/dev/null 2>&1; then
+      log "backend unchanged — reusing lane backend container $backend_target (sharing lane DB)"
+      dbname="cts_static_${lane_lc}"   # reuse the lane's main DB; nothing to clone
+      bport=""
+    else
+      log "backend marked unchanged but lane backend $backend_target not running — building from source"
+      back_changed="true"
+    fi
+  fi
 
-  # 3. run backend (connection strings via env-file; password never on argv).
-  bport=$(alloc_port)
-  cat > "${sdir}/backend.env" <<EOF
+  if [[ "$back_changed" != "false" ]]; then
+    [[ -f "${backend_src}/${back_df}" ]] || die "backend Dockerfile not found: ${backend_src}/${back_df}"
+    # own main DB cloned from the lane golden; Identity/Hangfire shared with the lane.
+    db_clone_from_golden "$dbname" "$golden"
+    # build the task's backend from the worktree, stripping the corporate proxy ENV
+    # (unreachable off the corp network; the host reaches nuget.org/telerik directly).
+    log "building backend image preview-${ARG_TASK}-backend from $backend_src"
+    sed -E '/ENV (HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)/d' "${backend_src}/${back_df}" > "${sdir}/backend.Dockerfile" \
+      || die "failed to prepare backend Dockerfile from ${backend_src}/${back_df}"
+    docker build -f "${sdir}/backend.Dockerfile" -t "preview-${ARG_TASK}-backend:latest" "$backend_src" >&2 \
+      || die "backend docker build failed (see runner stderr for the dotnet/docker error)"
+    # run backend (connection strings via env-file; password never on argv).
+    bport=$(alloc_port)
+    cat > "${sdir}/backend.env" <<EOF
 ASPNETCORE_ENVIRONMENT=pre-prod.server
 ASPNETCORE_URLS=http://+:8080
 ConnectionStrings__DefaultConnection=Host=cts-preview-pg;Port=5432;Database=${dbname};Username=${PGUSER};Password=${PGPASSWORD};CommandTimeout=60
 ConnectionStrings__IdentityConnection=Host=cts-preview-pg;Port=5432;Database=${identity_db};Username=${PGUSER};Password=${PGPASSWORD}
 ConnectionStrings__HangfireConnection=Host=cts-preview-pg;Port=5432;Database=${hangfire_db};Username=${PGUSER};Password=${PGPASSWORD}
 EOF
-  chmod 600 "${sdir}/backend.env"
-  docker rm -f "${proj}-backend" >/dev/null 2>&1 || true
-  docker run -d --name "${proj}-backend" --restart unless-stopped --network "$net" \
-    --env-file "${sdir}/backend.env" -p "${bport}:8080" "preview-${ARG_TASK}-backend:latest" >&2
+    chmod 600 "${sdir}/backend.env"
+    docker rm -f "${proj}-backend" >/dev/null 2>&1 || true
+    docker run -d --name "${proj}-backend" --restart unless-stopped --network "$net" \
+      --env-file "${sdir}/backend.env" -p "${bport}:8080" "preview-${ARG_TASK}-backend:latest" >&2 \
+      || die "failed to start backend container ${proj}-backend on network $net"
+    backend_target="${proj}-backend"
+  fi
 
-  # 4. frontend: prebuilt SPA + nginx proxy /v1,/v2 -> this preview's backend (same-origin).
+  # ---- Frontend: rebuild the SPA from source if it changed, else serve the
+  #      lane's prebuilt dist. Built with RELATIVE API URLs so it's same-origin
+  #      behind the nginx /v1,/v2 proxy below. ----
+  serve_dist="$front_dist"
+  if [[ -n "${ARG_FRONTEND_SRC:-}" && "$front_changed" == "true" ]]; then
+    log "frontend changed — building SPA from $ARG_FRONTEND_SRC"
+    need npm
+    # The composite worktree is owned by the container user (which creates it),
+    # but the runner builds as a different user — so copy the source into a
+    # runner-owned dir before npm install / vite build (which write node_modules
+    # and dist). Built with RELATIVE API URLs so the SPA is same-origin behind
+    # the nginx /v1,/v2 proxy below.
+    local fbuild="${sdir}/frontend-build"
+    rm -rf "$fbuild"; mkdir -p "$fbuild"
+    [[ -d "$ARG_FRONTEND_SRC" ]] || die "frontend src not found on host: $ARG_FRONTEND_SRC"
+    cp -a "${ARG_FRONTEND_SRC}/." "$fbuild/" || die "failed to copy frontend src from $ARG_FRONTEND_SRC"
+    ( cd "$fbuild" \
+        && npm install \
+        && VITE_SERVER_URL=/v1 VITE_SERVER_URL_V2=/v2 VITE_FILE_URL=/v1/files/upload npx vite build ) >&2 \
+      || die "frontend build failed in $fbuild"
+    serve_dist="${fbuild}/dist"
+  fi
+  [[ -d "$serve_dist" ]] || die "frontend dist not found: $serve_dist (build it: npm install && VITE_SERVER_URL=/v1 npx vite build)"
+
+  # frontend: SPA + nginx proxy /v1,/v2 -> the resolved backend (preview's own,
+  # or the lane's when backend was unchanged).
   fport=$(alloc_port)
   cat > "${sdir}/frontend.conf" <<EOF
 server {
   listen 5000; root /usr/share/nginx/html; index index.html;
-  location /v1 { proxy_pass http://${proj}-backend:8080; proxy_set_header Host \$host; }
-  location /v2 { proxy_pass http://${proj}-backend:8080; }
+  location /v1 { proxy_pass http://${backend_target}:8080; proxy_set_header Host \$host; }
+  location /v2 { proxy_pass http://${backend_target}:8080; }
   location / { try_files \$uri \$uri/ /index.html; }
 }
 EOF
   docker rm -f "${proj}-frontend" >/dev/null 2>&1 || true
   docker run -d --name "${proj}-frontend" --restart unless-stopped --network "$net" -p "${fport}:5000" \
-    -v "${front_dist}:/usr/share/nginx/html:ro" -v "${sdir}/frontend.conf:/etc/nginx/conf.d/default.conf:ro" \
-    nginx:alpine >&2
+    -v "${serve_dist}:/usr/share/nginx/html:ro" -v "${sdir}/frontend.conf:/etc/nginx/conf.d/default.conf:ro" \
+    nginx:alpine >&2 \
+    || die "failed to start frontend container ${proj}-frontend on network $net"
 
   local url="http://${PUBLIC_HOST}:${fport}"
-  local now; now=$(date +%s)
+  local now ttl_h expires; now=$(date +%s); ttl_h=$(deploy_ttl_hours); expires=$(( now + ttl_h*3600 ))
   cat > "${sdir}/meta.json" <<EOF
-{"task":$(json_str "$ARG_TASK"),"lane":$(json_str "$ARG_LANE"),"recipe":"cts","port":$fport,"backendPort":$bport,"url":$(json_str "$url"),"db":$(json_str "$dbname"),"created_at":$now,"ref":$(json_str "$ARG_REF")}
+{"task":$(json_str "$ARG_TASK"),"lane":$(json_str "$ARG_LANE"),"recipe":"cts","port":$fport,"backendPort":$(json_str "$bport"),"backendChanged":$(json_str "$back_changed"),"frontendChanged":$(json_str "$front_changed"),"url":$(json_str "$url"),"db":$(json_str "$dbname"),"created_at":$now,"expires_at":$expires,"ttl_hours":$ttl_h,"ref":$(json_str "$ARG_REF")}
 EOF
-  emit_json "{\"ok\":true,\"task\":$(json_str "$ARG_TASK"),\"lane\":$(json_str "$ARG_LANE"),\"url\":$(json_str "$url"),\"ip\":$(json_str "$PUBLIC_HOST"),\"port\":$fport,\"db\":$(json_str "$dbname")}"
+  emit_json "{\"ok\":true,\"task\":$(json_str "$ARG_TASK"),\"lane\":$(json_str "$ARG_LANE"),\"url\":$(json_str "$url"),\"ip\":$(json_str "$PUBLIC_HOST"),\"port\":$fport,\"db\":$(json_str "$dbname"),\"backendChanged\":$(json_str "$back_changed"),\"frontendChanged\":$(json_str "$front_changed"),\"expiresAt\":$expires}"
 }
 
 # ---------------------------------------------------------------------------
@@ -337,18 +419,19 @@ cmd_deploy() {
   render_compose "$ARG_TASK" "$port" "$dbname" "$ARG_CONFIG" "$compose"
 
   log "starting compose project $proj on port $port"
-  docker compose -p "$proj" -f "$compose" up -d >&2
+  docker compose -p "$proj" -f "$compose" up -d >&2 \
+    || die "docker compose up failed for project $proj"
 
   local vhost_url; vhost_url=$(write_vhost "$ARG_TASK" "$port" || true)
   local url="${vhost_url:-http://${PUBLIC_HOST}:${port}}"
 
-  # Persist preview metadata (epoch for the reaper).
-  local now; now=$(date +%s)
+  # Persist preview metadata (epoch + expiry for the reaper).
+  local now ttl_h expires; now=$(date +%s); ttl_h=$(deploy_ttl_hours); expires=$(( now + ttl_h*3600 ))
   cat > "${sdir}/meta.json" <<EOF
-{"task":$(json_str "$ARG_TASK"),"lane":$(json_str "$ARG_LANE"),"port":$port,"url":$(json_str "$url"),"db":$(json_str "$dbname"),"created_at":$now,"ref":$(json_str "$ARG_REF")}
+{"task":$(json_str "$ARG_TASK"),"lane":$(json_str "$ARG_LANE"),"port":$port,"url":$(json_str "$url"),"db":$(json_str "$dbname"),"created_at":$now,"expires_at":$expires,"ttl_hours":$ttl_h,"ref":$(json_str "$ARG_REF")}
 EOF
 
-  emit_json "{\"ok\":true,\"task\":$(json_str "$ARG_TASK"),\"lane\":$(json_str "$ARG_LANE"),\"url\":$(json_str "$url"),\"ip\":$(json_str "$PUBLIC_HOST"),\"port\":$port,\"db\":$(json_str "$dbname")}"
+  emit_json "{\"ok\":true,\"task\":$(json_str "$ARG_TASK"),\"lane\":$(json_str "$ARG_LANE"),\"url\":$(json_str "$url"),\"ip\":$(json_str "$PUBLIC_HOST"),\"port\":$port,\"db\":$(json_str "$dbname"),\"expiresAt\":$expires}"
 }
 
 cmd_teardown() {
@@ -444,18 +527,24 @@ cmd_list() {
 }
 
 cmd_reap() {
-  local ttl="${ARG_TTL:-}"
+  # --ttl-hours is the FALLBACK only (for legacy metas without expires_at); the
+  # authoritative lifetime is each preview's own expires_at (set at deploy / bumped
+  # by `extend`). A preview is reaped once now > expires_at.
+  local ttl="${ARG_TTL:-$PREVIEW_TTL_HOURS}"
   [[ "$ttl" =~ ^[0-9]+$ ]] || die "invalid --ttl-hours: $ttl"
-  local cutoff; cutoff=$(( $(date +%s) - ttl*3600 ))
+  local now; now=$(date +%s)
   local reaped=""; local first=1
   if [[ -d "$STATE_DIR" ]]; then
     for d in "$STATE_DIR"/preview-*; do
       [[ -f "$d/meta.json" ]] || continue
-      local created task
+      local expires created task
+      expires=$(jq -r '.expires_at // 0' "$d/meta.json" 2>/dev/null || echo 0)
       created=$(jq -r '.created_at // 0' "$d/meta.json" 2>/dev/null || echo 0)
       task=$(jq -r '.task // ""' "$d/meta.json" 2>/dev/null || echo "")
-      if [[ -n "$task" && "$created" -lt "$cutoff" ]]; then
-        log "reaping expired preview $task (created=$created cutoff=$cutoff)"
+      # Fallback for old metas that predate expires_at.
+      [[ "$expires" -le 0 ]] && expires=$(( created + ttl*3600 ))
+      if [[ -n "$task" && "$expires" -gt 0 && "$now" -gt "$expires" ]]; then
+        log "reaping expired preview $task (expires_at=$expires now=$now)"
         cmd_teardown_quiet "$task"
         [[ $first -eq 1 ]] && first=0 || reaped+=","
         reaped+=$(json_str "$task")
@@ -463,6 +552,24 @@ cmd_reap() {
     done
   fi
   emit_json "{\"ok\":true,\"reaped\":[${reaped}]}"
+}
+
+# Extend a live preview's lifetime by --hours (default 1). New expiry is measured
+# from now (or the current expiry, whichever is later) so back-to-back extends add up.
+cmd_extend() {
+  valid_slug "$ARG_TASK"; need jq
+  local hours="${ARG_HOURS:-1}"
+  [[ "$hours" =~ ^[1-9][0-9]*$ ]] || die "invalid --hours: $hours"
+  local proj sdir meta; proj=$(proj_name "$ARG_TASK"); sdir="${STATE_DIR}/${proj}"; meta="${sdir}/meta.json"
+  [[ -f "$meta" ]] || die "no live preview to extend for $ARG_TASK"
+  local now cur new; now=$(date +%s)
+  cur=$(jq -r '.expires_at // 0' "$meta" 2>/dev/null || echo 0)
+  local base=$(( cur > now ? cur : now ))
+  new=$(( base + hours*3600 ))
+  local tmp="${meta}.tmp"
+  jq --argjson e "$new" '.expires_at=$e' "$meta" > "$tmp" && mv "$tmp" "$meta" || die "failed to update meta for $ARG_TASK"
+  log "extended preview $ARG_TASK by ${hours}h -> expires_at=$new"
+  emit_json "{\"ok\":true,\"task\":$(json_str "$ARG_TASK"),\"expiresAt\":$new}"
 }
 
 cmd_doctor() {
@@ -488,10 +595,11 @@ main() {
     deploy)   parse_args "$@"; cmd_deploy;;
     teardown) parse_args "$@"; cmd_teardown;;
     promote)  parse_args "$@"; cmd_promote;;
+    extend)   parse_args "$@"; cmd_extend;;
     list)     cmd_list;;
     reap)     parse_args "$@"; cmd_reap;;
     doctor)   cmd_doctor;;
-    *) die "unknown subcommand: ${sub:-<none>} (expected deploy|teardown|promote|list|reap|doctor)";;
+    *) die "unknown subcommand: ${sub:-<none>} (expected deploy|teardown|promote|extend|list|reap|doctor)";;
   esac
 }
 

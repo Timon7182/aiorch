@@ -16,6 +16,7 @@ import copy
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -376,6 +377,7 @@ def load_project_mcp_config(project_dir: Path) -> dict:
 
     Returns a dict of MCP-related env vars:
     - CONTEXT7_ENABLED (default: true)
+    - CODE_GRAPH_PROVIDER (default: codegraph) — exclusive code-graph layer: codegraph | graphify
     - PLAYWRIGHT_MCP_ENABLED (default: false) [also accepts legacy PUPPETEER_MCP_ENABLED]
     - AGENT_MCP_<agent>_ADD (per-agent MCP additions)
     - AGENT_MCP_<agent>_REMOVE (per-agent MCP removals)
@@ -388,59 +390,72 @@ def load_project_mcp_config(project_dir: Path) -> dict:
         Dict of MCP configuration values (string values, except CUSTOM_MCP_SERVERS which is parsed JSON)
     """
     env_path = project_dir / ".magestic-ai" / ".env"
-    if not env_path.exists():
-        return {}
 
     config = {}
     mcp_keys = {
         "CONTEXT7_ENABLED",
         "PLAYWRIGHT_MCP_ENABLED",
         "PUPPETEER_MCP_ENABLED",  # backward compat: mapped to PLAYWRIGHT_MCP_ENABLED
+        "CODE_GRAPH_PROVIDER",  # exclusive code-graph selection: codegraph (default) | graphify
     }
 
-    try:
-        with open(env_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    key = key.strip()
-                    value = value.strip().strip("\"'")
-                    # Include global MCP toggles
-                    if key in mcp_keys:
-                        config[key] = value
-                    # Include per-agent MCP overrides (AGENT_MCP_<agent>_ADD/REMOVE)
-                    elif key.startswith("AGENT_MCP_"):
-                        config[key] = value
-                    # Include custom MCP servers (parse JSON with schema validation)
-                    elif key == "CUSTOM_MCP_SERVERS":
-                        try:
-                            parsed = json.loads(value)
-                            if not isinstance(parsed, list):
+    if env_path.exists():
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        key = key.strip()
+                        value = value.strip().strip("\"'")
+                        # Include global MCP toggles
+                        if key in mcp_keys:
+                            config[key] = value
+                        # Include per-agent MCP overrides (AGENT_MCP_<agent>_ADD/REMOVE)
+                        elif key.startswith("AGENT_MCP_"):
+                            config[key] = value
+                        # Include custom MCP servers (parse JSON with schema validation)
+                        elif key == "CUSTOM_MCP_SERVERS":
+                            try:
+                                parsed = json.loads(value)
+                                if not isinstance(parsed, list):
+                                    logger.warning(
+                                        "CUSTOM_MCP_SERVERS must be a JSON array"
+                                    )
+                                    config["CUSTOM_MCP_SERVERS"] = []
+                                else:
+                                    # Validate each server and filter out invalid ones
+                                    valid_servers = []
+                                    for i, server in enumerate(parsed):
+                                        if _validate_custom_mcp_server(server):
+                                            valid_servers.append(server)
+                                        else:
+                                            logger.warning(
+                                                f"Skipping invalid custom MCP server at index {i}"
+                                            )
+                                    config["CUSTOM_MCP_SERVERS"] = valid_servers
+                            except json.JSONDecodeError:
                                 logger.warning(
-                                    "CUSTOM_MCP_SERVERS must be a JSON array"
+                                    f"Failed to parse CUSTOM_MCP_SERVERS JSON: {value}"
                                 )
                                 config["CUSTOM_MCP_SERVERS"] = []
-                            else:
-                                # Validate each server and filter out invalid ones
-                                valid_servers = []
-                                for i, server in enumerate(parsed):
-                                    if _validate_custom_mcp_server(server):
-                                        valid_servers.append(server)
-                                    else:
-                                        logger.warning(
-                                            f"Skipping invalid custom MCP server at index {i}"
-                                        )
-                                config["CUSTOM_MCP_SERVERS"] = valid_servers
-                        except json.JSONDecodeError:
-                            logger.warning(
-                                f"Failed to parse CUSTOM_MCP_SERVERS JSON: {value}"
-                            )
-                            config["CUSTOM_MCP_SERVERS"] = []
-    except Exception as e:
-        logger.debug(f"Failed to load project MCP config from {env_path}: {e}")
+        except Exception as e:
+            logger.debug(f"Failed to load project MCP config from {env_path}: {e}")
+
+    # Overlay per-agent MCP overrides from the process environment. This lets
+    # the web-server force per-agent servers on a subprocess (e.g.
+    # AGENT_MCP_qa_reviewer_ADD=playwright for bug-report tasks) without
+    # editing the project's .magestic-ai/.env. Deliberately scoped to
+    # AGENT_MCP_* ONLY: global toggles like PLAYWRIGHT_MCP_ENABLED /
+    # CONTEXT7_ENABLED / CODE_GRAPH_PROVIDER must NOT leak in from ambient
+    # container-wide env, or operators' shell env would silently change
+    # per-project behavior. Env values win over the file so a forced setting
+    # always takes effect.
+    for _key, _value in os.environ.items():
+        if _key.startswith("AGENT_MCP_"):
+            config[_key] = _value
 
     return config
 
@@ -815,16 +830,34 @@ def create_client(
         }
 
     if "playwright" in required_servers:
-        # Playwright for web frontends (headless Chromium)
-        mcp_servers["playwright"] = {
-            "command": "npx",
-            "args": [
-                "@playwright/mcp@latest",
-                "--headless",
-                "--browser", "chromium",
-                "--viewport-size", "1280x720",
-            ],
-        }
+        # Playwright for web frontends (headless Chromium).
+        # Version is PINNED (not @latest) for reproducible QA runs — an
+        # unattended agent must not silently pick up a breaking MCP release.
+        # Bump this deliberately after verifying the new version.
+        playwright_cmd = [
+            "npx",
+            "@playwright/mcp@0.0.41",
+            "--headless",
+            "--browser", "chromium",
+            "--viewport-size", "1280x720",
+        ]
+        # UI checks with test-account credentials: route the server through the
+        # secret-substitution proxy so the model only ever handles ${VAR}
+        # placeholders while the browser receives real values (and responses
+        # are redacted). UI_CHECK_SECRET_VARS names the env vars to protect.
+        secret_vars = os.environ.get("UI_CHECK_SECRET_VARS", "").strip()
+        if secret_vars:
+            proxy_script = Path(__file__).parent / "mcp_secret_proxy.py"
+            mcp_servers["playwright"] = {
+                "command": sys.executable,
+                "args": [str(proxy_script), "--"] + playwright_cmd,
+                "env": {"MCP_PROXY_SECRET_VARS": secret_vars},
+            }
+        else:
+            mcp_servers["playwright"] = {
+                "command": playwright_cmd[0],
+                "args": playwright_cmd[1:],
+            }
 
     # Graphiti MCP server for knowledge graph memory
     if graphiti_mcp_enabled:
@@ -872,6 +905,7 @@ def create_client(
 
     # Add custom MCP servers from project config
     custom_servers = mcp_config.get("CUSTOM_MCP_SERVERS", [])
+    custom_server_notes: list[str] = []
     for custom in custom_servers:
         server_id = custom.get("id")
         if not server_id:
@@ -893,6 +927,13 @@ def create_client(
             if custom.get("headers"):
                 server_config["headers"] = custom["headers"]
             mcp_servers[server_id] = server_config
+        # Record the user-provided description so the agent knows what each
+        # server is for and reaches for the right one (mirrors the chat path).
+        note = f"- {custom.get('name') or server_id} (tools: mcp__{server_id}__*)"
+        desc = custom.get("description")
+        if isinstance(desc, str) and desc.strip():
+            note += f" — {desc.strip()}"
+        custom_server_notes.append(note)
 
     # Build system prompt
     base_prompt = (
@@ -905,6 +946,16 @@ def create_client(
         f"your work through thorough testing. You communicate progress through Git commits "
         f"and build-progress.txt updates."
     )
+
+    # Tell the agent what each wired custom MCP server is for, so it picks the
+    # right one (e.g. distinct databases) instead of guessing.
+    if custom_server_notes:
+        base_prompt = (
+            f"{base_prompt}\n\n# Connected MCP servers\n"
+            "Use the matching mcp__<server>__* tools when a task relates to what a "
+            "server provides; pick the server whose description fits best:\n"
+            + "\n".join(custom_server_notes)
+        )
 
     # Include CLAUDE.md if enabled and present
     if should_use_claude_md():

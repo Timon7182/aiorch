@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   MessageSquare,
@@ -18,8 +18,12 @@ import {
   GitBranch,
   PanelLeft,
   Network,
+  Database,
   Paperclip,
-  Brain
+  Brain,
+  Download,
+  RefreshCw,
+  X
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -30,6 +34,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { cn } from '../lib/utils';
+import { getAuthToken } from '../lib/auth';
 import {
   useInsightsStore,
   loadInsightsSession,
@@ -41,19 +46,19 @@ import {
   renameSession,
   updateModelConfig,
   createTaskFromSuggestion,
-  generateTaskFromChat,
-  setupInsightsListeners
+  generateTaskFromChat
 } from '../stores/insights-store';
 import { loadTasks } from '../stores/task-store';
-import { useProjectStore } from '../stores/project-store';
+import { useProjectStore, ALL_REPOS } from '../stores/project-store';
 import { useIsMobile } from '../hooks/use-media-query';
 import { useTranslation } from 'react-i18next';
+import { toast } from '../hooks/use-toast';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
 import { RepoSwitcher } from './RepoSwitcher';
 import { CreateTaskFromChatDialog } from './CreateTaskFromChatDialog';
 import { InsightsModelSelector } from './InsightsModelSelector';
 import { ChatAttachmentBar, processChatFiles, CHAT_FILE_ACCEPT } from './insights/ChatAttachmentBar';
-import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider, ChatAttachment } from '../shared/types';
+import type { InsightsChatMessage, InsightsModelConfig, InsightsProvider, ChatAttachment, DocsStatus } from '../shared/types';
 import {
   TASK_CATEGORY_LABELS,
   TASK_CATEGORY_COLORS,
@@ -62,6 +67,33 @@ import {
   PROVIDER_INFO,
   PROVIDER_MODELS
 } from '../shared/constants';
+
+// Persist the "docs outdated" banner dismissal per (project, docsSha) so it
+// survives page refresh; a new docsSha yields a new key, so regenerated docs
+// naturally re-arm the banner.
+function docsBannerStorageKey(projectId: string, docsSha: string | null | undefined): string | null {
+  return docsSha ? `insights-docs-banner-dismissed:${projectId}:${docsSha}` : null;
+}
+
+function isDocsBannerDismissed(projectId: string, docsSha: string | null | undefined): boolean {
+  const key = docsBannerStorageKey(projectId, docsSha);
+  if (!key) return false;
+  try {
+    return localStorage.getItem(key) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function persistDocsBannerDismissed(projectId: string, docsSha: string | null | undefined): void {
+  const key = docsBannerStorageKey(projectId, docsSha);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, 'true');
+  } catch {
+    // Storage unavailable (private mode / quota) — dismissal stays session-only.
+  }
+}
 
 /** Build a model suffix like "(Claude Sonnet 4.6)" or "(Ollama: qwen3-30b)" */
 function getModelLabel(provider?: InsightsProvider, model?: string): string | null {
@@ -165,11 +197,17 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // active child repo; single-repo projects use the project root. Repos are
   // loaded into the store by the sidebar when a project is selected.
   const reposByProject = useProjectStore((state) => state.reposByProject);
-  const activeRepoByProject = useProjectStore((state) => state.activeRepoByProject);
+  const chatGroundByProject = useProjectStore((state) => state.chatGroundByProject);
   const repos = reposByProject[projectId] ?? [];
   const isMultiRepo = repos.length > 1;
+  // Chat grounding: a multi-repo project defaults to ALL_REPOS (the whole
+  // project root) so the assistant can read/search every repo + the docs and
+  // decide where to look; picking a specific repo narrows it. activeRepoPath is
+  // null in all-repos mode, which makes the send/codegraph logic below pass
+  // repo=undefined → the backend grounds the chat in the project root.
+  const chatGround = isMultiRepo ? (chatGroundByProject[projectId] ?? ALL_REPOS) : null;
   const activeRepoPath = isMultiRepo
-    ? (activeRepoByProject[projectId] ?? repos[0]?.path ?? null)
+    ? (chatGround === ALL_REPOS ? null : chatGround)
     : projectPath;
   const [branches, setBranches] = useState<string[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string>('');
@@ -178,6 +216,17 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // (the selected branch's worktree / active repo). Drives whether the model
   // selector offers the CodeGraph option. Optimistic default avoids flicker.
   const [cgcAvailable, setCgcAvailable] = useState<boolean>(true);
+  // Whether a graphify graph.json exists for the dir the chat runs against.
+  const [graphifyAvailable, setGraphifyAvailable] = useState<boolean>(false);
+  // Documentation freshness for that dir (drives the "docs outdated" banner).
+  // Dismissal persists in localStorage keyed by (projectId, docsSha) so it
+  // survives refresh; a new docsSha naturally invalidates the dismissal.
+  const [docsStatus, setDocsStatus] = useState<DocsStatus | null>(null);
+  const [docsBannerDismissed, setDocsBannerDismissed] = useState<boolean>(() =>
+    isDocsBannerDismissed(projectId, null)
+  );
+  const [refreshingDocs, setRefreshingDocs] = useState<boolean>(false);
+  const [refreshDocsError, setRefreshDocsError] = useState<boolean>(false);
 
   // Create Task from Chat state
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
@@ -190,12 +239,11 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load session and set up listeners on mount
+  // Load session on mount. Stream listeners are global (initInsightsListeners
+  // in main.tsx) so chunks arriving while this view is unmounted aren't lost.
   useEffect(() => {
     didApplyUrlSession.current = false;
     loadInsightsSession(projectId);
-    const cleanup = setupInsightsListeners();
-    return cleanup;
   }, [projectId]);
 
   // Apply a ?session= deep link once the session list has loaded.
@@ -279,11 +327,44 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     const repo = isMultiRepo && activeRepoPath ? activeRepoPath : undefined;
     window.API.getInsightsCodeSearchAvailability(projectId, branch, repo)
       .then((res) => {
-        if (!cancelled) setCgcAvailable(res.success && res.data ? res.data.cgc : false);
+        if (cancelled) return;
+        const data = res.success ? res.data : undefined;
+        setCgcAvailable(data ? data.cgc : false);
+        setGraphifyAvailable(data ? data.graphify : false);
+        setDocsStatus(data?.docs ?? null);
+        // Re-derive dismissal for this scope's docsSha — a previously dismissed
+        // banner stays hidden until the docs are regenerated (new docsSha).
+        setDocsBannerDismissed(isDocsBannerDismissed(projectId, data?.docs?.docsSha));
       })
-      .catch(() => { if (!cancelled) setCgcAvailable(false); });
+      .catch(() => {
+        if (cancelled) return;
+        setCgcAvailable(false);
+        setGraphifyAvailable(false);
+        setDocsStatus(null);
+      });
     return () => { cancelled = true; };
   }, [projectId, selectedBranch, activeRepoPath, isMultiRepo]);
+
+  // Kick off a code-graph / docs re-index for the current repo scope, then
+  // dismiss the "docs outdated" banner (freshness will re-fetch on next scope
+  // change or reload).
+  const handleRefreshDocs = useCallback(async () => {
+    setRefreshingDocs(true);
+    setRefreshDocsError(false);
+    try {
+      const res = await window.API.refreshInsightsCodegraph(projectId, activeRepoPath ?? undefined);
+      if (res?.success) {
+        setDocsBannerDismissed(true);
+      } else {
+        setRefreshDocsError(true);
+      }
+    } catch (err) {
+      console.error('Failed to refresh docs/code-graph:', err);
+      setRefreshDocsError(true);
+    } finally {
+      setRefreshingDocs(false);
+    }
+  }, [projectId, activeRepoPath]);
 
   const handleSend = () => {
     const message = inputValue.trim();
@@ -512,6 +593,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
               onConfigChange={handleModelConfigChange}
               disabled={isLoading}
               cgcAvailable={cgcAvailable}
+              graphifyAvailable={graphifyAvailable}
             />
             {messages.length > 0 && !isLoading && (
               <Button
@@ -533,6 +615,45 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
             </Button>
           </div>
         </div>
+
+      {/* Stale documentation banner — docs exist but code moved past them. */}
+      {docsStatus?.hasDocs && !docsStatus.fresh && docsStatus.docsSha && !docsBannerDismissed && (
+        <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm md:px-6">
+          <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span className="min-w-0 flex-1 text-amber-800 dark:text-amber-200">
+            {t('common:insights.docsBanner.message', 'Documentation is outdated — it may not reflect the latest code.')}
+            {refreshDocsError && (
+              <span className="ml-2 text-xs text-destructive">
+                {t('common:insights.docsBanner.refreshError', 'Refresh failed — please try again.')}
+              </span>
+            )}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0"
+            onClick={handleRefreshDocs}
+            disabled={refreshingDocs}
+          >
+            {refreshingDocs
+              ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+            {t('common:insights.docsBanner.refresh', 'Refresh')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            onClick={() => {
+              persistDocsBannerDismissed(projectId, docsStatus.docsSha);
+              setDocsBannerDismissed(true);
+            }}
+            aria-label={t('common:insights.docsBanner.dismiss', 'Dismiss')}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
       {/* Messages */}
       <ScrollArea className="flex-1 px-6 py-4">
@@ -588,6 +709,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
               <MessageBubble
                 key={message.id}
                 message={message}
+                projectPath={projectPath}
                 onCreateTask={() => handleCreateTask(message)}
                 isCreatingTask={creatingTask === message.id}
                 taskCreated={taskCreated.has(message.id)}
@@ -792,8 +914,137 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   );
 }
 
+/**
+ * Pull file paths the assistant mentions out of its message text so we can
+ * offer one-click downloads. Matches tokens with at least one `/` that end in a
+ * file extension (e.g. `.magestic-ai/specs/003-x/CHECKLIST.md`), optionally
+ * wrapped in backticks/quotes/parens. URLs and extension-less API routes (like
+ * `/v1/permissions/role-permissions-matrix`) are skipped. Deduped, capped at 12.
+ */
+function extractDownloadableFiles(content: string): string[] {
+  if (!content) return [];
+  const out = new Set<string>();
+  const re = /(?:^|[\s`("'])((?:\.{1,2}\/|\/)?(?:[\w.@-]+\/)+[\w.@-]+\.[A-Za-z0-9]{1,8})/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    const p = m[1].replace(/[.,;:)\]'"`]+$/, '');
+    if (/^[a-z][\w+.-]*:\/\//i.test(p) || p.startsWith('//')) continue; // skip URLs
+    out.add(p);
+    if (out.size >= 12) break;
+  }
+  return Array.from(out);
+}
+
+/**
+ * Download chips shown under an assistant message for any files it references.
+ * Resolves relative paths against the project root and pulls content through the
+ * existing `/files/read` endpoint, then triggers a browser download.
+ */
+function MessageFileDownloads({
+  projectPath,
+  content,
+}: {
+  projectPath: string | null;
+  content: string;
+}) {
+  const { t } = useTranslation(['common']);
+  const [busy, setBusy] = useState<string | null>(null);
+  const files = useMemo(() => extractDownloadableFiles(content), [content]);
+  if (files.length === 0) return null;
+
+  const triggerDownload = (url: string, name: string) => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  // Binary download via /files/serve (streams any file with its real MIME
+  // type; /files/read refuses binaries). Needs projectPath as the serve root.
+  const downloadViaServe = async (abs: string, name: string): Promise<boolean> => {
+    if (!projectPath) return false;
+    const params = new URLSearchParams({ path: abs, root: projectPath });
+    // Token goes in the header, not the query string, so it never lands in
+    // server access logs (the query-param form is only for <img>/HTML assets).
+    const resp = await fetch(`/api/files/serve?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${getAuthToken() || ''}` },
+    });
+    if (!resp.ok) return false;
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, name);
+    URL.revokeObjectURL(url);
+    return true;
+  };
+
+  const handleDownload = async (rel: string) => {
+    const name = rel.split('/').pop() || 'file';
+    const abs = rel.startsWith('/')
+      ? rel
+      : projectPath
+        ? `${projectPath.replace(/\/+$/, '')}/${rel}`
+        : rel;
+    const isBinary = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|mp4|webm)$/i.test(name);
+    setBusy(rel);
+    try {
+      // Screenshots and other binaries can't go through /files/read
+      // ("Cannot read binary file") — stream them via /files/serve instead.
+      if (isBinary) {
+        if (await downloadViaServe(abs, name)) return;
+        toast({ variant: 'destructive', title: t('common:chatFiles.downloadFailed', { name }) });
+        return;
+      }
+      const res = await window.API.readFile(abs);
+      if (!res.success || typeof res.data?.content !== 'string') {
+        if (await downloadViaServe(abs, name)) return;
+        toast({ variant: 'destructive', title: t('common:chatFiles.downloadFailed', { name }) });
+        return;
+      }
+      const url = URL.createObjectURL(
+        new Blob([res.data.content], { type: 'text/plain;charset=utf-8' })
+      );
+      triggerDownload(url, name);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ variant: 'destructive', title: t('common:chatFiles.downloadFailed', { name }) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+      <span className="text-xs text-muted-foreground">{t('common:chatFiles.heading')}:</span>
+      {files.map((f) => {
+        const name = f.split('/').pop() || f;
+        return (
+          <Button
+            key={f}
+            variant="outline"
+            size="sm"
+            className="h-6 gap-1 px-2 text-xs font-normal"
+            disabled={busy === f}
+            title={t('common:chatFiles.download', { name })}
+            onClick={() => handleDownload(f)}
+          >
+            {busy === f ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Download className="h-3 w-3" />
+            )}
+            <span className="max-w-[180px] truncate">{name}</span>
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
 interface MessageBubbleProps {
   message: InsightsChatMessage;
+  projectPath: string | null;
   onCreateTask: () => void;
   isCreatingTask: boolean;
   taskCreated: boolean;
@@ -801,6 +1052,7 @@ interface MessageBubbleProps {
 
 function MessageBubble({
   message,
+  projectPath,
   onCreateTask,
   isCreatingTask,
   taskCreated
@@ -835,6 +1087,11 @@ function MessageBubble({
               {message.content}
             </ReactMarkdown>
           </div>
+        )}
+
+        {/* Download chips for files the assistant references on disk */}
+        {!isUser && message.content && (
+          <MessageFileDownloads projectPath={projectPath} content={message.content} />
         )}
 
         {/* Attachments sent with this message (read-only) */}
@@ -926,12 +1183,55 @@ interface ToolUsageHistoryProps {
   tools: Array<{
     name: string;
     input?: string;
+    result?: string;
+    isError?: boolean;
     timestamp: Date;
   }>;
 }
 
+// `mcp__db__query` -> `db: query` so MCP steps read cleanly in the history.
+function prettyToolName(name: string): string {
+  if (name.startsWith('mcp__')) {
+    const parts = name.split('__');
+    if (parts.length >= 3) return `${parts[1]}: ${parts.slice(2).join('__')}`;
+  }
+  return name;
+}
+
+function getToolIcon(toolName: string) {
+  if (toolName.startsWith('mcp__db__')) return Database;
+  if (toolName.startsWith('mcp__')) return Network; // codegraph + any other MCP
+  switch (toolName) {
+    case 'Read':
+      return FileText;
+    case 'Glob':
+      return FolderSearch;
+    case 'Grep':
+      return Search;
+    default:
+      return FileText;
+  }
+}
+
+function getToolColor(toolName: string) {
+  if (toolName.startsWith('mcp__db__')) return 'text-cyan-500';
+  if (toolName.startsWith('mcp__')) return 'text-purple-500';
+  switch (toolName) {
+    case 'Read':
+      return 'text-blue-500';
+    case 'Glob':
+      return 'text-amber-500';
+    case 'Grep':
+      return 'text-green-500';
+    default:
+      return 'text-muted-foreground';
+  }
+}
+
 function ToolUsageHistory({ tools }: ToolUsageHistoryProps) {
-  const [expanded, setExpanded] = useState(false);
+  // Expanded by default so the agent's tool/MCP steps (e.g. the SQL it ran and
+  // what came back) are visible without an extra click.
+  const [expanded, setExpanded] = useState(true);
 
   if (tools.length === 0) return null;
 
@@ -940,34 +1240,6 @@ function ToolUsageHistory({ tools }: ToolUsageHistoryProps) {
     acc[tool.name] = (acc[tool.name] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
-
-  const getToolIcon = (toolName: string) => {
-    if (toolName.startsWith('mcp__codegraph__')) return Network;
-    switch (toolName) {
-      case 'Read':
-        return FileText;
-      case 'Glob':
-        return FolderSearch;
-      case 'Grep':
-        return Search;
-      default:
-        return FileText;
-    }
-  };
-
-  const getToolColor = (toolName: string) => {
-    if (toolName.startsWith('mcp__codegraph__')) return 'text-purple-500';
-    switch (toolName) {
-      case 'Read':
-        return 'text-blue-500';
-      case 'Glob':
-        return 'text-amber-500';
-      case 'Grep':
-        return 'text-green-500';
-      default:
-        return 'text-muted-foreground';
-    }
-  };
 
   return (
     <div className="mt-2">
@@ -991,20 +1263,32 @@ function ToolUsageHistory({ tools }: ToolUsageHistoryProps) {
       </button>
 
       {expanded && (
-        <div className="mt-2 space-y-1 rounded-md border border-border bg-muted/30 p-2">
+        <div className="mt-2 space-y-2 rounded-md border border-border bg-muted/30 p-2">
           {tools.map((tool, index) => {
             const Icon = getToolIcon(tool.name);
             return (
-              <div
-                key={`${tool.name}-${index}`}
-                className="flex items-center gap-2 text-xs"
-              >
-                <Icon className={cn('h-3 w-3 shrink-0', getToolColor(tool.name))} />
-                <span className="font-medium">{tool.name}</span>
+              <div key={`${tool.name}-${index}`} className="text-xs">
+                <div className="flex items-center gap-2">
+                  <Icon className={cn('h-3 w-3 shrink-0', getToolColor(tool.name))} />
+                  <span className="font-medium">{prettyToolName(tool.name)}</span>
+                  {tool.isError && (
+                    <span className="text-[10px] font-medium text-red-500">error</span>
+                  )}
+                </div>
                 {tool.input && (
-                  <span className="text-muted-foreground truncate max-w-[250px]">
+                  <pre className="mt-1 ml-5 overflow-x-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2 py-1 font-mono text-[11px] text-muted-foreground">
                     {tool.input}
-                  </span>
+                  </pre>
+                )}
+                {tool.result && (
+                  <pre
+                    className={cn(
+                      'mt-1 ml-5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2 py-1 font-mono text-[11px]',
+                      tool.isError ? 'text-red-500' : 'text-muted-foreground'
+                    )}
+                  >
+                    {tool.result}
+                  </pre>
                 )}
               </div>
             );
@@ -1028,6 +1312,20 @@ function ToolIndicator({ name, input }: ToolIndicatorProps) {
       return {
         icon: Network,
         label: 'Querying code graph',
+        color: 'text-purple-500 bg-purple-500/10'
+      };
+    }
+    if (toolName.startsWith('mcp__db__')) {
+      return {
+        icon: Database,
+        label: 'Querying database',
+        color: 'text-cyan-500 bg-cyan-500/10'
+      };
+    }
+    if (toolName.startsWith('mcp__')) {
+      return {
+        icon: Network,
+        label: prettyToolName(toolName),
         color: 'text-purple-500 bg-purple-500/10'
       };
     }

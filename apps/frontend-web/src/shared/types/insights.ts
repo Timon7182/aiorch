@@ -18,13 +18,22 @@ export type InsightsProvider = 'claude' | 'codex' | 'gemini' | 'ollama'
 //   'auto'  → CodeGraph when the project is indexed, else plain file tools
 //   'cgc'   → force CodeGraph MCP tools (only takes effect for Claude)
 //   'files' → raw Read/Grep/Glob only
-export type CodeSearchBackend = 'auto' | 'cgc' | 'files';
+export type CodeSearchBackend = 'auto' | 'cgc' | 'graphify' | 'files';
+
+// Freshness of the project's generated documentation relative to current code.
+export interface DocsStatus {
+  hasDocs: boolean;        // a docs/ tree exists in the run dir
+  headSha: string | null;  // current short HEAD of the run dir
+  docsSha: string | null;  // head_sha recorded at last docs generation
+  fresh: boolean;          // headSha === docsSha (both known)
+}
 
 // Which code-search backends are usable for the branch/repo the chat will
 // run against. Returned by the code-search-availability endpoint.
 export interface CodeSearchAvailability {
   cgc: boolean;       // CodeGraph indexed + enabled + CLI present for that dir
   graphify: boolean;  // graphify-out/graph.json present for that dir
+  docs?: DocsStatus;  // documentation freshness for that dir
 }
 
 // Model configuration for insights sessions
@@ -35,6 +44,8 @@ export interface InsightsModelConfig {
   thinkingLevel?: ThinkingLevel; // Only applicable for Claude
   codeSearch?: CodeSearchBackend; // Code navigation backend (default: 'auto')
   dbProfileId?: string;          // Connect the chat to a registered DB (read-only); undefined = none
+  logsEnabled?: boolean;         // Give the chat the read-only logs MCP server
+  uiCheckEnabled?: boolean;      // Give the chat a headless browser (Playwright MCP) for UI checks
 }
 
 // A saved database connection profile (from the Databases extension)
@@ -45,6 +56,7 @@ export interface DatabaseProfileSummary {
   env?: string;
   database?: string;
   host?: string;
+  projectIds?: string[]; // per-project scoping; empty/absent = global
 }
 
 // Provider info returned from detection endpoint
@@ -61,11 +73,13 @@ export type InsightsChatRole = 'user' | 'assistant';
 
 // An attachment sent with a chat message. Images are forwarded to vision-capable
 // models (written to disk + read by the agent); text/code files have their
-// contents inlined into the prompt. `data` is always base64 (no data-URL prefix)
-// for a uniform transport contract — the backend decodes both kinds.
+// contents inlined into the prompt; documents (PDF/DOCX) are written to disk and
+// read by the agent (PDFs natively, DOCX via server-side text extraction).
+// `data` is always base64 (no data-URL prefix) for a uniform transport contract —
+// for images/documents it's the raw bytes, for text the UTF-8 contents.
 export interface ChatAttachment {
   id: string;
-  kind: 'image' | 'text';
+  kind: 'image' | 'text' | 'document';
   filename: string;
   mimeType: string;
   size: number;        // bytes (decoded size)
@@ -76,7 +90,9 @@ export interface ChatAttachment {
 // Tool usage record for showing what tools the AI used
 export interface InsightsToolUsage {
   name: string;
-  input?: string;
+  input?: string;        // Arguments the tool was called with (e.g. the SQL query)
+  result?: string;       // Short summary of the tool's output (e.g. returned rows)
+  isError?: boolean;     // True when the tool call returned an error
   timestamp: Date;
 }
 
@@ -108,6 +124,10 @@ export interface InsightsSession {
   modelConfig?: InsightsModelConfig; // Per-session model configuration
   createdAt: Date;
   updatedAt: Date;
+  // Server-side turn state: true while a chat turn is running for this project
+  // (lets the UI restore/clear the thinking indicator after reload/reconnect).
+  running?: boolean;
+  runningSessionId?: string;
 }
 
 // Summary of a session for the history list (without full messages)
@@ -136,7 +156,10 @@ export interface InsightsStreamMetrics {
 }
 
 export interface InsightsStreamChunk {
-  type: 'text' | 'thinking' | 'task_suggestion' | 'tool_start' | 'tool_end' | 'done' | 'error';
+  type: 'text' | 'thinking' | 'task_suggestion' | 'tool_start' | 'tool_input' | 'tool_end' | 'done' | 'error';
+  // Session the chunk belongs to — lets the UI drop chunks from a turn whose
+  // session is no longer on screen (absent on older backends).
+  sessionId?: string;
   content?: string;
   suggestedTask?: {
     title: string;
@@ -145,8 +168,10 @@ export interface InsightsStreamChunk {
   };
   tool?: {
     name: string;
-    input?: string;  // Brief description of what's being searched/read
+    input?: string;  // Brief description of what's being searched/read (full args on tool_input)
   };
+  result?: string;   // Tool output summary (on tool_end)
+  isError?: boolean; // Tool returned an error (on tool_end)
   error?: string;
   metrics?: InsightsStreamMetrics;
 }

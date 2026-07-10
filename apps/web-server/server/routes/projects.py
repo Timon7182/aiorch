@@ -6,6 +6,7 @@ Handles CRUD operations for projects (git repositories that Magestic AI manages)
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,17 +29,103 @@ from ..config import get_settings
 from . import changelog, context, files, git, github
 from .git import run_git_command
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _kickoff_codegraph_index(project_path: str) -> None:
+    """Fire-and-forget: build the CodeGraphContext index for a newly registered
+    project so the planner/coder/QA agents get CGC's code-graph MCP tools
+    without a manual indexing step.
+
+    No-ops when CGC auto-indexing is disabled (CGC_AUTO_INDEX=false /
+    CODEGRAPH_DISABLED=true) or the `codegraphcontext` CLI isn't installed.
+    Never raises into the request path — project registration must succeed
+    regardless of indexing.
+    """
+    try:
+        from ..services.docs_generator_service import get_docs_generator_service
+
+        backend_path = Path(get_settings().BACKEND_PATH)
+        svc = get_docs_generator_service(backend_path)
+        if not svc.auto_index_enabled():
+            return
+        asyncio.create_task(svc.index_codegraph(Path(project_path)))
+    except Exception:
+        logger.debug("Failed to kick off CGC index for %s", project_path, exc_info=True)
+
+
+def _docs_auto_generate_enabled() -> bool:
+    """Whether docs are auto-generated on project creation.
+
+    Off by default — doc generation spends LLM tokens, so it's opt-in via
+    DOCS_AUTO_GENERATE_ON_CREATE=true. CGC indexing (free, tree-sitter) stays on.
+    """
+    return str(os.environ.get("DOCS_AUTO_GENERATE_ON_CREATE", "")).lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+
+def _kickoff_docs_generation(project_id: str, project_path: str) -> None:
+    """Fire-and-forget full docs generation for a newly created project.
+
+    Gated on DOCS_AUTO_GENERATE_ON_CREATE (default off). Never raises into the
+    request path — registration must succeed regardless of doc generation.
+    """
+    if not _docs_auto_generate_enabled():
+        return
+    try:
+        from ..services.docs_generator_service import get_docs_generator_service
+
+        backend_path = Path(get_settings().BACKEND_PATH)
+        svc = get_docs_generator_service(backend_path)
+
+        async def _run():
+            try:
+                token = await svc.resolve_oauth_token()
+                await svc.generate(
+                    project_id=project_id,
+                    project_path=Path(project_path),
+                    oauth_token=token,
+                )
+            except Exception:
+                logger.debug(
+                    "Auto docs generation failed for %s", project_path, exc_info=True
+                )
+
+        # Mirror the interactive /docs/generate route: flag the project as
+        # starting *before* scheduling the task so a /docs/status call that
+        # races the spawn already reports state=running.
+        svc.mark_starting(project_id)
+        asyncio.create_task(_run())
+    except Exception:
+        logger.debug(
+            "Failed to kick off docs generation for %s", project_path, exc_info=True
+        )
+
 
 # Include project-specific sub-routers
 # These will be available under /api/projects/{projectId}/...
-router.include_router(github.project_router, prefix="/{projectId}/github", tags=["GitHub"])
-router.include_router(changelog.router, prefix="/{projectId}/changelog", tags=["Changelog"])
-router.include_router(changelog.insights_router, prefix="/{projectId}/insights", tags=["Insights"])
-router.include_router(files.insights_router, prefix="/{projectId}/files/insights", tags=["Files Insights"])
+router.include_router(
+    github.project_router, prefix="/{projectId}/github", tags=["GitHub"]
+)
+router.include_router(
+    changelog.router, prefix="/{projectId}/changelog", tags=["Changelog"]
+)
+router.include_router(
+    changelog.insights_router, prefix="/{projectId}/insights", tags=["Insights"]
+)
+router.include_router(
+    files.insights_router, prefix="/{projectId}/files/insights", tags=["Files Insights"]
+)
 router.include_router(context.project_router, prefix="/{projectId}", tags=["Context"])
 router.include_router(git.project_router, prefix="", tags=["Git"])
-router.include_router(git.releases_router, prefix="/{projectId}/releases", tags=["Releases"])
+router.include_router(
+    git.releases_router, prefix="/{projectId}/releases", tags=["Releases"]
+)
 
 
 # --------------------------------------------------------------------------
@@ -61,6 +148,7 @@ class ProjectCreate(ProjectBase):
 
 class NotificationSettings(BaseModel):
     """Notification settings model - BUG-1.2-004: Now properly typed."""
+
     onTaskComplete: bool = Field(default=True)
     onTaskFailed: bool = Field(default=True)
     onReviewNeeded: bool = Field(default=True)
@@ -70,6 +158,7 @@ class NotificationSettings(BaseModel):
 
 class ProjectSettings(BaseModel):
     """Project settings model matching frontend expectations."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     model: str = Field(default="claude-sonnet-4-5-20250929")
@@ -107,13 +196,22 @@ class ProjectSettings(BaseModel):
 
 class Project(ProjectBase):
     """Full project model with computed fields."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     id: str = Field(..., description="Unique project ID")
     name: str = Field(..., description="Display name")
-    createdAt: str = Field(..., alias="created_at", description="ISO timestamp when project was added")
-    updatedAt: str = Field(..., alias="updated_at", description="ISO timestamp when project was last updated")
-    autoBuildPath: str | None = Field(None, alias="auto_build_path", description="Path to .magestic-ai if initialized")
+    createdAt: str = Field(
+        ..., alias="created_at", description="ISO timestamp when project was added"
+    )
+    updatedAt: str = Field(
+        ...,
+        alias="updated_at",
+        description="ISO timestamp when project was last updated",
+    )
+    autoBuildPath: str | None = Field(
+        None, alias="auto_build_path", description="Path to .magestic-ai if initialized"
+    )
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
 
 
@@ -182,12 +280,12 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
             "onTaskComplete": True,
             "onTaskFailed": True,
             "onReviewNeeded": True,
-            "sound": True
+            "sound": True,
         },
         "graphitiMcpEnabled": False,
         "graphitiMcpUrl": None,
         "mainBranch": None,
-        "useClaudeMd": True
+        "useClaudeMd": True,
     }
     # Merge saved settings from projects.json (written by update_project_settings)
     saved_settings = project_data.get("settings", {})
@@ -195,7 +293,9 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
         # Merge notifications separately to preserve individual keys
         if "notifications" in saved_settings:
             default_settings["notifications"].update(saved_settings["notifications"])
-            saved_settings = {k: v for k, v in saved_settings.items() if k != "notifications"}
+            saved_settings = {
+                k: v for k, v in saved_settings.items() if k != "notifications"
+            }
         default_settings.update(saved_settings)
 
     return {
@@ -205,7 +305,7 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
         "createdAt": project_data.get("created_at", datetime.now().isoformat()),
         "updatedAt": project_data.get("updated_at", datetime.now().isoformat()),
         "autoBuildPath": auto_build_path,
-        "settings": default_settings
+        "settings": default_settings,
     }
 
 
@@ -222,14 +322,13 @@ async def list_projects():
     the frontend api-client.ts adds the {success, data} wrapper automatically.
     """
     projects = load_projects()
-    project_list = [
-        project_to_response(pid, pdata) for pid, pdata in projects.items()
-    ]
+    project_list = [project_to_response(pid, pdata) for pid, pdata in projects.items()]
     return project_list
 
 
 class DiscoveredProject(BaseModel):
     """A discovered project folder."""
+
     name: str
     path: str
     has_git: bool = False
@@ -241,8 +340,11 @@ class DiscoveredProject(BaseModel):
 
 class ScanProjectsRequest(BaseModel):
     """Request model for scanning filesystem for projects."""
+
     basePath: str = Field(..., description="Base directory to scan for projects")
-    maxDepth: int = Field(default=1, ge=1, le=5, description="Maximum scan depth (1-5, default 1)")
+    maxDepth: int = Field(
+        default=1, ge=1, le=5, description="Maximum scan depth (1-5, default 1)"
+    )
 
 
 @router.post("/scan")
@@ -274,13 +376,13 @@ async def scan_for_projects(request: ScanProjectsRequest):
         if not base.exists():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Path does not exist: {request.basePath}"
+                detail=f"Path does not exist: {request.basePath}",
             )
 
         if not base.is_dir():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Path is not a directory: {request.basePath}"
+                detail=f"Path is not a directory: {request.basePath}",
             )
 
         projects = []
@@ -297,34 +399,46 @@ async def scan_for_projects(request: ScanProjectsRequest):
                         continue
 
                     # Skip hidden directories and common non-project dirs
-                    if entry.name.startswith('.') or entry.name in (
-                        'node_modules', '__pycache__', 'venv', '.venv',
-                        'dist', 'build', 'target', '.git', 'eggs', '.eggs',
-                        '.pytest_cache', '.tox', 'htmlcov', 'coverage'
+                    if entry.name.startswith(".") or entry.name in (
+                        "node_modules",
+                        "__pycache__",
+                        "venv",
+                        ".venv",
+                        "dist",
+                        "build",
+                        "target",
+                        ".git",
+                        "eggs",
+                        ".eggs",
+                        ".pytest_cache",
+                        ".tox",
+                        "htmlcov",
+                        "coverage",
                     ):
                         continue
 
                     # Check for project indicators
-                    has_git = (entry / '.git').exists()
-                    has_package = (entry / 'package.json').exists()
-                    has_requirements = (
-                        (entry / 'requirements.txt').exists() or
-                        (entry / 'pyproject.toml').exists()
-                    )
-                    has_magestic_ai = (entry / '.magestic-ai').exists()
-                    has_claude_md = (entry / 'CLAUDE.md').exists()
+                    has_git = (entry / ".git").exists()
+                    has_package = (entry / "package.json").exists()
+                    has_requirements = (entry / "requirements.txt").exists() or (
+                        entry / "pyproject.toml"
+                    ).exists()
+                    has_magestic_ai = (entry / ".magestic-ai").exists()
+                    has_claude_md = (entry / "CLAUDE.md").exists()
 
                     # If it looks like a project, add it
                     if has_git or has_package or has_requirements:
-                        projects.append(DiscoveredProject(
-                            name=entry.name,
-                            path=str(entry),
-                            has_git=has_git,
-                            has_package_json=has_package,
-                            has_requirements=has_requirements,
-                            has_magestic_ai=has_magestic_ai,
-                            has_claude_md=has_claude_md,
-                        ))
+                        projects.append(
+                            DiscoveredProject(
+                                name=entry.name,
+                                path=str(entry),
+                                has_git=has_git,
+                                has_package_json=has_package,
+                                has_requirements=has_requirements,
+                                has_magestic_ai=has_magestic_ai,
+                                has_claude_md=has_claude_md,
+                            )
+                        )
                     elif current_depth < request.maxDepth:
                         # Not a project, but scan deeper if we haven't reached max depth
                         scan_directory(entry, current_depth + 1)
@@ -349,7 +463,7 @@ async def scan_for_projects(request: ScanProjectsRequest):
         # Handle unexpected errors
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to scan for projects: {str(e)}"
+            detail=f"Failed to scan for projects: {str(e)}",
         )
 
 
@@ -401,6 +515,8 @@ async def add_project(project: ProjectCreate):
 
     projects[project_id] = project_data
     save_projects(projects)
+    _kickoff_codegraph_index(project_data["path"])
+    _kickoff_docs_generation(project_id, project_data["path"])
 
     response = project_to_response(project_id, project_data)
     if created_directory:
@@ -418,14 +534,22 @@ _SAFE_FOLDER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
 # Default parent directory inside the container where cloned projects land.
 # Bind-mounted to /home/saya/projects on the host (see .ops/compose.server.yml).
-_DEFAULT_CLONE_PARENT = Path(os.environ.get("PROJECTS_CLONE_DIR", "/home/magesticai/projects"))
+_DEFAULT_CLONE_PARENT = Path(
+    os.environ.get("PROJECTS_CLONE_DIR", "/home/magesticai/projects")
+)
 
 
 class ProjectClone(BaseModel):
     """Model for cloning a remote git repository as a project."""
 
     url: str = Field(..., description="HTTPS git URL to clone")
-    name: str | None = Field(None, description="Folder name (defaults to repo name from URL)")
+    name: str | None = Field(
+        None, description="Folder name (defaults to repo name from URL)"
+    )
+    branch: str | None = Field(
+        None,
+        description="Branch to check out (git clone --branch). Defaults to remote HEAD.",
+    )
     target_dir: str | None = Field(
         None,
         description="Absolute parent directory for the clone (defaults to PROJECTS_CLONE_DIR)",
@@ -440,6 +564,67 @@ class ProjectClone(BaseModel):
         if not v.startswith(("https://", "http://")):
             raise ValueError("Only https:// or http:// URLs are supported")
         return v
+
+
+class RemoteBranchesRequest(BaseModel):
+    """Body for listing a remote's branches before cloning."""
+
+    url: str = Field(..., description="HTTPS git URL to inspect")
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("URL is required")
+        if not v.startswith(("https://", "http://")):
+            raise ValueError("Only https:// or http:// URLs are supported")
+        return v
+
+
+@router.post("/git/remote-branches")
+async def list_remote_branches(payload: RemoteBranchesRequest):
+    """List branch names on a remote via ``git ls-remote --heads`` (pre-clone).
+
+    Used to populate the clone dialog's branch dropdown. On any failure
+    (auth/network/timeout) returns an empty list plus an ``error`` string so the
+    UI can fall back to a free-text branch input rather than blocking the clone.
+    """
+    # GIT_TERMINAL_PROMPT=0 so a private repo fails fast instead of prompting.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "ls-remote",
+            "--heads",
+            "--",
+            payload.url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except asyncio.TimeoutError:
+        return {"branches": [], "error": "Timed out listing remote branches."}
+    except OSError as e:
+        return {"branches": [], "error": str(e)}
+
+    if proc.returncode != 0:
+        detail = stderr.decode("utf-8", "replace").strip()[:300]
+        return {"branches": [], "error": detail or "Failed to list remote branches."}
+
+    branches: list[dict] = []
+    seen: set[str] = set()
+    for line in stdout.decode("utf-8", "replace").splitlines():
+        # Each line: "<sha>\trefs/heads/<branch>"
+        parts = line.split("\trefs/heads/", 1)
+        if len(parts) != 2:
+            continue
+        name = parts[1].strip()
+        if name and name not in seen:
+            seen.add(name)
+            branches.append({"name": name})
+    return {"branches": branches}
 
 
 def _derive_repo_name(url: str) -> str:
@@ -472,10 +657,14 @@ async def clone_project(payload: ProjectClone):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Folder name may only contain letters, digits, '.', '_' and '-' "
-                   "(and may not start with a dot).",
+            "(and may not start with a dot).",
         )
 
-    parent = Path(payload.target_dir).expanduser() if payload.target_dir else _DEFAULT_CLONE_PARENT
+    parent = (
+        Path(payload.target_dir).expanduser()
+        if payload.target_dir
+        else _DEFAULT_CLONE_PARENT
+    )
     if not parent.is_absolute():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -492,8 +681,18 @@ async def clone_project(payload: ProjectClone):
 
     # GIT_TERMINAL_PROMPT=0 makes git fail fast on auth instead of hanging.
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    branch_args = (
+        ["--branch", payload.branch.strip()]
+        if payload.branch and payload.branch.strip()
+        else []
+    )
     proc = await asyncio.create_subprocess_exec(
-        "git", "clone", "--", payload.url, str(target),
+        "git",
+        "clone",
+        *branch_args,
+        "--",
+        payload.url,
+        str(target),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -532,6 +731,178 @@ async def clone_project(payload: ProjectClone):
     }
     projects[project_id] = project_data
     save_projects(projects)
+    _kickoff_codegraph_index(resolved)
+    _kickoff_docs_generation(project_id, resolved)
+
+    response = project_to_response(project_id, project_data)
+    response["createdDirectory"] = True
+    return response
+
+
+# --------------------------------------------------------------------------
+# Clone multiple repos into one multi-repo project
+# --------------------------------------------------------------------------
+
+
+class RepoSpec(BaseModel):
+    """One repository to clone inside a multi-repo project."""
+
+    url: str = Field(..., description="HTTPS git URL to clone")
+    name: str | None = Field(
+        None, description="Child folder name (defaults to repo name from URL)"
+    )
+    branch: str | None = Field(
+        None, description="Branch to check out for this repo (git clone --branch)."
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("URL is required")
+        if not v.startswith(("https://", "http://")):
+            raise ValueError("Only https:// or http:// URLs are supported")
+        return v
+
+
+class ProjectCloneMulti(BaseModel):
+    """Clone several repos side-by-side into one composite project folder.
+
+    The project folder itself is intentionally NOT a git repo: each repo is
+    cloned into a child folder, so ``core.multi_repo.discover_repos`` sees a
+    multi-repo project and the build machinery cuts one worktree per repo.
+    """
+
+    name: str = Field(..., description="Project folder name (the non-git parent)")
+    repos: list[RepoSpec] = Field(
+        ..., min_length=1, description="Repos to clone as children"
+    )
+    target_dir: str | None = Field(
+        None,
+        description="Absolute parent directory for the project (defaults to PROJECTS_CLONE_DIR)",
+    )
+
+
+async def _git_clone(
+    url: str, target: Path, branch: str | None = None
+) -> tuple[bool, str]:
+    """Clone ``url`` into ``target``. Returns (ok, stderr).
+
+    When ``branch`` is set, ``--branch <b>`` checks that branch out on clone;
+    otherwise git uses the remote's default HEAD (unchanged behavior).
+    """
+    # GIT_TERMINAL_PROMPT=0 makes git fail fast on auth instead of hanging.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    branch_args = ["--branch", branch.strip()] if branch and branch.strip() else []
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "clone",
+        *branch_args,
+        "--",
+        url,
+        str(target),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return False, "git clone timed out after 10 minutes"
+    if proc.returncode != 0:
+        return False, stderr.decode("utf-8", "replace").strip()[:500]
+    return True, ""
+
+
+@router.post("/clone-multi", status_code=status.HTTP_201_CREATED)
+async def clone_multi_project(payload: ProjectCloneMulti):
+    """Clone multiple repos into one multi-repo project and register it.
+
+    Layout created (mirrors what ``discover_repos`` expects):
+
+        <parent>/<name>/            <- project root (NOT a git repo)
+        <parent>/<name>/<repo-a>/   <- clone of repo a
+        <parent>/<name>/<repo-b>/   <- clone of repo b
+
+    Cloning runs as the web-server process (the container's ``magesticai``
+    user), so the worktree-ownership chown gotcha of host-side clones is
+    avoided. Returns the same shape as POST /projects/clone.
+    """
+    project_name = payload.name.strip()
+    if not _SAFE_FOLDER_RE.match(project_name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project name may only contain letters, digits, '.', '_' and '-' "
+            "(and may not start with a dot).",
+        )
+
+    # Resolve each repo's child folder name up front, rejecting bad/duplicate names.
+    child_names: list[str] = []
+    seen: set[str] = set()
+    for spec in payload.repos:
+        child = (spec.name or _derive_repo_name(spec.url)).strip()
+        if not _SAFE_FOLDER_RE.match(child):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid repository folder name: {child!r}",
+            )
+        if child in seen:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Duplicate repository folder name: {child!r}",
+            )
+        seen.add(child)
+        child_names.append(child)
+
+    parent = (
+        Path(payload.target_dir).expanduser()
+        if payload.target_dir
+        else _DEFAULT_CLONE_PARENT
+    )
+    if not parent.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target_dir must be an absolute path",
+        )
+    project_root = parent / project_name
+    if project_root.exists() and any(project_root.iterdir()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Target path exists and is not empty: {project_root}",
+        )
+    project_root.mkdir(parents=True, exist_ok=True)
+
+    # Clone each repo; on any failure tear down the whole project folder so we
+    # never register a half-cloned multi-repo project.
+    for spec, child in zip(payload.repos, child_names):
+        ok, err = await _git_clone(spec.url, project_root / child, spec.branch)
+        if not ok:
+            shutil.rmtree(project_root, ignore_errors=True)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"git clone failed for {child}: {err}",
+            )
+
+    resolved = str(project_root.resolve())
+    projects = load_projects()
+    for pid, pdata in projects.items():
+        if pdata["path"] == resolved:
+            return project_to_response(pid, pdata)
+
+    project_id = str(uuid4())
+    now = datetime.now().isoformat()
+    project_data = {
+        "path": resolved,
+        "name": project_name,
+        "created_at": now,
+        "updated_at": now,
+    }
+    projects[project_id] = project_data
+    save_projects(projects)
+    _kickoff_codegraph_index(resolved)
+    _kickoff_docs_generation(project_id, resolved)
 
     response = project_to_response(project_id, project_data)
     response["createdDirectory"] = True
@@ -573,7 +944,9 @@ class ProjectFromPrompt(BaseModel):
     """Model for creating a fresh project from a natural-language prompt."""
 
     prompt: str = Field(..., description="What the user wants built")
-    name: str | None = Field(None, description="Folder name (defaults to slugified prompt)")
+    name: str | None = Field(
+        None, description="Folder name (defaults to slugified prompt)"
+    )
     parent_dir: str | None = Field(
         None,
         description="Absolute parent directory (defaults to PROJECTS_CLONE_DIR)",
@@ -604,10 +977,14 @@ async def create_project_from_prompt(payload: ProjectFromPrompt):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Folder name may only contain letters, digits, '.', '_' and '-' "
-                   "(and may not start with a dot).",
+            "(and may not start with a dot).",
         )
 
-    parent = Path(payload.parent_dir).expanduser() if payload.parent_dir else _DEFAULT_CLONE_PARENT
+    parent = (
+        Path(payload.parent_dir).expanduser()
+        if payload.parent_dir
+        else _DEFAULT_CLONE_PARENT
+    )
     if not parent.is_absolute():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -780,15 +1157,13 @@ async def check_project_version(project_id: str):
 
     return {
         "success": True,
-        "data": {
-            "isInitialized": magestic_ai_dir.exists(),
-            "updateAvailable": False
-        }
+        "data": {"isInitialized": magestic_ai_dir.exists(), "updateAvailable": False},
     }
 
 
 class NotificationSettingsUpdate(BaseModel):
     """Model for updating notification settings."""
+
     onTaskComplete: bool | None = None
     onTaskFailed: bool | None = None
     onReviewNeeded: bool | None = None
@@ -802,6 +1177,7 @@ class ProjectSettingsUpdate(BaseModel):
     BUG-1.2-005: Added notifications field to allow updating notification preferences.
     BUG-1.2-003: Added memoryBackend validation.
     """
+
     model: str | None = None
     # BUG-1.2-003: Validate memoryBackend against allowed values
     memoryBackend: MemoryBackendType | None = None
@@ -900,7 +1276,7 @@ async def update_project_settings(project_id: str, settings: ProjectSettingsUpda
                         "onTaskComplete": True,
                         "onTaskFailed": True,
                         "onReviewNeeded": True,
-                        "sound": True
+                        "sound": True,
                     }
                 # Merge the update into existing notifications
                 project_data["settings"]["notifications"].update(notifications_update)
@@ -910,17 +1286,13 @@ async def update_project_settings(project_id: str, settings: ProjectSettingsUpda
 
         save_projects(projects)
 
-        return {
-            "success": True,
-            "message": "Project settings updated successfully"
-        }
+        return {"success": True, "message": "Project settings updated successfully"}
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update project settings: {str(e)}"
+            status_code=500, detail=f"Failed to update project settings: {str(e)}"
         )
 
 
@@ -953,9 +1325,11 @@ async def list_project_worktrees(project_id: str, repo: str | None = Query(None)
             cwd=git_cwd,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
         )
-        base_branch = base_result.stdout.strip() if base_result.returncode == 0 else "main"
+        base_branch = (
+            base_result.stdout.strip() if base_result.returncode == 0 else "main"
+        )
     except Exception:
         base_branch = "main"
 
@@ -966,7 +1340,7 @@ async def list_project_worktrees(project_id: str, repo: str | None = Query(None)
             cwd=git_cwd,
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
         if result.returncode != 0:
             return {"worktrees": []}
@@ -998,7 +1372,7 @@ async def list_project_worktrees(project_id: str, repo: str | None = Query(None)
 
             # Extract spec name from path (e.g., .magestic-ai/worktrees/tasks/001-feature)
             # Pattern: magestic-ai worktrees are in .magestic-ai/worktrees/tasks/{spec-name}
-            spec_match = re.search(r'/\.magestic-ai/worktrees/tasks/([^/]+)$', wt_path)
+            spec_match = re.search(r"/\.magestic-ai/worktrees/tasks/([^/]+)$", wt_path)
             if not spec_match:
                 continue
 
@@ -1012,9 +1386,13 @@ async def list_project_worktrees(project_id: str, repo: str | None = Query(None)
                     cwd=wt_path,
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
                 )
-                commit_count = int(commit_result.stdout.strip()) if commit_result.returncode == 0 else 0
+                commit_count = (
+                    int(commit_result.stdout.strip())
+                    if commit_result.returncode == 0
+                    else 0
+                )
 
                 # Get diff stats
                 diff_result = subprocess.run(
@@ -1022,7 +1400,7 @@ async def list_project_worktrees(project_id: str, repo: str | None = Query(None)
                     cwd=wt_path,
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=10,
                 )
 
                 files_changed = 0
@@ -1032,36 +1410,40 @@ async def list_project_worktrees(project_id: str, repo: str | None = Query(None)
                 if diff_result.returncode == 0 and diff_result.stdout.strip():
                     stat_line = diff_result.stdout.strip()
                     # Parse "X files changed, Y insertions(+), Z deletions(-)"
-                    files_match = re.search(r'(\d+) files? changed', stat_line)
-                    add_match = re.search(r'(\d+) insertions?\(\+\)', stat_line)
-                    del_match = re.search(r'(\d+) deletions?\(-\)', stat_line)
+                    files_match = re.search(r"(\d+) files? changed", stat_line)
+                    add_match = re.search(r"(\d+) insertions?\(\+\)", stat_line)
+                    del_match = re.search(r"(\d+) deletions?\(-\)", stat_line)
 
                     files_changed = int(files_match.group(1)) if files_match else 0
                     additions = int(add_match.group(1)) if add_match else 0
                     deletions = int(del_match.group(1)) if del_match else 0
 
-                enriched_worktrees.append({
-                    "specName": spec_name,
-                    "path": wt_path,
-                    "branch": branch.replace("refs/heads/", ""),
-                    "baseBranch": base_branch,
-                    "commitCount": commit_count,
-                    "filesChanged": files_changed,
-                    "additions": additions,
-                    "deletions": deletions
-                })
+                enriched_worktrees.append(
+                    {
+                        "specName": spec_name,
+                        "path": wt_path,
+                        "branch": branch.replace("refs/heads/", ""),
+                        "baseBranch": base_branch,
+                        "commitCount": commit_count,
+                        "filesChanged": files_changed,
+                        "additions": additions,
+                        "deletions": deletions,
+                    }
+                )
             except Exception:
                 # Still include the worktree with default stats
-                enriched_worktrees.append({
-                    "specName": spec_name,
-                    "path": wt_path,
-                    "branch": branch.replace("refs/heads/", ""),
-                    "baseBranch": base_branch,
-                    "commitCount": 0,
-                    "filesChanged": 0,
-                    "additions": 0,
-                    "deletions": 0
-                })
+                enriched_worktrees.append(
+                    {
+                        "specName": spec_name,
+                        "path": wt_path,
+                        "branch": branch.replace("refs/heads/", ""),
+                        "baseBranch": base_branch,
+                        "commitCount": 0,
+                        "filesChanged": 0,
+                        "additions": 0,
+                        "deletions": 0,
+                    }
+                )
 
         return {"worktrees": enriched_worktrees}
     except Exception as e:
@@ -1101,8 +1483,13 @@ async def list_project_tasks(project_id: str):
 
 class TaskCreateRequest(BaseModel):
     """Request model for creating a task via project endpoint."""
-    title: str = Field(default="", description="Task title (optional, auto-generated if empty)")
-    description: str = Field(..., min_length=1, description="Task description (required)")
+
+    title: str = Field(
+        default="", description="Task title (optional, auto-generated if empty)"
+    )
+    description: str = Field(
+        ..., min_length=1, description="Task description (required)"
+    )
     metadata: dict | None = Field(default=None, description="Optional task metadata")
 
 
@@ -1128,10 +1515,10 @@ async def create_project_task(project_id: str, task_data: TaskCreateRequest):
     title = task_data.title.strip()
     if not title:
         # Generate title from first line/sentence of description
-        desc_lines = task_data.description.strip().split('\n')
+        desc_lines = task_data.description.strip().split("\n")
         first_line = desc_lines[0].strip()
         # Truncate to reasonable length
-        title = first_line[:80] + ('...' if len(first_line) > 80 else '')
+        title = first_line[:80] + ("..." if len(first_line) > 80 else "")
         if not title:
             title = "New Task"
 
@@ -1179,22 +1566,62 @@ async def create_project_task(project_id: str, task_data: TaskCreateRequest):
         # Also include selectedSkills so agent_service.py can inject skill context
         # baseBranch/repoPath persisted here so the build honors the user's git
         # choices even though the "Start" request doesn't re-send them.
-        model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "baseBranch", "repoPath"]
+        model_fields = [
+            "model",
+            "thinkingLevel",
+            "isAutoProfile",
+            "phaseModels",
+            "phaseThinking",
+            "mode",
+            "agentMode",
+            "requireReviewBeforeCoding",
+            "selectedSkills",
+            "baseBranch",
+            "repoPath",
+            "repoPaths",
+            "taskType",
+            "bugReport",
+            "uiCheck",
+        ]
         for field in model_fields:
             if field in task_data.metadata:
                 task_metadata[field] = task_data.metadata[field]
 
-        # Validate repoPath against the project's actual git repos so a task can
-        # only target the project's parent folder or one of its child repos.
+        # Validate the git targets against the project's actual repos so a task
+        # can only build the project's parent folder or one of its child repos.
+        from ..services.git_repos import resolve_git_repos
+
+        repos = resolve_git_repos(str(project_path))
+        allowed = {r["path"] for r in repos}
+
         repo_path = task_metadata.get("repoPath")
-        if repo_path:
-            from ..services.git_repos import resolve_git_repos
-            allowed = {r["path"] for r in resolve_git_repos(str(project_path))}
-            if repo_path not in allowed:
-                task_metadata.pop("repoPath", None)
+        if repo_path and repo_path not in allowed:
+            task_metadata.pop("repoPath", None)
+
+        # Multi-repo: keep only valid repoPaths; an explicit repoPaths list means
+        # the task spans those repos. When the client sent neither a single
+        # repoPath nor a list AND the project has several repos, default to ALL
+        # of them so cross-cutting features (backend + frontend) build together.
+        repo_paths = task_metadata.get("repoPaths")
+        if isinstance(repo_paths, list):
+            repo_paths = [p for p in repo_paths if p in allowed]
+            if repo_paths:
+                task_metadata["repoPaths"] = repo_paths
+            else:
+                task_metadata.pop("repoPaths", None)
+        if (
+            not task_metadata.get("repoPath")
+            and not task_metadata.get("repoPaths")
+            and len([r for r in repos if not r.get("isRoot")]) > 1
+        ):
+            task_metadata["repoPaths"] = [
+                r["path"] for r in repos if not r.get("isRoot")
+            ]
 
         if task_metadata:
-            (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))
+            (spec_dir / "task_metadata.json").write_text(
+                json.dumps(task_metadata, indent=2)
+            )
 
     task = tasks_module.spec_to_task(project_id, spec_dir)
     return tasks_module.task_to_dict(task)
@@ -1231,6 +1658,24 @@ async def get_project_task_logs(project_id: str, spec_id: str):
     return await tasks_module.get_task_logs(task_id)
 
 
+@router.get("/{project_id}/tasks/{spec_id}/reproduction-report")
+async def get_project_task_reproduction_report(project_id: str, spec_id: str):
+    """Get the bug reproduction report for a task (delegates to tasks router)."""
+    from . import tasks as tasks_module
+
+    task_id = f"{project_id}:{spec_id}"
+    return await tasks_module.get_reproduction_report(task_id)
+
+
+@router.get("/{project_id}/tasks/{spec_id}/ui-check-report")
+async def get_project_task_ui_check_report(project_id: str, spec_id: str):
+    """Get the UI-check report for a task (delegates to tasks router)."""
+    from . import tasks as tasks_module
+
+    task_id = f"{project_id}:{spec_id}"
+    return await tasks_module.get_ui_check_report(task_id)
+
+
 # --------------------------------------------------------------------------
 # Task Archive Routes
 # --------------------------------------------------------------------------
@@ -1238,12 +1683,16 @@ async def get_project_task_logs(project_id: str, spec_id: str):
 
 class ArchiveTasksRequest(BaseModel):
     """Request to archive tasks."""
+
     taskIds: list[str] = Field(..., description="List of task IDs to archive")
-    version: str | None = Field(None, description="Version tag for the archive (e.g., 'v1.2.0')")
+    version: str | None = Field(
+        None, description="Version tag for the archive (e.g., 'v1.2.0')"
+    )
 
 
 class UnarchiveTasksRequest(BaseModel):
     """Request to unarchive tasks."""
+
     taskIds: list[str] = Field(..., description="List of task IDs to unarchive")
 
 

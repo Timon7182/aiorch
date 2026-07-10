@@ -460,6 +460,12 @@
     "projectNotInitializedDescription": "Initialisez MagesticAI pour ce projet pour configurer les serveurs MCP.",
     "browserAutomation": "Automatisation du navigateur (agents QA uniquement)",
     "alwaysEnabled": "toujours activé",
+    "codeGraph": {
+      "name": "Fournisseur de graphe de code",
+      "description": "Graphe de connaissances du code interrogé par les agents. Une seule couche est active à la fois ; CodeGraphContext est utilisé par défaut.",
+      "codegraph": "CodeGraphContext",
+      "graphify": "graphify"
+    },
     "addServer": "Ajouter un serveur",
     "addMcpTo": "Ajouter un serveur MCP à {{agent}}",
     "addMcpDescription": "Sélectionnez un serveur MCP à ajouter à cet agent",
@@ -503,7 +509,7 @@
     "serverName": "Nom",
     "serverNamePlaceholder": "Mon serveur MCP",
     "serverDescription": "Description",
-    "serverDescriptionPlaceholder": "Ce que fait ce serveur",
+    "serverDescriptionPlaceholder": "À quoi sert ce serveur — l'IA s'en sert pour le choisir",
     "command": "Commande",
     "args": "Arguments",
     "argsHint": "Arguments séparés par des espaces",

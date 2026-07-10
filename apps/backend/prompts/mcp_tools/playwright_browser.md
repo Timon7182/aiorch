@@ -27,10 +27,13 @@ Playwright runs headless Chromium with automatic management — no manual browse
 
 ```
 Tool: mcp__playwright__browser_navigate
-Args: {"url": "http://localhost:3000"}
+Args: {"url": "<PREVIEW_URL or the local dev-server URL>"}
 ```
 
-Navigate to the development server URL.
+Navigate to the running app. **Prefer the `PREVIEW_URL` environment variable**
+when it is set (a preview of this build is already served there — check with
+`echo "$PREVIEW_URL"`). Only fall back to the local development server URL
+(e.g. `http://localhost:3000`) when `PREVIEW_URL` is empty.
 
 #### Step 2: Take Screenshot
 

@@ -93,6 +93,8 @@ class OpenAICompatProvider(ProviderStrategy):
         model_config: dict | None,
         conversation_history: list[dict] | None,
         working_dir: Path | None = None,
+        attachment_dir: Path | None = None,  # unused — attachments are inlined upstream
+        session_id: str | None = None,
     ) -> str:
         # working_dir is accepted for interface parity; this provider is a plain
         # chat endpoint with no filesystem tool access, so branch selection has
@@ -121,7 +123,7 @@ class OpenAICompatProvider(ProviderStrategy):
             import httpx
 
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "text",
                 "content": "",
             })
@@ -167,7 +169,7 @@ class OpenAICompatProvider(ProviderStrategy):
                                 if content:
                                     accumulated += content
                                     await broadcast_event("insights:chunk", {
-                                        "projectId": project_id,
+                                        "projectId": project_id, "sessionId": session_id,
                                         "type": "text",
                                         "content": content,
                                     })
@@ -198,7 +200,7 @@ class OpenAICompatProvider(ProviderStrategy):
             tokens_per_sec = round(reported_tokens / elapsed, 1) if elapsed > 0 else 0
 
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "done",
                 "metrics": {
                     "outputTokens": reported_tokens,
@@ -213,7 +215,7 @@ class OpenAICompatProvider(ProviderStrategy):
         except Exception as e:
             logger.error(f"[OpenAICompat:{self.provider_id}] Error: {e}", exc_info=True)
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "error",
                 "error": str(e),
             })

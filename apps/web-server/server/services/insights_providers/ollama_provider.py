@@ -106,6 +106,7 @@ class OllamaProvider(ProviderStrategy):
         client,
         payload: dict,
         project_id: str,
+        session_id: str | None = None,
     ) -> tuple[str, list[dict], dict]:
         """Stream a single Ollama chat request, returning (text, tool_calls, metrics).
 
@@ -134,7 +135,7 @@ class OllamaProvider(ProviderStrategy):
                     if content:
                         accumulated += content
                         await broadcast_event("insights:chunk", {
-                            "projectId": project_id,
+                            "projectId": project_id, "sessionId": session_id,
                             "type": "text",
                             "content": content,
                         })
@@ -165,6 +166,8 @@ class OllamaProvider(ProviderStrategy):
         model_config: dict | None,
         conversation_history: list[dict] | None,
         working_dir: Path | None = None,
+        attachment_dir: Path | None = None,  # unused — attachments are inlined upstream
+        session_id: str | None = None,
     ) -> str:
         effective_model = model or (model_config or {}).get("model", "llama3.2:latest")
 
@@ -199,7 +202,7 @@ class OllamaProvider(ProviderStrategy):
             import httpx
 
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "text",
                 "content": "",
             })
@@ -223,7 +226,7 @@ class OllamaProvider(ProviderStrategy):
 
                     try:
                         text, tool_calls, ollama_metrics = await self._stream_response(
-                            client, payload, project_id,
+                            client, payload, project_id, session_id,
                         )
                     except httpx.HTTPStatusError as e:
                         if e.response.status_code == 400 and use_tools:
@@ -281,7 +284,7 @@ class OllamaProvider(ProviderStrategy):
                         )
 
                         await broadcast_event("insights:chunk", {
-                            "projectId": project_id,
+                            "projectId": project_id, "sessionId": session_id,
                             "type": "tool_start",
                             "tool": {"name": tool_name, "input": str(display_input)[:200]},
                         })
@@ -289,7 +292,7 @@ class OllamaProvider(ProviderStrategy):
                         result = execute_tool(tool_name, tool_args, tool_root)
 
                         await broadcast_event("insights:chunk", {
-                            "projectId": project_id,
+                            "projectId": project_id, "sessionId": session_id,
                             "type": "tool_end",
                         })
 
@@ -310,7 +313,7 @@ class OllamaProvider(ProviderStrategy):
                 tokens_per_sec = 0
 
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "done",
                 "metrics": {
                     "inputTokens": total_input_tokens,
@@ -326,7 +329,7 @@ class OllamaProvider(ProviderStrategy):
         except Exception as e:
             logger.error(f"[OllamaProvider] Error: {e}", exc_info=True)
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "error",
                 "error": str(e),
             })

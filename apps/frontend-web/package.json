@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.3.4",
     "@codingame/monaco-vscode-api": "^25.1.2",
     "@codingame/monaco-vscode-python-default-extension": "^25.1.2",
     "@codingame/monaco-vscode-typescript-basics-default-extension": "^25.1.2",
@@ -37,6 +38,7 @@
     "@tailwindcss/typography": "^0.5.19",
     "@tanstack/react-virtual": "^3.13.13",
     "@typefox/monaco-editor-react": "^7.7.0",
+    "@uiw/react-codemirror": "^4.25.2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/addon-web-links": "^0.12.0",

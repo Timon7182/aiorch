@@ -5,6 +5,21 @@ import type { Project, ProjectSettings, AutoBuildVersionInfo, InitializationResu
 const LAST_SELECTED_PROJECT_KEY = 'lastSelectedProjectId';
 // Per-project active git repo (for multi-repo projects). Maps projectId -> repo path.
 const ACTIVE_REPO_KEY = 'activeRepoByProject';
+// Per-project chat grounding (multi-repo). Maps projectId -> repo path | ALL_REPOS.
+const CHAT_GROUND_KEY = 'chatGroundByProject';
+
+// Sentinel meaning "ground the chat in the whole project root" (all repos) so
+// the assistant can read/search every repo + the docs and decide where to look.
+export const ALL_REPOS = '__all__';
+
+function loadMap(key: string): Record<string, string> {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
 
 function loadActiveRepoMap(): Record<string, string> {
   try {
@@ -33,6 +48,11 @@ interface ProjectState {
   // Multi-repo state: detected git repos and the active one per project
   reposByProject: Record<string, GitRepoInfo[]>;
   activeRepoByProject: Record<string, string>; // projectId -> repo path
+  // Chat-only grounding (multi-repo): which repo the insights chat is scoped
+  // to, or ALL_REPOS for the whole project. Kept separate from
+  // activeRepoByProject (shared by worktrees/changelog/docs) so chat can default
+  // to all-repos without disturbing those features.
+  chatGroundByProject: Record<string, string>; // projectId -> repo path | ALL_REPOS
 
   // Actions
   setProjects: (projects: Project[]) => void;
@@ -54,6 +74,7 @@ interface ProjectState {
   // Multi-repo actions
   setProjectRepos: (projectId: string, repos: GitRepoInfo[]) => void;
   setActiveRepo: (projectId: string, repoPath: string) => void;
+  setChatGround: (projectId: string, value: string) => void;
   getActiveRepoPath: (projectId: string) => string | undefined;
 
   // Selectors
@@ -78,6 +99,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // Multi-repo state
   reposByProject: {},
   activeRepoByProject: loadActiveRepoMap(),
+  chatGroundByProject: loadMap(CHAT_GROUND_KEY),
 
   setProjects: (projects) => set({ projects }),
 
@@ -241,6 +263,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return { activeRepoByProject };
     }),
 
+  setChatGround: (projectId, value) =>
+    set((state) => {
+      const chatGroundByProject = { ...state.chatGroundByProject, [projectId]: value };
+      try {
+        localStorage.setItem(CHAT_GROUND_KEY, JSON.stringify(chatGroundByProject));
+      } catch { /* ignore quota errors */ }
+      return { chatGroundByProject };
+    }),
+
   getActiveRepoPath: (projectId) => {
     const state = get();
     const repos = state.reposByProject[projectId];
@@ -336,6 +367,21 @@ export async function loadProjects(): Promise<void> {
     });
 
     if (result.success && result.data) {
+      // Frontend access filtering: non-admin/restricted users only see the
+      // projects an admin granted them. Admins and ungranted users are
+      // unrestricted. Loaded here so the entire app only ever knows about
+      // visible projects.
+      try {
+        const { loadAccess, useAccessStore } = await import('./access-store');
+        await loadAccess();
+        const access = useAccessStore.getState();
+        if (!access.unrestricted) {
+          result.data = result.data.filter((p) => access.canSeeProject(p.id));
+        }
+      } catch (e) {
+        console.warn('[ProjectStore] access filtering skipped:', e);
+      }
+
       store.setProjects(result.data);
 
       // Get current tab state (may have been loaded from IPC)
@@ -438,11 +484,42 @@ export async function cloneProject(
   url: string,
   name?: string,
   targetDir?: string,
+  branch?: string,
 ): Promise<Project | null> {
   const store = useProjectStore.getState();
 
   try {
-    const result = await window.API.cloneProject(url, name, targetDir);
+    const result = await window.API.cloneProject(url, name, targetDir, branch);
+    if (result.success && result.data) {
+      store.addProject(result.data);
+      store.selectProject(result.data.id);
+      store.openProjectTab(result.data.id);
+      return result.data;
+    }
+    throw new Error(result.error || 'Failed to clone project');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    store.setError(message);
+    throw error instanceof Error ? error : new Error(message);
+  }
+}
+
+/**
+ * Clone several repos side-by-side into one multi-repo project.
+ *
+ * The project folder is a non-git parent holding each repo as a child, so the
+ * build machinery treats it as a multi-repo project (one worktree per repo).
+ * Throws on failure so the caller can surface a meaningful error.
+ */
+export async function cloneMultiProject(
+  name: string,
+  repos: { url: string; name?: string; branch?: string }[],
+  targetDir?: string,
+): Promise<Project | null> {
+  const store = useProjectStore.getState();
+
+  try {
+    const result = await window.API.cloneMultiProject(name, repos, targetDir);
     if (result.success && result.data) {
       store.addProject(result.data);
       store.selectProject(result.data.id);

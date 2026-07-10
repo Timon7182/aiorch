@@ -117,7 +117,8 @@ class SuggestVersionCommitsRequest(BaseModel):
 class CommitsPreviewRequest(BaseModel):
     options: dict
     mode: str  # 'history' or 'branch-diff'
-    repo: str | None = None  # selected child repo path for multi-repo projects
+    repo: str | None = None
+    branch: str | None = None  # selected child repo path for multi-repo projects
 
 
 class SaveImageRequest(BaseModel):
@@ -628,27 +629,34 @@ async def get_commits_preview(projectId: str = Path(...), request: CommitsPrevie
             compare_branch = options.get("compareBranchRef") or options.get("compareBranch", "HEAD")
             cmd.append(f"{base_branch}..{compare_branch}")
         else:
-            # History mode with various options
             history_type = options.get("type", "last-n")
+            history_target = request.branch or "HEAD"
 
             if history_type == "last-n":
                 count = options.get("count", 20)
-                cmd.extend(["-n", str(count)])
+                cmd.extend(["-n", str(count), history_target])
             elif history_type == "since-date":
                 since_date = options.get("sinceDate")
                 if since_date:
-                    cmd.extend(["--since", since_date])
+                    cmd.extend(["--since", since_date, history_target])
+                else:
+                    cmd.append(history_target)
             elif history_type == "since-version":
                 from_tag = options.get("fromTag")
                 if from_tag:
-                    cmd.append(f"{from_tag}..HEAD")
+                    cmd.append(f"{from_tag}..{history_target}")
+                else:
+                    cmd.append(history_target)
             elif history_type == "tag-range":
                 from_tag = options.get("fromTag")
-                to_tag = options.get("toTag", "HEAD")
+                to_tag = options.get("toTag") or history_target
                 if from_tag:
                     cmd.append(f"{from_tag}..{to_tag}")
+                else:
+                    cmd.append(to_tag)
+            else:
+                cmd.append(history_target)
 
-            # Optionally exclude merge commits
             if not options.get("includeMergeCommits", True):
                 cmd.append("--no-merges")
 
@@ -805,9 +813,10 @@ class InsightsMessageRequest(BaseModel):
     # Chat history stays keyed to the project, shared across repos.
     repo: str | None = None
     # Files/images attached to this message. Each item is a ChatAttachment dict:
-    # {id, kind: 'image'|'text', filename, mimeType, size, data (base64), thumbnail?}.
-    # Text files are inlined into the prompt; images are written to disk and read
-    # by the agent (Claude vision). None => no attachments.
+    # {id, kind: 'image'|'text'|'document', filename, mimeType, size, data (base64), thumbnail?}.
+    # Text files are inlined into the prompt; images and documents (PDF/DOCX) are
+    # written to disk and read by the agent (Claude vision reads images/PDFs
+    # natively; DOCX is text-extracted server-side). None => no attachments.
     attachments: list[dict] | None = None
 
 
@@ -872,6 +881,10 @@ async def get_insights_session(projectId: str = Path(...)):
             "modelConfig": session.model_config,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
+            # Turn state: lets the frontend restore the thinking indicator
+            # after a reload/reconnect/switch, or clear a stranded one.
+            "running": service.is_running(projectId),
+            "runningSessionId": service.running_session_id(projectId),
         }
     }
 
@@ -929,12 +942,17 @@ async def insights_code_search_availability(
             ground_dir = FilePath(resolved)
 
     from ..services.branch_worktree import predicted_ground_dir
-    from ..services.insights_providers.claude_provider import codegraph_available
+    from ..services.insights_providers.claude_provider import (
+        codegraph_available,
+        docs_status,
+        graphify_available,
+    )
 
     run_dir = predicted_ground_dir(ground_dir, branch)
     return {
         "cgc": codegraph_available(run_dir),
-        "graphify": (run_dir / "graphify-out" / "graph.json").is_file(),
+        "graphify": graphify_available(run_dir),
+        "docs": docs_status(run_dir),
     }
 
 
@@ -1100,6 +1118,10 @@ async def switch_insights_session(projectId: str = Path(...), sessionId: str = P
             "modelConfig": session.model_config,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
+            # Turn state: lets the frontend restore the thinking indicator
+            # after a reload/reconnect/switch, or clear a stranded one.
+            "running": service.is_running(projectId),
+            "runningSessionId": service.running_session_id(projectId),
         }
     }
 

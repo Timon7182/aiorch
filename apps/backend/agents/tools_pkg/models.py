@@ -126,6 +126,7 @@ PLAYWRIGHT_TOOLS = [
     "mcp__playwright__browser_evaluate",
     "mcp__playwright__browser_snapshot",
     "mcp__playwright__browser_console_messages",
+    "mcp__playwright__browser_network_requests",
     "mcp__playwright__browser_press_key",
     "mcp__playwright__browser_wait_for",
     "mcp__playwright__browser_navigate_back",
@@ -241,6 +242,20 @@ AGENT_CONFIGS = {
             TOOL_UPDATE_QA_STATUS,
             TOOL_RECORD_GOTCHA,
             TOOL_TEST_MEMORY_INTEGRATION,
+        ],
+        "thinking_default": "medium",
+    },
+    "ui_checker": {
+        # On-demand browser UI verification (taskType == "ui_check").
+        # Runs standalone via `run.py --spec X --ui-check` — no planner/coder,
+        # no worktree. Writes only ui_check_report.md / ui_check_result.json /
+        # evidence-ui-check/ into the spec dir. Browser is mandatory: the
+        # "browser" placeholder resolves via the same gates as QA, and
+        # agent_service forces it with AGENT_MCP_ui_checker_ADD=playwright.
+        "tools": BASE_READ_TOOLS + BASE_WRITE_TOOLS,
+        "mcp_servers": ["magestic-ai", "browser"],
+        "magestic_ai_tools": [
+            TOOL_GET_SESSION_CONTEXT,
         ],
         "thinking_default": "medium",
     },
@@ -453,14 +468,30 @@ def get_required_mcp_servers(
         if not os.environ.get("GRAPHITI_MCP_URL"):
             servers = [s for s in servers if s != "graphiti"]
 
-    # Filter graphify based on whether the project has a graph built.
-    # Two conditions to enable: (a) GRAPHIFY_DISABLED env not truthy,
-    # (b) project_dir was passed AND <project>/graphify-out/graph.json
-    # exists. If project_dir is missing we keep graphify enabled so callers
-    # that don't pass it (e.g. permission introspection) don't lose tools;
-    # client.py does a final file-exists check before spawning the server.
+    # ===== Code-graph provider selection (exclusive: codegraph OR graphify) =====
+    # Both codegraph (CodeGraphContext) and graphify are code-knowledge graph
+    # layers. We run exactly ONE of them per project so agents have a single,
+    # unambiguous graph to query. The active provider is chosen per-project via
+    # CODE_GRAPH_PROVIDER in .magestic-ai/.env; CodeGraphContext is the default.
+    #   CODE_GRAPH_PROVIDER=codegraph  -> use CGC, drop graphify   (default)
+    #   CODE_GRAPH_PROVIDER=graphify   -> use graphify, drop CGC
+    # The non-selected provider is always removed. The selected provider is then
+    # gated as before on (a) its kill-switch env not being truthy and (b) when
+    # project_dir was passed, its index existing on disk. When project_dir is
+    # missing (e.g. permission introspection) we keep the selected provider so
+    # those callers don't lose tools; client.py does a final existence check
+    # before spawning the server.
+    code_graph_provider = str(
+        mcp_config.get("CODE_GRAPH_PROVIDER", "codegraph")
+    ).strip().lower()
+    if code_graph_provider not in ("codegraph", "graphify"):
+        code_graph_provider = "codegraph"
+
     if "graphify" in servers:
-        if str(os.environ.get("GRAPHIFY_DISABLED", "")).lower() == "true":
+        if code_graph_provider != "graphify":
+            # Not the selected provider — exclusive selection drops it.
+            servers = [s for s in servers if s != "graphify"]
+        elif str(os.environ.get("GRAPHIFY_DISABLED", "")).lower() == "true":
             servers = [s for s in servers if s != "graphify"]
         elif project_dir is not None:
             from pathlib import Path as _Path
@@ -468,16 +499,11 @@ def get_required_mcp_servers(
             if not graph_file.is_file():
                 servers = [s for s in servers if s != "graphify"]
 
-    # Filter codegraph (CodeGraphContext) based on whether the project has been
-    # indexed. CGC stores its per-repo graph DB under a `.codegraphcontext/`
-    # folder created by `codegraphcontext index <path>` (manual trigger). Enable
-    # when (a) CODEGRAPH_DISABLED env is not truthy and (b) project_dir was
-    # passed AND that folder exists. Mirrors the graphify logic above: when
-    # project_dir is missing we keep it enabled so permission-introspection
-    # callers don't lose tools; client.py does a final existence check before
-    # spawning the server.
     if "codegraph" in servers:
-        if str(os.environ.get("CODEGRAPH_DISABLED", "")).lower() == "true":
+        if code_graph_provider != "codegraph":
+            # Not the selected provider — exclusive selection drops it.
+            servers = [s for s in servers if s != "codegraph"]
+        elif str(os.environ.get("CODEGRAPH_DISABLED", "")).lower() == "true":
             servers = [s for s in servers if s != "codegraph"]
         elif project_dir is not None:
             from pathlib import Path as _Path

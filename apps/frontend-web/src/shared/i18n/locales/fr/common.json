@@ -248,13 +248,32 @@
       "codeSearch": {
         "label": "Recherche de code",
         "auto": "Auto",
-        "autoDesc": "CodeGraph si indexé, sinon fichiers",
+        "autoDesc": "CodeGraph si indexé, sinon Graphify, sinon fichiers",
         "cgc": "CodeGraph",
         "cgcDesc": "Interroger le graphe de code indexé (Claude uniquement)",
+        "graphify": "Graphify",
+        "graphifyDesc": "Interroger le graphe de connaissances docs + code (Claude uniquement)",
         "files": "Fichiers",
         "filesDesc": "Read / Grep / Glob simples",
-        "cgcUnavailable": "Non indexé pour cette branche"
+        "cgcUnavailable": "Non disponible pour cette branche",
+        "graphifyUnavailable": "Aucun graphe construit pour ce projet"
+      },
+      "logs": {
+        "label": "Journaux",
+        "enable": "Activer l'accès aux journaux",
+        "desc": "Lire les journaux d'application, serveur et conteneur (lecture seule)"
+      },
+      "uiCheck": {
+        "label": "Vérification UI",
+        "enable": "Activer les vérifications navigateur",
+        "desc": "Vérifier le fonctionnement du frontend dans un navigateur headless (captures, console, réseau)"
       }
+    },
+    "docsBanner": {
+      "message": "La documentation est obsolète — elle peut ne pas refléter le code le plus récent.",
+      "refresh": "Actualiser",
+      "refreshError": "L'actualisation a échoué — veuillez réessayer.",
+      "dismiss": "Ignorer"
     },
     "createTask": {
       "button": "Créer une tâche",
@@ -297,6 +316,22 @@
     "done": "Terminé",
     "failedLabel": "Échoué",
     "starting": "Démarrage..."
+  },
+  "chatFiles": {
+    "heading": "Fichiers",
+    "download": "Télécharger {{name}}",
+    "downloadFailed": "Impossible de télécharger {{name}}"
+  },
+  "documentation": {
+    "edit": "Modifier",
+    "save": "Enregistrer",
+    "saving": "Enregistrement...",
+    "cancel": "Annuler",
+    "rebuilding": "Reconstruction du site...",
+    "saveFailed": "Échec de l'enregistrement du fichier",
+    "autoBlockWarning": "Ce fichier contient des blocs générés automatiquement. Les modifications à l'intérieur des marqueurs <!-- docgen:auto --> seront écrasées lors de la prochaine régénération de la documentation.",
+    "unsavedConfirm": "Vous avez des modifications non enregistrées. Les abandonner ?",
+    "template": "Modèle"
   },
   "lastChecked": "Dernière vérification"
 }

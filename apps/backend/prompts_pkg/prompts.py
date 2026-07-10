@@ -75,7 +75,7 @@ The project root is the parent of magestic-ai/. Implement code in the project ro
 ---
 
 """
-    return spec_context + prompt
+    return spec_context + _get_attachments_context(spec_dir) + prompt
 
 
 def get_coding_prompt(spec_dir: Path) -> str:
@@ -142,7 +142,7 @@ After addressing this input, you may delete or clear the HUMAN_INPUT.md file.
 
 """
 
-    return spec_context + prompt
+    return spec_context + _get_attachments_context(spec_dir) + prompt
 
 
 def _get_recovery_context(spec_dir: Path) -> str:
@@ -260,7 +260,7 @@ You are adding follow-up work to a **completed** spec.
 ---
 
 """
-    return spec_context + prompt
+    return spec_context + _get_attachments_context(spec_dir) + prompt
 
 
 def is_first_run(spec_dir: Path) -> bool:
@@ -296,6 +296,228 @@ def is_first_run(spec_dir: Path) -> bool:
     except (OSError, json.JSONDecodeError):
         # If we can't read the file, treat as first run
         return True
+
+
+def _get_attachments_context(spec_dir: Path) -> str:
+    """Return a prompt section listing client-attached screenshots, if any.
+
+    The web-server materializes pasted screenshots into ``<spec_dir>/attachments/``
+    (see routes/tasks.py ``_materialize_attachments``). Agents' Read tool renders
+    images natively, so we point them at the files. Returns "" when no
+    attachments exist (backward compatible).
+    """
+    attachments_dir = spec_dir / "attachments"
+    if not attachments_dir.is_dir():
+        return ""
+    try:
+        files = sorted(
+            p
+            for p in attachments_dir.iterdir()
+            if p.is_file()
+            and p.suffix.lower()
+            in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")
+        )
+    except OSError:
+        return ""
+    if not files:
+        return ""
+    listing = "\n".join(f"- `{p}`" for p in files)
+    return (
+        "## CLIENT-ATTACHED SCREENSHOTS\n\n"
+        f"The client attached {len(files)} screenshot(s) with this task. "
+        "Use the Read tool to view them (images render natively in your context):\n\n"
+        f"{listing}\n\n---\n\n"
+    )
+
+
+def _get_bug_repro_context(spec_dir: Path, role: str) -> str:
+    """Return the bug-reproduction protocol section for QA prompts on bug tasks.
+
+    Gated on ``task_metadata.json`` ``taskType == 'bug'``. ``role`` is
+    ``'reviewer'`` or ``'fixer'``. Injects the client's structured bug report
+    (steps/expected/actual from requirements.json metadata) followed by the
+    ``qa_bug_repro.md`` protocol. Returns "" for non-bug tasks (backward
+    compatible).
+    """
+    task_type = ""
+    try:
+        tm_file = spec_dir / "task_metadata.json"
+        if tm_file.is_file():
+            task_type = (json.loads(tm_file.read_text()) or {}).get("taskType", "")
+    except (OSError, json.JSONDecodeError, TypeError):
+        return ""
+    if task_type != "bug":
+        return ""
+
+    # Client's structured bug report (from requirements.json metadata)
+    bug = {}
+    try:
+        req_file = spec_dir / "requirements.json"
+        if req_file.is_file():
+            meta = (json.loads(req_file.read_text()) or {}).get("metadata") or {}
+            bug = meta.get("bugReport") or {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        bug = {}
+
+    client_report = "## CLIENT BUG REPORT\n\n"
+    if isinstance(bug, dict) and bug.get("steps"):
+        client_report += f"**Steps to reproduce:**\n{bug['steps']}\n\n"
+    if isinstance(bug, dict) and bug.get("expected"):
+        client_report += f"**Expected behavior:**\n{bug['expected']}\n\n"
+    if isinstance(bug, dict) and bug.get("actual"):
+        client_report += f"**Actual behavior:**\n{bug['actual']}\n\n"
+    if not bug:
+        client_report += (
+            "(No structured steps provided — derive the reproduction steps from "
+            "the task description and any attached screenshots.)\n\n"
+        )
+    client_report += "---\n\n"
+
+    try:
+        protocol = _load_prompt_file("qa_bug_repro.md")
+    except FileNotFoundError:
+        protocol = ""
+
+    role_note = ""
+    if role == "fixer":
+        role_note = (
+            "\n\n## FIXER: RE-VERIFY IN BROWSER AFTER FIX\n\n"
+            "After applying your fix, re-run the client's reproduction steps in the "
+            "browser, capture AFTER screenshots into `evidence/`, and append a "
+            '"Verification after fix" section to `reproduction_report.md` confirming '
+            "the bug no longer reproduces.\n"
+        )
+
+    return client_report + protocol + role_note + "\n\n---\n\n"
+
+
+def _is_safe_target_url(url: str | None) -> bool:
+    """Only http(s) URLs with a host are acceptable UI-check browser targets.
+
+    Mirrors server.services.ui_check_service.is_valid_target_url (web-server);
+    duplicated here because the backend must also gate direct CLI runs where
+    agent_service's resolution never happened.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def get_ui_check_prompt(spec_dir: Path, project_dir: Path) -> str:
+    """Build the full prompt for a standalone UI-check session.
+
+    Used by ``run.py --spec X --ui-check`` (agent_type ``ui_checker``). Assembles:
+    1. Spec context (paths the agent may write to)
+    2. CHECK PARAMETERS from ``task_metadata.json`` ``uiCheck`` +
+       ``requirements.json`` (description as functionality fallback)
+    3. Credential placeholder names from the ``UI_CHECK_SECRET_VARS`` env var
+       (names only — values are substituted by the MCP secret proxy and never
+       enter the session)
+    4. The ``ui_check.md`` protocol
+
+    Args:
+        spec_dir: Directory containing the spec files
+        project_dir: Root directory of the project
+
+    Returns:
+        The assembled UI-check prompt
+    """
+    protocol = _load_prompt_file("ui_check.md")
+
+    ui_check = {}
+    try:
+        tm_file = spec_dir / "task_metadata.json"
+        if tm_file.is_file():
+            ui_check = (json.loads(tm_file.read_text()) or {}).get("uiCheck") or {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        ui_check = {}
+
+    title, description = "", ""
+    try:
+        req_file = spec_dir / "requirements.json"
+        if req_file.is_file():
+            req = json.loads(req_file.read_text()) or {}
+            title = req.get("title") or ""
+            description = req.get("description") or ""
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+
+    # URL: agent_service resolves the final target (metadata → named env →
+    # preview) and exports UI_CHECK_TARGET_URL; metadata is the fallback for
+    # direct CLI runs. Only http(s) targets are acceptable browser targets —
+    # a file:// / data: / javascript: value from metadata must never reach the
+    # prompt (the liveness probe curls it and Playwright would navigate to it).
+    raw_url = os.environ.get("UI_CHECK_TARGET_URL") or ui_check.get("url") or ""
+    target_url = raw_url if _is_safe_target_url(raw_url) else ""
+
+    params = "## CHECK PARAMETERS\n\n"
+    params += f"- **Target URL:** {target_url or '(NOT PROVIDED — see rule 6: BLOCKED)'}\n"
+    if ui_check.get("environment"):
+        params += f"- **Environment:** {ui_check['environment']}\n"
+    params += f"- **Role/account:** {ui_check.get('role') or 'none specified'}\n"
+    attempts = ui_check.get("attempts") or 1
+    try:
+        attempts = max(1, min(3, int(attempts)))
+    except (TypeError, ValueError):
+        attempts = 1
+    params += f"- **Attempts requested:** {attempts}\n\n"
+    if title or description:
+        params += f"**Functionality under check:** {title}\n\n{description}\n\n"
+    if ui_check.get("preconditions"):
+        params += f"**Preconditions:**\n{ui_check['preconditions']}\n\n"
+    if ui_check.get("steps"):
+        params += f"**Steps to perform:**\n{ui_check['steps']}\n\n"
+    else:
+        params += (
+            "**Steps to perform:** none provided — derive minimal steps from the "
+            "functionality description and mark them as derived in the report.\n\n"
+        )
+    if ui_check.get("expected"):
+        params += f"**Expected result:**\n{ui_check['expected']}\n\n"
+
+    secret_vars = [
+        v.strip()
+        for v in os.environ.get("UI_CHECK_SECRET_VARS", "").split(",")
+        if v.strip()
+    ]
+    if secret_vars:
+        placeholders = "\n".join(f"- `${{{v}}}`" for v in secret_vars)
+        params += (
+            "**Credential placeholders** (type these EXACT literal strings into "
+            "login fields; real values are substituted outside your session):\n"
+            f"{placeholders}\n\n"
+        )
+    else:
+        params += (
+            "**Credentials:** none configured. If the app requires login, the "
+            "verdict is BLOCKED (state that credentials are required).\n\n"
+        )
+
+    spec_context = f"""## SPEC LOCATION
+
+- Spec directory (the ONLY place you write files): `{spec_dir}`
+- Report output: `{spec_dir}/ui_check_report.md`
+- Result JSON: `{spec_dir}/ui_check_result.json`
+- Evidence directory: `{spec_dir}/evidence-ui-check/`
+- Project root (read-only for you): `{project_dir}`
+
+---
+
+"""
+
+    return (
+        spec_context
+        + params
+        + "---\n\n"
+        + _get_attachments_context(spec_dir)
+        + protocol
+    )
 
 
 def _load_prompt_file(filename: str) -> str:
@@ -355,7 +577,12 @@ The project root is: `{project_dir}`
 ---
 
 """
-            return spec_context + base_prompt
+            return (
+                spec_context
+                + _get_attachments_context(spec_dir)
+                + _get_bug_repro_context(spec_dir, "reviewer")
+                + base_prompt
+            )
 
     # Load base QA reviewer prompt (full mode with MCP tools)
     base_prompt = _load_prompt_file("qa_reviewer.md")
@@ -434,7 +661,12 @@ The project root is: `{project_dir}`
         base_prompt += "\n\n---\n\n## PROJECT-SPECIFIC VALIDATION TOOLS\n\n"
         base_prompt += "\n\n---\n\n".join(mcp_sections)
 
-    return spec_context + base_prompt
+    return (
+        spec_context
+        + _get_attachments_context(spec_dir)
+        + _get_bug_repro_context(spec_dir, "reviewer")
+        + base_prompt
+    )
 
 
 def get_qa_fixer_prompt(spec_dir: Path, project_dir: Path) -> str:
@@ -463,4 +695,9 @@ The project root is: `{project_dir}`
 ---
 
 """
-    return spec_context + base_prompt
+    return (
+        spec_context
+        + _get_attachments_context(spec_dir)
+        + _get_bug_repro_context(spec_dir, "fixer")
+        + base_prompt
+    )

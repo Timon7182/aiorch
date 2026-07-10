@@ -109,30 +109,65 @@ def resolve_task(task_id: str) -> TaskRef:
     )
 
 
-def _branch_of(path: Path) -> str:
+def _git(args: list[str], cwd: Path) -> str | None:
+    # safe.directory=* — bind-mounted child repos can be owned by a different uid
+    # than this process; without it git aborts with "dubious ownership".
     try:
         r = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(path), capture_output=True, text=True, timeout=10,
+            ["git", "-c", "safe.directory=*", *args],
+            cwd=str(cwd), capture_output=True, text=True, timeout=20,
         )
-        if r.returncode == 0:
-            return r.stdout.strip()
     except Exception:
-        pass
-    return ""
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _composite_worktrees(worktree_path: Path) -> list[dict[str, Any]]:
+    """For a composite task dir, return per-repo sub-worktrees with change flags.
+
+    A composite task dir is a plain folder whose children are git worktrees
+    (``backend/``, ``frontend/``). Returns ``[{name, path, changed}]`` where
+    ``changed`` means the repo gained commits (or has uncommitted edits) on the
+    task branch vs its base. Returns ``[]`` for a classic single worktree (the
+    task dir is itself a git worktree).
+    """
+    if (worktree_path / ".git").exists():
+        return []  # classic single worktree
+    out: list[dict[str, Any]] = []
+    try:
+        children = sorted(worktree_path.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return out
+    for child in children:
+        try:
+            if not (child.is_dir() and (child / ".git").exists()):
+                continue
+        except OSError:
+            continue
+        # Base = ref checked out in the repo's main worktree (first list entry).
+        base = None
+        wl = _git(["worktree", "list", "--porcelain"], child)
+        if wl:
+            for ln in wl.split("\n\n")[0].splitlines():
+                if ln.startswith("branch "):
+                    base = ln.split(" ", 1)[1].strip().replace("refs/heads/", "")
+                    break
+        changed = True
+        if base:
+            cnt = _git(["rev-list", "--count", f"{base}..HEAD"], child)
+            if cnt is not None and cnt == "0":
+                dirty = _git(["status", "--porcelain"], child)
+                changed = bool(dirty)
+        out.append({"name": child.name, "path": child, "changed": changed})
+    return out
+
+
+def _branch_of(path: Path) -> str:
+    return _git(["rev-parse", "--abbrev-ref", "HEAD"], path) or ""
 
 
 def _short_sha(path: Path) -> str:
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(path), capture_output=True, text=True, timeout=10,
-        )
-        if r.returncode == 0:
-            return r.stdout.strip()
-    except Exception:
-        pass
-    return ""
+    return _git(["rev-parse", "--short", "HEAD"], path) or ""
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +224,11 @@ def _write_preview_state(spec_dir: Path, patch: dict[str, Any]) -> dict[str, Any
 
 def get_preview(task_id: str) -> dict[str, Any]:
     ref = resolve_task(task_id)
-    return (_read_meta(ref.spec_dir).get("preview")) or {"status": "none"}
+    preview = (_read_meta(ref.spec_dir).get("preview")) or {"status": "none"}
+    if preview.get("strategy") in dc.LOCAL_STRATEGIES:
+        from . import local_preview_service as lps
+        return lps.reconcile(ref, preview)
+    return preview
 
 
 # ---------------------------------------------------------------------------
@@ -211,32 +250,52 @@ def _parse_runner_json(stdout: str) -> dict[str, Any]:
 def _run_runner(profile: dict[str, Any], args: list[str], *, timeout: int = 1800) -> dict[str, Any]:
     res = ssh_service.run_script(profile, RUNNER_KEY, args, timeout=timeout)
     if res.exit_code != 0:
-        # Try to surface the runner's JSON error, else the stderr tail.
+        # Prefer the runner's own JSON error (emitted by its `die`); otherwise the
+        # runner was killed mid-step (set -e) without printing JSON, so surface the
+        # stderr tail — never the opaque "no parseable JSON result".
         try:
             data = _parse_runner_json(res.stdout)
-            raise PreviewError(data.get("error") or f"runner exited {res.exit_code}")
         except PreviewError:
-            raise
-        except Exception:
-            tail = (res.stderr or res.stdout).strip()[-600:]
-            raise PreviewError(f"runner exited {res.exit_code}: {tail}")
+            data = None
+        if data is not None and data.get("error"):
+            raise PreviewError(str(data["error"]))
+        tail = (res.stderr or res.stdout).strip()[-600:]
+        raise PreviewError(
+            f"runner exited {res.exit_code}: {tail}" if tail
+            else f"runner exited {res.exit_code} with no output"
+        )
     return _parse_runner_json(res.stdout)
 
 
 # ---------------------------------------------------------------------------
 # Public operations
 # ---------------------------------------------------------------------------
-def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[str, Any]:
+def deploy_preview(
+    task_id: str,
+    *,
+    lane_override: str | None = None,
+    strategy_override: str | None = None,
+) -> dict[str, Any]:
     """Validate inputs, set state to 'building', and run the deploy in the
-    background. Returns the initial state immediately."""
+    background. Returns the initial state immediately.
+
+    Dispatches by ``strategy``: ``docker-remote`` (default) runs the existing
+    SSH/Docker path; ``dev-server`` / ``compose-local`` delegate to the local
+    preview service (no ServerProfile needed)."""
     ref = resolve_task(task_id)
     if not ref.worktree_path.exists():
         raise PreviewError("No worktree found for this task")
 
     config = dc.load_deploy_config(ref.project_path)
+    strategy = strategy_override or config.get("strategy") or "docker-remote"
+    config["strategy"] = strategy  # so validate + downstream see the override
     errors = dc.validate_config(config)
     if errors:
         raise PreviewError("invalid deploy config: " + "; ".join(errors))
+
+    if strategy in dc.LOCAL_STRATEGIES:
+        from . import local_preview_service as lps
+        return lps.start(ref, strategy, config)
 
     profile = find_target(config.get("target", ""))
     if not (profile.get("deploys") or {}).get(RUNNER_KEY):
@@ -244,11 +303,16 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
             f"server {profile.get('name')!r} has no deploys.{RUNNER_KEY} script (preview-runner.sh)"
         )
 
-    branch = _branch_of(ref.worktree_path)
+    # Composite (multi-repo) task? Children of the task dir are per-repo
+    # worktrees. For change-aware deploy we read git from one of them.
+    composite = _composite_worktrees(ref.worktree_path)
+    branch_probe = composite[0]["path"] if composite else ref.worktree_path
+
+    branch = _branch_of(branch_probe)
     lane = (lane_override or dc.lane_for_branch(config, branch)).upper()
     if lane not in ("A", "B"):
         raise PreviewError(f"invalid lane: {lane}")
-    sha = _short_sha(ref.worktree_path)
+    sha = _short_sha(branch_probe)
 
     # Persist the fully-merged config next to the spec so the host (bind-mounted)
     # can read it; pass its host path to the runner.
@@ -258,8 +322,24 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
     host_src = _to_host_path(ref.worktree_path, profile)
     host_cfg = _to_host_path(resolved_cfg, profile)
 
+    # Per-repo source paths + change flags drive the change-aware cts recipe:
+    # the runner rebuilds only the half (backend / frontend) that actually
+    # changed and reuses the static lane's artifact for the other.
+    repo_args: list[str] = []
+    if composite:
+        changed_names = [r["name"] for r in composite if r["changed"]]
+        for r in composite:
+            host_repo_src = _to_host_path(r["path"], profile)
+            flag = "true" if r["changed"] else "false"
+            if r["name"] == "backend":
+                repo_args += ["--backend-src", host_repo_src, "--backend-changed", flag]
+            elif r["name"] == "frontend":
+                repo_args += ["--frontend-src", host_repo_src, "--frontend-changed", flag]
+        _write_preview_state(ref.spec_dir, {"changedRepos": changed_names})
+
     state = _write_preview_state(ref.spec_dir, {
         "status": "building",
+        "strategy": "docker-remote",
         "lane": lane,
         "branch": branch,
         "ref": sha,
@@ -278,12 +358,24 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
         "--src", host_src,
         "--config", host_cfg,
     ]
+    args += repo_args
     if sha:
         args += ["--ref", sha]
+
+    from ..websockets import events as ws_events
+
+    def _emit(status: str, url: str | None = None, error: str | None = None) -> None:
+        # Runs on a background thread — schedule the broadcast onto the main loop.
+        ws_events.emit_threadsafe(ws_events.emit_preview_status(
+            task_id, ref.project_id, status, "docker-remote", url=url, error=error,
+        ))
+
+    _emit("building")
 
     def _worker() -> None:
         try:
             _write_preview_state(ref.spec_dir, {"status": "deploying"})
+            _emit("deploying")
             data = _run_runner(profile, args, timeout=2400)
             _write_preview_state(ref.spec_dir, {
                 "status": "running",
@@ -291,10 +383,13 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
                 "ip": data.get("ip"),
                 "port": data.get("port"),
                 "db": data.get("db"),
+                "expiresAt": data.get("expiresAt"),
                 "error": None,
             })
+            _emit("running", url=data.get("url"))
         except Exception as exc:  # noqa: BLE001 — record failure for the UI
             _write_preview_state(ref.spec_dir, {"status": "failed", "error": str(exc)})
+            _emit("failed", error=str(exc))
 
     threading.Thread(target=_worker, name=f"preview-deploy-{ref.slug}", daemon=True).start()
     return state
@@ -302,6 +397,11 @@ def deploy_preview(task_id: str, *, lane_override: str | None = None) -> dict[st
 
 def stop_preview(task_id: str) -> dict[str, Any]:
     ref = resolve_task(task_id)
+    strategy = (_read_meta(ref.spec_dir).get("preview") or {}).get("strategy") or "docker-remote"
+    if strategy in dc.LOCAL_STRATEGIES:
+        from . import local_preview_service as lps
+        return lps.stop(ref)
+
     config = dc.load_deploy_config(ref.project_path)
     profile = find_target(config.get("target", ""))
     try:
@@ -313,8 +413,27 @@ def stop_preview(task_id: str) -> dict[str, Any]:
     return state
 
 
+def extend_preview(task_id: str, hours: int = 1) -> dict[str, Any]:
+    """Bump a live preview's expiry by `hours` so the reaper keeps it around longer."""
+    if hours < 1:
+        raise PreviewError("hours must be >= 1")
+    ref = resolve_task(task_id)
+    strategy = (_read_meta(ref.spec_dir).get("preview") or {}).get("strategy") or "docker-remote"
+    if strategy in dc.LOCAL_STRATEGIES:
+        raise PreviewError("extend is only supported for docker-remote previews")
+    config = dc.load_deploy_config(ref.project_path)
+    profile = find_target(config.get("target", ""))
+    data = _run_runner(
+        profile, ["extend", "--task", ref.slug, "--hours", str(int(hours))], timeout=120,
+    )
+    return _write_preview_state(ref.spec_dir, {"expiresAt": data.get("expiresAt")})
+
+
 def promote(task_id: str, *, lane_override: str | None = None) -> dict[str, Any]:
     ref = resolve_task(task_id)
+    strategy = (_read_meta(ref.spec_dir).get("preview") or {}).get("strategy") or "docker-remote"
+    if strategy in dc.LOCAL_STRATEGIES:
+        raise PreviewError("promote is only supported for docker-remote previews")
     config = dc.load_deploy_config(ref.project_path)
     profile = find_target(config.get("target", ""))
 

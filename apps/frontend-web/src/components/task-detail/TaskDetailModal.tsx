@@ -47,6 +47,8 @@ import { TaskSubtasks } from './TaskSubtasks';
 import { TaskLogs } from './TaskLogs';
 import { TaskFiles } from './TaskFiles';
 import { TaskUsage } from './TaskUsage';
+import { TaskReproductionReport } from './TaskReproductionReport';
+import { TaskUiCheckReport } from './TaskUiCheckReport';
 import { TaskReview } from './TaskReview';
 import { PlanReviewSection } from './PlanReviewSection';
 import { CreatePRDialog } from './task-review/CreatePRDialog';
@@ -309,9 +311,14 @@ function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInb
       return;
     }
     state.setIsSubmitting(true);
-    await submitReview(task.id, false, state.feedback);
+    const ok = await submitReview(task.id, false, state.feedback);
     state.setIsSubmitting(false);
-    state.setFeedback('');
+    if (ok) {
+      state.setFeedback('');
+      toast({ title: 'Changes requested', description: 'The AI will continue working on it.' });
+    } else {
+      toast({ variant: 'destructive', title: 'Failed to request changes', description: 'Could not submit feedback. Please try again.' });
+    }
   };
 
   const handleDelete = async () => {
@@ -588,6 +595,22 @@ function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInb
                   >
                     Changes
                   </TabsTrigger>
+                  {task.metadata?.taskType === 'bug' && (
+                    <TabsTrigger
+                      value="reproduction"
+                      className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2.5 text-sm"
+                    >
+                      {t('tasks:reproduction.tab')}
+                    </TabsTrigger>
+                  )}
+                  {task.metadata?.taskType === 'ui_check' && (
+                    <TabsTrigger
+                      value="ui-check"
+                      className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2.5 text-sm"
+                    >
+                      {t('tasks:uiCheck.tab')}
+                    </TabsTrigger>
+                  )}
                   {showFilesTab && (
                     <TabsTrigger
                       value="files"
@@ -732,6 +755,20 @@ function TaskDetailContent({ mode, task, onClose, onSwitchToTerminals, onOpenInb
                     />
                   </div>
                 </TabsContent>
+
+                {/* Reproduction Tab — bug reproduction report + evidence (bug tasks only) */}
+                {task.metadata?.taskType === 'bug' && (
+                  <TabsContent value="reproduction" className="flex-1 min-h-0 overflow-hidden mt-0">
+                    <TaskReproductionReport task={task} />
+                  </TabsContent>
+                )}
+
+                {/* UI Check Tab — browser verification report + screenshots (ui_check tasks only) */}
+                {task.metadata?.taskType === 'ui_check' && (
+                  <TabsContent value="ui-check" className="flex-1 min-h-0 overflow-hidden mt-0">
+                    <TaskUiCheckReport task={task} />
+                  </TabsContent>
+                )}
 
                 {/* Usage Tab — per-task token & cache breakdown */}
                 <TabsContent value="usage" className="flex-1 min-h-0 overflow-hidden mt-0">

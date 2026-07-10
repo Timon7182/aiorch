@@ -69,6 +69,12 @@ RUN wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get install -y -qq --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
+# Chromium runtime dependencies for the Playwright MCP (headless browser UI
+# checks). The browser binaries themselves are installed at runtime into the
+# persisted data volume (PLAYWRIGHT_BROWSERS_PATH env in compose); only the
+# shared system libraries need to live in the image.
+RUN apt-get update && apt-get install -y --no-install-recommends     libnss3 libnspr4 libdbus-1-3 libatk1.0-0t64 libatk-bridge2.0-0t64     libcups2t64 libdrm2 libxkbcommon0 libatspi2.0-0t64 libxcomposite1     libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 libpango-1.0-0     libcairo2 libx11-6 libx11-xcb1 libxcb1 libxext6 libxi6 libxtst6     libxcursor1 libexpat1 fonts-liberation fonts-unifont     && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user with tty group (needed for PTY terminal access)
 RUN useradd -m -s /bin/bash -G tty magesticai
 
@@ -130,7 +136,14 @@ RUN /home/projects/MagesticAI/.venv/bin/pip install --no-cache-dir \
 # the user who started the task) so commits ship under the human's identity,
 # not this placeholder.
 RUN git config --global user.name "Magestic Agent" && \
-    git config --global user.email "agent@magestic.local"
+    git config --global user.email "agent@magestic.local" && \
+    git config --global --add safe.directory '*'
+
+# Bind-mounted project repos can be owned by a different uid than the runtime
+# user (host saya/ubuntu vs container magesticai). safe.directory=* on the
+# runtime user's git config stops git aborting with "detected dubious ownership"
+# on worktree add / merge — essential for multi-repo composite builds. (--global
+# not --system: this RUN executes as the non-root runtime user.)
 
 # Create data directory for persistent state
 RUN mkdir -p /home/magesticai/.magestic-ai

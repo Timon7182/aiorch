@@ -1,0 +1,14 @@
+{
+  "branch": {
+    "hint": "Visualize e gere a documentação a partir de um branch específico (um worktree somente leitura; sua árvore de trabalho não é alterada).",
+    "current": "Branch atual ({{branch}})",
+    "checkedOut": "Checkout atual"
+  },
+  "hook": {
+    "install": "Instalar hook de atualização automática",
+    "installing": "Instalando...",
+    "installed": "Hook de atualização automática instalado.",
+    "error": "Falha ao instalar o hook.",
+    "hint": "Adiciona um hook git post-commit que solicita uma atualização da documentação após cada commit (processado pelo watcher de documentação)."
+  }
+}

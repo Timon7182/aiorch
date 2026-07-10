@@ -12,5 +12,20 @@
     "empty": "Aucun projet",
     "emptyDescription": "Créez un nouveau projet ou ouvrez-en un existant pour commencer",
     "openFolder": "Ouvrir le dossier"
-  }
+  },
+  "dashboard": {
+  "title": "Tableau de bord du projet",
+  "subtitle": "Vue rapide de la branche principale et de l'actualisation de CodeGraph",
+  "activeProject": "Projet actif",
+  "mainBranch": "Branche principale",
+  "branchFreshness": "Activité de la branche",
+  "noCommits": "Aucun commit récent trouvé pour cette branche",
+  "codegraphStatus": "Statut de CodeGraph",
+  "lastCodegraphUpdate": "Dernière mise à jour de CodeGraph",
+  "codegraphState": "État de l'index",
+  "codegraphReady": "L'index CodeGraph est disponible",
+  "codegraphIndexing": "CodeGraph est en cours d'indexation",
+  "codegraphMissing": "L'index CodeGraph n'a pas encore été construit",
+  "codegraphNever": "Pas encore mis à jour"
+}
 }

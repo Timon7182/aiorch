@@ -128,6 +128,10 @@ class DbProfile(BaseModel):
     username: str | None = None
     password: str | None = None
     project: str | None = None
+    # Optional per-project scoping: when non-empty, this profile is only offered
+    # in the chat DB selector for the listed project ids. Absent/empty = global
+    # (visible everywhere) — no migration needed for existing profiles.
+    projectIds: list[str] = Field(default_factory=list)
 
 
 @router.get("/databases", tags=["Databases"])

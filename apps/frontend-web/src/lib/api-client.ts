@@ -27,7 +27,7 @@ interface RequestOptions {
 // /auth/refresh once and let everyone wait on the same promise.
 let refreshInFlight: Promise<string | null> | null = null;
 
-async function refreshAccessToken(): Promise<string | null> {
+export async function refreshAccessToken(): Promise<string | null> {
   if (refreshInFlight) return refreshInFlight;
   const refresh = getRefreshToken();
   if (!refresh) return null;

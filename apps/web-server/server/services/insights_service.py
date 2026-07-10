@@ -7,20 +7,50 @@ Streams responses via WebSocket and persists sessions to disk.
 
 import asyncio
 import base64
+import html
+import io
 import json
 import logging
 import re
 import shutil
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from ..websockets.events import broadcast_event
+from . import chat_memory
 from .branch_worktree import ensure_branch_worktree
 from .insights_providers import get_provider
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_docx_text(raw: bytes) -> str | None:
+    """Best-effort text extraction from a .docx, using only the stdlib.
+
+    A ``.docx`` is a zip archive whose body lives in ``word/document.xml``. We
+    map paragraph / line-break / tab tags to their whitespace equivalents, strip
+    the remaining XML tags, and unescape entities. This is good enough to feed a
+    work order, letter, or spec into the prompt — it is not a full converter
+    (tables collapse to plain lines, images/embeds are dropped). Returns ``None``
+    if the file isn't a readable Word document.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8", errors="replace")
+    except (zipfile.BadZipFile, KeyError, OSError) as e:
+        logger.warning(f"[InsightsService] Could not read .docx body: {e}")
+        return None
+    # Paragraph and break boundaries -> newlines; tabs -> tabs.
+    xml = re.sub(r"</w:p>", "\n", xml)
+    xml = re.sub(r"<w:br\s*/?>", "\n", xml)
+    xml = re.sub(r"<w:tab\s*/?>", "\t", xml)
+    text = re.sub(r"<[^>]+>", "", xml)
+    text = html.unescape(text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text or None
 
 
 def _parse_task_json(raw: str) -> dict:
@@ -96,6 +126,11 @@ class InsightsSession:
     model_config: dict | None = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    # The Claude CLI's own conversation id for this chat. Persisted so each turn
+    # can `--resume` the prior one: the CLI keeps the full transcript on disk and
+    # we only pass the new message, instead of re-feeding the whole history.
+    # Re-captured every turn (the CLI may fork to a new id on resume).
+    claude_session_id: str | None = None
 
 
 class InsightsService:
@@ -103,7 +138,14 @@ class InsightsService:
 
     def __init__(self):
         self._running_tasks: dict[str, asyncio.Task] = {}  # projectId -> running asyncio task
+        # projectId -> session id of the in-flight turn. Surfaced via
+        # is_running()/running_session_id() so the frontend can restore or
+        # clear the thinking indicator after a reload/reconnect.
+        self._running_sessions: dict[str, str] = {}
         self._sessions: dict[str, InsightsSession] = {}  # Cache
+        # Strong refs to fire-and-forget memory-store tasks so they aren't GC'd
+        # mid-flight (asyncio only holds weak references to bare tasks).
+        self._memory_tasks: set[asyncio.Task] = set()
 
     def _get_sessions_dir(self, project_path: Path) -> Path:
         """Get the directory for storing insight sessions."""
@@ -143,6 +185,7 @@ class InsightsService:
                 for msg in session.messages
             ],
             "modelConfig": session.model_config,
+            "claudeSessionId": session.claude_session_id,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
         }
@@ -184,6 +227,7 @@ class InsightsService:
                     for msg in data.get("messages", [])
                 ],
                 model_config=data.get("modelConfig"),
+                claude_session_id=data.get("claudeSessionId"),
                 created_at=data.get("createdAt", datetime.now().isoformat()),
                 updated_at=data.get("updatedAt", datetime.now().isoformat()),
             )
@@ -337,12 +381,12 @@ class InsightsService:
         Returns ``(claude_suffix, generic_suffix, attachment_dir)``:
 
         - ``claude_suffix`` — instructs the agent to ``Read`` the written files
-          (text *and* images). Keeping large content off the CLI argv avoids
-          command-line length limits (notably 32 KB on Windows) and lets Claude
-          view images as vision input.
-        - ``generic_suffix`` — inlines text-file contents (truncated) and notes
-          images, for providers without file tools (they get the message via an
-          API body, so length isn't an argv concern).
+          (text, images, PDFs, and extracted-DOCX text). Keeping large content
+          off the CLI argv avoids command-line length limits (notably 32 KB on
+          Windows) and lets Claude view images/PDFs as vision input.
+        - ``generic_suffix`` — inlines text-file and extracted-DOCX contents
+          (truncated) and notes images/PDFs, for providers without file tools
+          (they get the message via an API body, so length isn't an argv concern).
         - ``attachment_dir`` — the per-turn directory to grant the Claude CLI via
           ``--add-dir`` so it can read the files regardless of cwd / branch
           worktree. ``None`` when nothing was written.
@@ -354,9 +398,10 @@ class InsightsService:
             project_path / ".magestic-ai" / "insights" / "attachments" / session_id / turn_id
         )
         written_any = False
-        read_paths: list[Path] = []   # text + image paths for the Claude Read instruction
+        read_paths: list[Path] = []   # text + image + doc paths for the Claude Read instruction
         inline_blocks: list[str] = [] # inlined text contents for generic providers
         image_notes: list[str] = []   # image filenames noted for generic providers
+        doc_notes: list[str] = []     # binary doc (PDF) filenames noted for generic providers
 
         for att in attachments:
             if not isinstance(att, dict):
@@ -402,6 +447,55 @@ class InsightsService:
                     snippet = snippet[: self.MAX_INLINE_TEXT_CHARS] + "\n… [truncated]"
                 inline_blocks.append(f"\n\n--- Attached file: {safe_name} ---\n```\n{snippet}\n```")
 
+            elif kind == "document":
+                try:
+                    raw = base64.b64decode(data_b64)
+                except Exception as e:
+                    logger.warning(f"[InsightsService] Failed to decode document attachment {safe_name!r}: {e}")
+                    continue
+                lower = safe_name.lower()
+                is_pdf = lower.endswith(".pdf") or att.get("mimeType") == "application/pdf"
+
+                if is_pdf:
+                    # Claude's Read tool renders PDFs natively (text + layout), so
+                    # write the raw bytes and let the agent read them. Generic
+                    # providers can't ingest a binary PDF, so we only note it.
+                    try:
+                        turn_dir.mkdir(parents=True, exist_ok=True)
+                        dest = turn_dir / safe_name
+                        dest.write_bytes(raw)
+                        dest.chmod(0o600)
+                        written_any = True
+                        read_paths.append(dest)
+                        doc_notes.append(safe_name)
+                    except Exception as e:
+                        logger.warning(f"[InsightsService] Failed to write PDF attachment {safe_name!r}: {e}")
+                    continue
+
+                # .docx (or other Word doc): the Read tool can't parse the binary
+                # zip, so extract text server-side and write it as a .txt sidecar.
+                text = _extract_docx_text(raw)
+                if not text:
+                    doc_notes.append(safe_name)
+                    logger.warning(f"[InsightsService] No extractable text in document {safe_name!r}")
+                    continue
+                try:
+                    turn_dir.mkdir(parents=True, exist_ok=True)
+                    dest = turn_dir / f"{safe_name}.txt"
+                    dest.write_text(text, encoding="utf-8")
+                    dest.chmod(0o600)
+                    written_any = True
+                    read_paths.append(dest)
+                except Exception as e:
+                    logger.warning(f"[InsightsService] Failed to write document text for {safe_name!r}: {e}")
+                # Generic path: inline the (truncated) extracted text.
+                snippet = text
+                if len(snippet) > self.MAX_INLINE_TEXT_CHARS:
+                    snippet = snippet[: self.MAX_INLINE_TEXT_CHARS] + "\n… [truncated]"
+                inline_blocks.append(
+                    f"\n\n--- Attached document (extracted text): {safe_name} ---\n```\n{snippet}\n```"
+                )
+
         claude_suffix = ""
         if read_paths:
             listed = ", ".join(str(p) for p in read_paths)
@@ -415,6 +509,11 @@ class InsightsService:
             generic_parts.append(
                 f"\n\n[The user also attached image(s): {', '.join(image_notes)}. "
                 "Image viewing is only supported with the Claude provider.]"
+            )
+        if doc_notes:
+            generic_parts.append(
+                f"\n\n[The user also attached document(s): {', '.join(doc_notes)}. "
+                "Reading PDF documents is only supported with the Claude provider.]"
             )
         generic_suffix = "".join(generic_parts)
 
@@ -445,6 +544,9 @@ class InsightsService:
         """
         # Where to ground/cwd the provider. Sessions always use project_path.
         ground_dir = repo_path or project_path
+        # Session id of this turn — stamped onto every streamed event so the
+        # frontend can route/drop chunks per session (None until loaded).
+        turn_session_id: str | None = None
         # NOTE: session loading/saving is inside the try below on purpose. This
         # coroutine runs as a fire-and-forget asyncio task (see start_message), so
         # any exception raised here is otherwise silently dropped ("Task exception
@@ -453,6 +555,8 @@ class InsightsService:
         try:
             # Get current session
             session = self.get_current_session(project_path, project_id)
+            turn_session_id = session.id
+            self._running_sessions[project_id] = session.id
 
             # Merge session config with message-level config (message takes precedence)
             effective_config = dict(self.DEFAULT_MODEL_CONFIG)
@@ -513,6 +617,25 @@ class InsightsService:
                     final_message = "Please review the attached file(s) and respond."
                 final_message = final_message + suffix
 
+            # Long-term memory recall (Graphiti): prepend any facts relevant to
+            # this turn so the model carries context across separate chats. A
+            # no-op (returns "") unless Graphiti is enabled for this deployment.
+            # Bounded by a timeout so a slow embedding search / first-call DB
+            # init never stalls the reply — we'd rather skip recall than make
+            # the user wait before the model starts streaming.
+            recalled = ""
+            if chat_memory.is_enabled():
+                try:
+                    recalled = await asyncio.wait_for(
+                        chat_memory.recall(project_path, message), timeout=2.5
+                    )
+                except asyncio.TimeoutError:
+                    logger.info("[InsightsService] memory recall timed out; skipping")
+                except Exception as e:
+                    logger.info(f"[InsightsService] memory recall skipped: {e}")
+            if recalled:
+                final_message = f"{recalled}\n\n---\n\n{final_message}"
+
             # Build conversation history for stateless providers
             conversation_history = [
                 {"role": msg.role, "content": msg.content}
@@ -545,6 +668,17 @@ class InsightsService:
             provider = get_provider(provider_id)
             logger.info(f"[InsightsService] Routing to provider: {provider_id} (model: {provider_model})")
 
+            # Claude-only extras: attachment access, and native session resume so
+            # the CLI carries the history itself (we pass only the new message).
+            # `session_capture` is an in/out dict the provider fills with the
+            # CLI's session id for this turn, which we persist for the next one.
+            claude_extras: dict = {}
+            session_capture: dict = {}
+            if provider_id == "claude":
+                claude_extras["attachment_dir"] = attachment_dir
+                claude_extras["resume_session_id"] = session.claude_session_id
+                claude_extras["session_capture"] = session_capture
+
             response_content = await provider.send_message(
                 project_path=project_path,
                 project_id=project_id,
@@ -553,10 +687,14 @@ class InsightsService:
                 model_config=model_config,
                 conversation_history=conversation_history if provider_id != "claude" else None,
                 working_dir=working_dir,
-                # Only the Claude provider reads attachment files via --add-dir;
-                # other providers' signatures are left untouched.
-                **({"attachment_dir": attachment_dir} if provider_id == "claude" else {}),
+                session_id=session.id,
+                **claude_extras,
             )
+
+            # Persist the CLI session id so the next turn resumes this thread.
+            captured_sid = session_capture.get("session_id")
+            if captured_sid and captured_sid != session.claude_session_id:
+                session.claude_session_id = captured_sid
 
             # Persist the assistant response to disk
             if response_content and response_content.strip():
@@ -571,22 +709,36 @@ class InsightsService:
                 session.messages.append(assistant_msg)
                 self._save_session(project_path, session)
 
+                # Persist this exchange to long-term memory (Graphiti) in the
+                # background so the next chat can recall it. Fire-and-forget:
+                # ingestion runs an LLM extraction and must not block the reply.
+                # A no-op unless Graphiti is enabled.
+                if chat_memory.is_enabled():
+                    task = asyncio.create_task(
+                        chat_memory.store(project_path, message, response_content)
+                    )
+                    self._memory_tasks.add(task)
+                    task.add_done_callback(self._memory_tasks.discard)
+
         except asyncio.CancelledError:
             logger.info(f"[InsightsService] Chat cancelled for project {project_id}")
             # Finalize partial content if any
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
+                "sessionId": turn_session_id,
                 "type": "done",
             })
         except Exception as e:
             logger.error(f"[InsightsService] Provider error: {e}", exc_info=True)
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
+                "sessionId": turn_session_id,
                 "type": "error",
                 "error": str(e),
             })
         finally:
             self._running_tasks.pop(project_id, None)
+            self._running_sessions.pop(project_id, None)
 
     def start_message(
         self,
@@ -617,6 +769,17 @@ class InsightsService:
             logger.info(f"[InsightsService] Cancelled running task for project {project_id}")
             return True
         return False
+
+    def is_running(self, project_id: str) -> bool:
+        """Whether a chat turn is currently in flight for this project."""
+        task = self._running_tasks.get(project_id)
+        return bool(task and not task.done())
+
+    def running_session_id(self, project_id: str) -> str | None:
+        """Session id of the in-flight turn (None when idle)."""
+        if not self.is_running(project_id):
+            return None
+        return self._running_sessions.get(project_id)
 
     async def generate_task_from_chat(
         self,

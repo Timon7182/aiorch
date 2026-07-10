@@ -23,6 +23,7 @@ from .database.engine import init_db
 from .logging_config import setup_logging
 from .services.skills_service import init_skills_service
 from .routes import (
+    admin,
     agent_prompts,
     api_keys,
     audit,
@@ -89,6 +90,13 @@ async def lifespan(app: FastAPI):
     # Ensure data directory exists
     Path(settings.PROJECTS_DATA_DIR).mkdir(parents=True, exist_ok=True)
 
+    # Capture the running loop so background threads (remote preview worker) can
+    # broadcast websocket events back onto it via events.emit_threadsafe.
+    import asyncio as _asyncio
+
+    from .websockets import events as _ws_events
+    _ws_events.set_main_loop(_asyncio.get_running_loop())
+
     # Auto-configure autoBuildPath if the backend directory exists
     # (enables project initialization without manual settings configuration)
     backend_path = Path(settings.BACKEND_PATH)
@@ -120,12 +128,64 @@ async def lifespan(app: FastAPI):
     from .services import preview_reaper
     preview_reaper.start()
 
+    # Build/refresh the CodeGraphContext index for any registered project that
+    # doesn't have one yet, so the planner/coder/QA agents get CGC's code-graph
+    # MCP tools without a manual index step. Idempotent (skips already-indexed
+    # projects) and concurrency-capped; gated by CGC_AUTO_INDEX / CODEGRAPH_DISABLED.
+    try:
+        import asyncio
+
+        from .services.docs_generator_service import get_docs_generator_service
+        from .routes.projects import load_projects
+
+        docs_svc = get_docs_generator_service(backend_path)
+        if docs_svc.auto_index_enabled():
+            project_paths = [
+                Path(p["path"]) for p in load_projects().values() if p.get("path")
+            ]
+            asyncio.create_task(docs_svc.sweep_index_missing(project_paths))
+            logger.info("CGC startup sweep scheduled (%d project(s))", len(project_paths))
+    except Exception:
+        logger.warning("CGC startup sweep failed to schedule", exc_info=True)
+
+    # Optional docs auto-refresh watcher (opt-in via DOCS_WATCH_ENABLED). Snapshots
+    # the registered project paths at startup and re-indexes CGC on source changes
+    # (debounced), plus honors the post-commit touch-file for full docs refreshes.
+    try:
+        from .services import docs_watcher
+        from .routes.projects import load_projects
+
+        if docs_watcher.watch_enabled():
+            watch_paths = [
+                Path(p["path"]) for p in load_projects().values() if p.get("path")
+            ]
+            docs_watcher.start_watcher(watch_paths, backend_path)
+            logger.info("Docs watcher started (%d project(s))", len(watch_paths))
+    except Exception:
+        logger.warning("Docs watcher failed to start", exc_info=True)
+
     yield
 
     # Shutdown
     logger.info("Shutting down Magestic AI Web Server...")
     preview_reaper.stop()
+
+    # Tear down any local (dev-server / compose-local) previews so their
+    # subprocesses / compose projects don't outlive the server.
+    try:
+        from .services import local_preview_service
+        local_preview_service.shutdown_all()
+    except Exception:
+        logger.warning("local preview shutdown failed", exc_info=True)
+
     await token_service.stop()
+
+    # Stop the docs watcher if it was started.
+    try:
+        from .services import docs_watcher
+        await docs_watcher.stop_watcher()
+    except Exception:
+        logger.warning("Docs watcher failed to stop cleanly", exc_info=True)
 
     # Stop any running language servers so they don't outlive the app.
     from .lsp.manager import get_lsp_manager
@@ -174,6 +234,10 @@ def create_app() -> FastAPI:
 
     # Notification routes (prefix defined in router: /api/notifications)
     app.include_router(notifications.router)
+
+    # Admin routes — global user & access management (prefix /api/admin,
+    # each route gated by require_admin internally).
+    app.include_router(admin.router)
 
     # Routers exposing project data require an *approved* (non-pending) account.
     # A freshly self-registered user is "pending" and gets 403 here until an

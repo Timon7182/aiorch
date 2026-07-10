@@ -456,6 +456,95 @@ class AgentPrompt(Base):
 
 
 # ---------------------------------------------------------------------------
+# Per-user project / page access grants
+# ---------------------------------------------------------------------------
+
+
+class UserProjectAccess(Base):
+    """A grant giving a user access to a project and (optionally) specific pages.
+
+    Used by the admin access screen. Access is *additive*: a user with no rows
+    at all is treated as unrestricted (sees every project) so existing accounts
+    keep working; once an admin assigns a single grant the user is restricted to
+    exactly the projects/pages granted.
+
+    ``project_id`` is a plain (indexed) string matching the keys in
+    ``projects.json`` on disk — the canonical project registry — rather than a
+    foreign key to the ``projects`` table (which the live routes do not use).
+
+    ``pages_json`` is a JSON array of page (sidebar view) ids the user may open
+    within the project, e.g. ``["kanban", "editor"]``. ``NULL`` means "all
+    pages" for that project.
+    """
+
+    __tablename__ = "user_project_access"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "project_id", name="uq_user_project_access_user_project"
+        ),
+        Index("ix_user_project_access_user_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=_generate_uuid
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    pages_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+
+    def __repr__(self) -> str:
+        return (
+            f"<UserProjectAccess user_id={self.user_id!r} "
+            f"project_id={self.project_id!r}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Integration settings (e.g. JIRA / Atlassian sync — configured later)
+# ---------------------------------------------------------------------------
+
+
+class IntegrationSetting(Base):
+    """A singleton-per-key blob of configuration for an external integration.
+
+    Currently used to persist the (not-yet-active) JIRA / Atlassian sync
+    configuration entered on the admin screen. ``config_json`` holds the raw
+    settings object; secrets live here too, so this table is admin-only.
+    """
+
+    __tablename__ = "integration_settings"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=_generate_uuid
+    )
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"<IntegrationSetting key={self.key!r} enabled={self.enabled!r}>"
+
+
+# ---------------------------------------------------------------------------
 # Audit Logs
 # ---------------------------------------------------------------------------
 

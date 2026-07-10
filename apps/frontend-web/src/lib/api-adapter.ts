@@ -6,7 +6,7 @@
  */
 
 import { get, post, put, del, patch } from './api-client';
-import { wsManager, terminalWs, taskLogsWs, taskProgressWs } from './websocket';
+import { wsManager, terminalWs } from './websocket';
 import { createLogger } from './logger';
 import type { API, TabState } from '../shared/types';
 
@@ -20,6 +20,8 @@ import type {
   TaskRecoveryOptions,
   TaskMetadata,
   TaskLogs,
+  ReproductionReport,
+  UiCheckReport,
   IPCResult,
   TerminalCreateOptions,
   TerminalSession,
@@ -38,6 +40,9 @@ import type {
   CreateTerminalWorktreeRequest,
   CustomMcpServer,
   ProjectEnvConfig,
+  PreviewStatus,
+  PreviewStrategy,
+  JenkinsStatus,
 } from '../shared/types';
 
 // Event callback storage
@@ -131,6 +136,14 @@ function cleanupTerminalWebSocket(terminalId: string): void {
 
 function emitEvent<T>(event: string, data: T): void {
   eventCallbacks.get(event)?.forEach((cb) => cb(data));
+}
+
+/**
+ * Subscribe to the internal "events websocket reconnected" signal. Stores use
+ * this to resync state that may have missed fire-and-forget broadcasts.
+ */
+export function onWsReconnected(callback: () => void): () => void {
+  return registerCallback('ws:reconnected', callback);
 }
 
 // GitHub API subset (nested object in API)
@@ -272,8 +285,18 @@ export const webAPI: API & { _isWebMode: boolean } = {
 
   // ========== Project Operations ==========
   addProject: (projectPath: string) => post<Project>('/projects', { path: projectPath }),
-  cloneProject: (url: string, name?: string, targetDir?: string) =>
-    post<Project>('/projects/clone', { url, name, target_dir: targetDir }),
+  cloneProject: (url: string, name?: string, targetDir?: string, branch?: string) =>
+    post<Project>('/projects/clone', { url, name, target_dir: targetDir, branch }),
+  cloneMultiProject: (
+    name: string,
+    repos: { url: string; name?: string; branch?: string }[],
+    targetDir?: string,
+  ) => post<Project>('/projects/clone-multi', { name, repos, target_dir: targetDir }),
+  getRemoteBranches: (url: string) =>
+    post<{ branches: { name: string }[]; error?: string }>(
+      '/projects/git/remote-branches',
+      { url },
+    ),
   createProjectFromPrompt: (prompt: string, name?: string, parentDir?: string) =>
     post<Project>('/projects/from-prompt', { prompt, name, parent_dir: parentDir }),
   removeProject: (projectId: string) => del(`/projects/${projectId}`),
@@ -356,15 +379,36 @@ export const webAPI: API & { _isWebMode: boolean } = {
   createPRFromTask: (taskId: string, options?: { title?: string; body?: string; draft?: boolean; baseBranch?: string; targetRepo?: string }) =>
     post(`/tasks/${taskId}/worktree/create-pr`, options || {}),
   // ========== Preview deploy ("Run on server") ==========
-  deployPreview: (taskId: string, options?: { lane?: string }) =>
+  deployPreview: (taskId: string, options?: { lane?: string; strategy?: PreviewStrategy }) =>
     post(`/tasks/${taskId}/deploy-preview`, options || {}),
   getPreview: (taskId: string) => get(`/tasks/${taskId}/deploy-preview`),
   stopPreview: (taskId: string) => del(`/tasks/${taskId}/deploy-preview`),
+  extendPreview: (taskId: string, options?: { hours?: number }) =>
+    post(`/tasks/${taskId}/deploy-preview/extend`, options || {}),
   promotePreview: (taskId: string, options?: { lane?: string }) =>
     post(`/tasks/${taskId}/promote`, options || {}),
+  onPreviewStatus: (callback) =>
+    registerCallback('preview:status', (payload: { taskId: string; projectId?: string | null; status: PreviewStatus; strategy: PreviewStrategy; url?: string | null; error?: string | null }) => {
+      callback(payload);
+    }),
+  onPreviewLog: (callback) =>
+    registerCallback('preview:log', (payload: { taskId: string; line: string }) => {
+      callback(payload);
+    }),
+  // ========== Jenkins deploy ("Развернуть на Jenkins") ==========
+  deployJenkins: (taskId: string) => post(`/tasks/${taskId}/deploy-jenkins`, {}),
+  getJenkins: (taskId: string) => get(`/tasks/${taskId}/deploy-jenkins`),
+  onJenkinsStatus: (callback) =>
+    registerCallback('jenkins:status', (payload: { taskId: string; projectId?: string | null; status: JenkinsStatus; buildUrl?: string | null; error?: string | null }) => {
+      callback(payload);
+    }),
+  onJenkinsLog: (callback) =>
+    registerCallback('jenkins:log', (payload: { taskId: string; line: string }) => {
+      callback(payload);
+    }),
   // ========== Databases (chat DB connection) ==========
   listDatabases: () => get(`/ext/databases`),
-  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) =>
+  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string; projectIds?: string[] }) =>
     post(`/ext/databases`, profile),
   deleteDatabase: (dbId: string) => del(`/ext/databases/${dbId}`),
   getForkInfo: (projectPath: string) =>
@@ -802,6 +846,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
     const qs = params.toString();
     return get(`/projects/${projectId}/insights/code-search-availability${qs ? `?${qs}` : ''}`);
   },
+  refreshInsightsCodegraph: (projectId: string, repo?: string) =>
+    post(`/projects/${projectId}/docs/codegraph/index${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`),
   stopInsightsMessage: (projectId: string) =>
     post(`/projects/${projectId}/insights/stop`),
   clearInsightsSession: (projectId: string) => del(`/projects/${projectId}/insights`),
@@ -827,6 +873,10 @@ export const webAPI: API & { _isWebMode: boolean } = {
   },
   onInsightsStatus: (callback) => {
     return registerCallback('insights:status', (payload: { projectId: string; status: string }) => {
+      // Only forward known phases — an unrecognized status string written
+      // straight into `phase` used to hide the thinking indicator entirely.
+      const known = ['idle', 'thinking', 'streaming', 'complete', 'error'];
+      if (!known.includes(payload.status)) return;
       callback(payload.projectId, { phase: payload.status, message: '' } as never);
     });
   },
@@ -848,6 +898,12 @@ export const webAPI: API & { _isWebMode: boolean } = {
       console.log('[API] getTaskLogs result.data keys:', Object.keys(result.data));
     }
     return result;
+  },
+  getReproductionReport: async (projectId: string, specId: string): Promise<IPCResult<ReproductionReport | null>> => {
+    return get<ReproductionReport | null>(`/projects/${projectId}/tasks/${specId}/reproduction-report`);
+  },
+  getUiCheckReport: async (projectId: string, specId: string): Promise<IPCResult<UiCheckReport | null>> => {
+    return get<UiCheckReport | null>(`/projects/${projectId}/tasks/${specId}/ui-check-report`);
   },
   watchTaskLogs: (projectId: string, specId: string) =>
     post(`/projects/${projectId}/tasks/${specId}/logs/watch`),
@@ -949,6 +1005,20 @@ export function initWebAPI(): void {
  */
 function setupEventBroadcast(): void {
   log.debug('Setting up WebSocket event broadcast');
+
+  // Notify stores when the events channel comes back after a drop so they can
+  // resync state (server events are fire-and-forget: anything broadcast while
+  // we were disconnected is gone — e.g. an insights turn's terminal `done`).
+  let firstConnect = true;
+  wsManager.onConnect('/ws/events', () => {
+    if (firstConnect) {
+      firstConnect = false;
+      return;
+    }
+    log.info('[WS Broadcast] events channel reconnected — emitting ws:reconnected');
+    emitEvent('ws:reconnected', {});
+  });
+
   // Subscribe to global events channel
   wsManager.subscribe('/ws/events', (data: unknown) => {
     const event = data as { type: string; payload: unknown };

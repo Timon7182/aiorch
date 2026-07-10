@@ -1,4 +1,46 @@
 {
+  "bugReport": {
+    "typeLabel": "Tipo de tarefa",
+    "feature": "Funcionalidade",
+    "bug": "Relatório de bug",
+    "optional": "opcional",
+    "hint": "Descreva o bug para que o QA possa reproduzi-lo em um navegador real. Cole capturas de tela na descrição acima.",
+    "stepsLabel": "Passos para reproduzir",
+    "stepsPlaceholder": "1. Acesse…\n2. Clique em…\n3. Veja o erro",
+    "expectedLabel": "Comportamento esperado",
+    "expectedPlaceholder": "O que deveria acontecer",
+    "actualLabel": "Comportamento real",
+    "actualPlaceholder": "O que realmente acontece (o bug)"
+  },
+  "reproduction": {
+    "tab": "Reprodução",
+    "title": "Relatório de reprodução do bug",
+    "empty": "Ainda não há relatório de reprodução. Ele aparecerá assim que o QA reproduzir o bug em um navegador.",
+    "loading": "Carregando…",
+    "evidence": "Evidências"
+  },
+  "uiCheck": {
+    "typeButton": "Verificação de UI",
+    "hint": "O agente abre um navegador headless real, executa os passos na URL alvo e retorna um veredito com capturas de tela, logs de console e de rede. Descreva a funcionalidade a verificar na descrição acima.",
+    "urlLabel": "URL alvo",
+    "environmentLabel": "Ambiente",
+    "environmentPlaceholder": "ex. test (do deploy.config.json)",
+    "roleLabel": "Papel / conta de teste",
+    "rolePlaceholder": "ex. admin",
+    "attemptsLabel": "Tentativas (1–3)",
+    "preconditionsLabel": "Pré-condições",
+    "preconditionsPlaceholder": "ex. pelo menos uma tarefa existe no projeto",
+    "stepsLabel": "Passos a executar",
+    "stepsPlaceholder": "1. Abrir a lista de tarefas\n2. Filtrar por status…\n3. Verificar…",
+    "expectedLabel": "Resultado esperado",
+    "expectedPlaceholder": "O que deveria acontecer se a funcionalidade estiver correta",
+    "tab": "Verificação de UI",
+    "title": "Relatório de verificação de UI",
+    "refresh": "Atualizar",
+    "empty": "Ainda não há relatório de verificação de UI. Ele aparecerá assim que a verificação for executada no navegador.",
+    "loading": "Carregando…",
+    "evidence": "Capturas de tela"
+  },
   "status": {
     "backlog": "Backlog",
     "todo": "A Fazer",

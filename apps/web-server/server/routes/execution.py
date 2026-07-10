@@ -142,6 +142,20 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     logger.info(f"[StartTask] Checking for implementation_plan.json at {implementation_plan}")
     logger.info(f"[StartTask] implementation_plan.json exists: {implementation_plan.exists()}")
 
+    # UI-check tasks skip spec creation entirely: they run a single browser
+    # verification session (run.py --ui-check) and need no implementation plan.
+    is_ui_check = False
+    try:
+        import json as _json
+        _tm_file = spec_dir / "task_metadata.json"
+        if _tm_file.exists():
+            _tm = _json.loads(_tm_file.read_text())
+            is_ui_check = str(_tm.get("taskType", "")).lower() == "ui_check"
+    except (ValueError, OSError) as e:
+        logger.warning(f"[StartTask] Could not read task_metadata for {task_id}: {e}")
+    if is_ui_check:
+        logger.info(f"[StartTask] UI-check task {task_id}: skipping spec creation")
+
     # Check if plan is valid (has phases/subtasks structure)
     plan_is_valid = False
     if implementation_plan.exists():
@@ -162,7 +176,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
             logger.warning(f"[StartTask] Failed to parse implementation_plan.json: {e}")
             plan_is_valid = False
 
-    if not implementation_plan.exists() or not plan_is_valid:
+    if not is_ui_check and (not implementation_plan.exists() or not plan_is_valid):
         # Need to run spec creation first - read title/description from requirements.json
         import json
         from datetime import datetime
@@ -318,7 +332,9 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
         task_metadata["model"] = request.model
     if request.baseBranch:
         task_metadata["baseBranch"] = request.baseBranch
-    if request.repoPath:
+    # Don't let a stray single repoPath override a multi-repo (repoPaths) task —
+    # repoPaths persisted at creation drives the composite build.
+    if request.repoPath and not task_metadata.get("repoPaths"):
         task_metadata["repoPath"] = request.repoPath
 
     # Write updated task_metadata.json if we have any settings
@@ -368,8 +384,9 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
             )
 
     # If review is required but not yet approved, set human_review status
-    # and return early WITHOUT starting the subprocess (which would just exit)
-    if not force_execution:
+    # and return early WITHOUT starting the subprocess (which would just exit).
+    # UI-check tasks have no plan to review — the gate never applies to them.
+    if not force_execution and not is_ui_check:
         task_metadata_file = spec_dir / "task_metadata.json"
         require_review = False
         if task_metadata_file.exists():
@@ -404,6 +421,10 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
     _user = getattr(raw_request.state, "user", None)
     _user_id = _user["id"] if isinstance(_user, dict) and _user.get("id") else ""
 
+    # A multi-repo task (repoPaths) must NOT pass --repo-path, which would force
+    # single-repo mode and ignore the composite build.
+    effective_repo_path = None if task_metadata.get("repoPaths") else request.repoPath
+
     try:
         await agent_service.start_task_execution(
             task_id=task_id,
@@ -411,7 +432,7 @@ async def start_task(task_id: str, request: StartTaskRequest, raw_request: Reque
             spec_id=spec_id,
             auto_continue=request.auto_continue,
             base_branch=request.baseBranch,
-            repo_path=request.repoPath,
+            repo_path=effective_repo_path,
             mode=effective_mode,
             force=force_execution,
             user_id=_user_id,

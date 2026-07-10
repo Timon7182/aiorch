@@ -19,6 +19,7 @@ interface MobileTopBarProps {
 // Human-readable titles for each view. Kept local so the bar stays
 // self-contained and never shows a raw view id.
 const VIEW_TITLES: Record<SidebarView, string> = {
+  overview: 'Overview',
   kanban: 'Tasks',
   terminals: 'Terminals',
   editor: 'Editor',
@@ -35,6 +36,7 @@ const VIEW_TITLES: Record<SidebarView, string> = {
   transcripts: 'Transcripts',
   docs: 'Docs',
   usage: 'Usage',
+  admin: 'Administration',
 };
 
 export function MobileTopBar({

@@ -317,6 +317,11 @@ export interface ProjectEnvConfig {
     context7Enabled?: boolean;
     /** Graphiti knowledge graph - default: true (if graphitiProviderConfig set) */
     graphitiEnabled?: boolean;
+    /**
+     * Exclusive code-graph layer used by agents - default: 'codegraph'.
+     * Only one of CodeGraphContext / graphify runs per project.
+     */
+    codeGraphProvider?: 'codegraph' | 'graphify';
     /** Electron desktop automation (QA only) - default: false */
     electronEnabled?: boolean;
     /** Puppeteer browser automation (QA only) - default: false */

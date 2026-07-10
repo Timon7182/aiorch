@@ -36,6 +36,13 @@ class ProjectEnvUpdate(BaseModel):
     claudeToken: str | None = None
     # Graphiti Provider Config (nested object from frontend)
     graphitiProviderConfig: dict | None = None
+    # MCP server toggles (nested object from frontend). Currently only the
+    # exclusive code-graph provider selector is persisted from here.
+    mcpServers: dict | None = None
+    # Project-defined custom MCP servers (list of {id,name,type,url/command,
+    # headers,description,...}). Round-tripped as the CUSTOM_MCP_SERVERS JSON
+    # line that both the chat provider and the build agents read.
+    customMcpServers: list | None = None
 
 
 class TestGraphitiRequest(BaseModel):
@@ -372,6 +379,9 @@ async def get_project_env(projectId: str = Path(...)):
     # Initialize graphiti provider config
     graphiti_provider_config = {}
 
+    # Initialize MCP server toggles (only code-graph provider round-trips today)
+    mcp_servers = {}
+
     if env_path.exists():
         try:
             env_content = env_path.read_text()
@@ -426,12 +436,29 @@ async def get_project_env(projectId: str = Path(...)):
                         graphiti_provider_config["database"] = value
                     elif key == "GRAPHITI_DB_PATH":
                         graphiti_provider_config["dbPath"] = value
+                    elif key == "CODE_GRAPH_PROVIDER":
+                        provider = value.strip().lower()
+                        if provider in ("codegraph", "graphify"):
+                            mcp_servers["codeGraphProvider"] = provider
+                    elif key == "CUSTOM_MCP_SERVERS":
+                        import json
+                        try:
+                            parsed = json.loads(value)
+                            if isinstance(parsed, list):
+                                config["customMcpServers"] = parsed
+                        except json.JSONDecodeError:
+                            pass
         except Exception:
             pass
 
     # Add graphiti provider config if any fields were found
     if graphiti_provider_config:
         config["graphitiProviderConfig"] = graphiti_provider_config
+
+    # Default the code-graph provider to CGC when not explicitly set, so the
+    # UI selector reflects the same default the backend applies.
+    mcp_servers.setdefault("codeGraphProvider", "codegraph")
+    config["mcpServers"] = mcp_servers
 
     # Also check for Claude auth via keychain
     try:
@@ -567,6 +594,32 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
                             existing[env_key] = str(value)
                         elif env_key in existing:
                             del existing[env_key]
+
+        # Persist project-defined custom MCP servers as a single compact-JSON
+        # CUSTOM_MCP_SERVERS line (the format chat + build agents already read).
+        # An empty list removes the line. Stored verbatim so the per-server
+        # `description` round-trips and reaches the model's system prompt.
+        if "customMcpServers" in config_dict:
+            import json
+            servers = config_dict["customMcpServers"]
+            if isinstance(servers, list) and servers:
+                existing["CUSTOM_MCP_SERVERS"] = json.dumps(
+                    servers, ensure_ascii=False, separators=(",", ":")
+                )
+            elif "CUSTOM_MCP_SERVERS" in existing:
+                del existing["CUSTOM_MCP_SERVERS"]
+
+        # Handle mcpServers nested object. Only the exclusive code-graph
+        # provider selector (codegraph | graphify) is persisted here, as
+        # CODE_GRAPH_PROVIDER. Defaults to codegraph when unset/invalid.
+        if "mcpServers" in config_dict:
+            mcp = config_dict["mcpServers"]
+            if isinstance(mcp, dict) and "codeGraphProvider" in mcp:
+                provider = str(mcp["codeGraphProvider"] or "").strip().lower()
+                if provider in ("codegraph", "graphify"):
+                    existing["CODE_GRAPH_PROVIDER"] = provider
+                elif "CODE_GRAPH_PROVIDER" in existing:
+                    del existing["CODE_GRAPH_PROVIDER"]
 
         # Ensure .magestic-ai directory exists
         env_path.parent.mkdir(parents=True, exist_ok=True)

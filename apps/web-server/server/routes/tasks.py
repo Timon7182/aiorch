@@ -4,7 +4,10 @@ Task management routes.
 Handles CRUD operations for tasks (specs) within projects.
 """
 
+import base64
 import json
+import logging
+import os
 import re
 import shutil
 import subprocess
@@ -13,7 +16,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .projects import load_projects
 from ..paths import get_data_dir, get_data_file
@@ -60,9 +63,18 @@ class Subtask(BaseModel):
     id: str
     title: str
     description: str | None = None
-    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    # "blocked" is set by the coder agent when a subtask can't proceed (e.g. its
+    # target repo isn't writable from this task's worktree). It must be accepted
+    # here or load_spec_metadata raises ValidationError and the whole task list
+    # 500s — see SUBTASK_STATUSES coercion below.
+    status: Literal["pending", "in_progress", "completed", "failed", "blocked"] = "pending"
     files: list[str] = Field(default_factory=list)  # Files affected by this subtask
     verification: SubtaskVerification | None = None  # How to verify completion
+
+
+# Valid per-subtask statuses, used to coerce unknown values from the plan JSON
+# before constructing a Subtask (see load_spec_metadata).
+SUBTASK_STATUSES = {"pending", "in_progress", "completed", "failed", "blocked"}
 
 
 class TaskBase(BaseModel):
@@ -119,6 +131,14 @@ class TaskMetadata(BaseModel):
     archivedInVersion: str | None = None
     # Skills attached to this task
     selectedSkills: list[SelectedSkill] | None = None
+    # Task type: 'feature' (default), 'bug' (client-reported bug report),
+    # or 'ui_check' (on-demand browser UI verification)
+    taskType: str | None = None
+    # Structured bug report (only meaningful when taskType == 'bug')
+    bugReport: dict | None = None
+    # UI-check parameters: {url, environment, role, preconditions, steps,
+    # expected, attempts} (only meaningful when taskType == 'ui_check')
+    uiCheck: dict | None = None
 
 
 class Task(TaskBase):
@@ -176,6 +196,14 @@ class TaskMetadataUpdate(BaseModel):
     referencedFiles: list | None = None
     # Skills attached to this task (can be null to clear)
     selectedSkills: list[SelectedSkill] | None = None
+    # Task type: 'feature' (default), 'bug' (client-reported bug report),
+    # or 'ui_check' (on-demand browser UI verification)
+    taskType: str | None = None
+    # Structured bug report: {steps, expected, actual}
+    bugReport: dict | None = None
+    # UI-check parameters: {url, environment, role, preconditions, steps,
+    # expected, attempts}
+    uiCheck: dict | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -491,6 +519,20 @@ def load_spec_metadata(spec_dir: Path) -> dict:
         except (json.JSONDecodeError, KeyError):
             pass
 
+    # UI-check tasks: the verdict file is the completion signal (these tasks
+    # have no implementation plan / QA files). A finished check is "done" —
+    # the report is the deliverable, there is nothing to merge or review-gate.
+    try:
+        _uic_tm_file = spec_dir / "task_metadata.json"
+        _uic_tm = json.loads(_uic_tm_file.read_text()) if _uic_tm_file.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        _uic_tm = {}
+    if str(_uic_tm.get("taskType", "")).lower() == "ui_check":
+        if metadata["status"] != "in_progress" and (spec_dir / "ui_check_result.json").exists():
+            metadata["status"] = "done"
+            metadata["phase"] = "complete"
+            metadata["reviewReason"] = None
+
     # Try to load implementation_plan.json for status/subtasks
     plan_file = spec_dir / "implementation_plan.json"
     explicit_status = None  # Track if user explicitly set status via kanban
@@ -584,15 +626,22 @@ def load_spec_metadata(spec_dir: Path) -> dict:
                     elif st.get("verification_method"):
                         verification = SubtaskVerification(type="command", run=st["verification_method"])
 
+                    # Coerce any status the Subtask model doesn't know about down
+                    # to "pending" so a plan written with a novel status (the coder
+                    # agent has used "blocked", "skipped", etc.) can never raise a
+                    # ValidationError that crashes the entire task-list endpoint.
+                    raw_status = st.get("status", "pending")
+                    safe_status = raw_status if raw_status in SUBTASK_STATUSES else "pending"
+
                     metadata["subtasks"].append(Subtask(
                         id=st.get("id", str(i)),
                         title=st.get("title") or st.get("description", f"Subtask {i+1}")[:80],
                         description=st.get("description") or st.get("notes"),
-                        status=st.get("status", "pending"),
+                        status=safe_status,
                         files=files,
                         verification=verification,
                     ))
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, ValidationError):
             pass
 
     # Check for worktree
@@ -954,7 +1003,15 @@ async def list_tasks(
         project_path = Path(projects[pid]["path"])
         spec_dirs = get_spec_dirs(project_path)
         for spec_dir in spec_dirs:
-            task = spec_to_task(pid, spec_dir)
+            # Never let one malformed spec take down the whole board — skip it
+            # and keep listing the rest.
+            try:
+                task = spec_to_task(pid, spec_dir)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "[tasks] failed to load spec %s; skipping", spec_dir.name
+                )
+                continue
             if status is None or task.status == status:
                 all_tasks.append(task)
 
@@ -998,6 +1055,116 @@ async def get_task(task_id: str):
 
     task = spec_to_task(project_id, spec_dir)
     return task_to_dict(task)
+
+
+# Allowed image MIME types for materialized task attachments -> file extension
+_ATTACHMENT_ALLOWED_MIME = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/bmp": "bmp",
+    "image/svg+xml": "svg",
+}
+# Max decoded size per attachment (10 MB)
+_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _materialize_attachments(spec_dir: Path, metadata_dict: dict) -> None:
+    """Decode base64 ``attachedImages`` into files under ``<spec_dir>/attachments/``.
+
+    Replaces each image's inline base64 ``data`` blob with a lightweight
+    on-disk reference ``{id, filename, path, mimeType, size[, thumbnail]}`` so
+    requirements.json stays small and agents can Read the files directly.
+    The small preview ``thumbnail`` is preserved so edit dialogs keep showing
+    previews without re-reading the full image.
+
+    Backward compatible: absent/empty ``attachedImages`` (or entries already
+    materialized without inline ``data``) -> no-op. Mutates ``metadata_dict``
+    in place. Reuses the changelog image-writer validation (mime allowlist,
+    size cap, data-URL stripping).
+    """
+    images = metadata_dict.get("attachedImages")
+    if not images or not isinstance(images, list):
+        return
+
+    logger = logging.getLogger(__name__)
+    attachments_dir = spec_dir / "attachments"
+
+    # Seed the filename counter from files already on disk so a task-edit that
+    # adds a new image never clobbers an earlier img-<n>.<ext> attachment.
+    idx = 0
+    if attachments_dir.is_dir():
+        try:
+            for existing in attachments_dir.iterdir():
+                m = re.match(r"img-(\d+)\.", existing.name)
+                if m:
+                    idx = max(idx, int(m.group(1)))
+        except OSError:
+            pass
+
+    new_images: list[dict] = []
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        data = image.get("data")
+        # Already materialized (has path, no inline data) -> keep the ref as-is
+        # (including its small thumbnail so edit dialogs still show previews).
+        if not data:
+            new_images.append(dict(image))
+            continue
+
+        mime = (image.get("mimeType") or "image/png").lower().strip()
+        ext = _ATTACHMENT_ALLOWED_MIME.get(mime)
+        if not ext:
+            logger.warning(f"[Attachments] Skipping disallowed mime type: {mime}")
+            continue
+
+        data_str = data.strip()
+        if data_str.startswith("data:") and "," in data_str:
+            data_str = data_str.split(",", 1)[1]
+        # Enforce the size cap BEFORE decoding (base64 inflates ~4/3, +padding)
+        # so an oversized payload never costs a full decode.
+        if len(data_str) > _ATTACHMENT_MAX_BYTES * 4 // 3 + 8:
+            logger.warning(
+                f"[Attachments] Image base64 payload exceeds size cap ({len(data_str)} chars); skipping"
+            )
+            continue
+        try:
+            raw = base64.b64decode(data_str)
+        except Exception as exc:
+            logger.warning(f"[Attachments] Failed to decode image data: {exc}")
+            continue
+        if not raw or len(raw) > _ATTACHMENT_MAX_BYTES:
+            logger.warning(
+                f"[Attachments] Image empty or exceeds size cap ({len(raw)} bytes); skipping"
+            )
+            continue
+
+        idx += 1
+        filename = f"img-{idx}.{ext}"
+        try:
+            attachments_dir.mkdir(parents=True, exist_ok=True)
+            (attachments_dir / filename).write_bytes(raw)
+        except OSError as exc:
+            logger.warning(f"[Attachments] Failed to write {filename}: {exc}")
+            continue
+
+        ref = {
+            "id": image.get("id"),
+            "filename": image.get("filename") or filename,
+            "path": f"attachments/{filename}",
+            "mimeType": mime,
+            "size": len(raw),
+        }
+        # Preserve the wizard's small preview thumbnail (distinct from the
+        # full-size data blob) so the edit dialog keeps showing previews.
+        if image.get("thumbnail"):
+            ref["thumbnail"] = image["thumbnail"]
+        new_images.append(ref)
+
+    metadata_dict["attachedImages"] = new_images
 
 
 @router.post("", response_model=Task, status_code=status.HTTP_201_CREATED)
@@ -1046,11 +1213,16 @@ async def create_task(task: TaskCreate):
     if task.metadata:
         metadata_dict = task.metadata.model_dump(exclude_none=True)
         if metadata_dict:
+            # Materialize any pasted screenshots to <spec_dir>/attachments/ and
+            # replace the base64 blobs with lightweight on-disk references.
+            _materialize_attachments(spec_dir, metadata_dict)
+
             requirements["metadata"] = metadata_dict
 
             # Sync task_metadata.json for phase_config.py to read model/thinking settings
-            # Also include selectedSkills so agent_service.py can inject skill context
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills", "customBranchName"]
+            # Also include selectedSkills so agent_service.py can inject skill context,
+            # and taskType so bug tasks get the browser + reproduction protocol.
+            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "selectedSkills", "customBranchName", "taskType", "uiCheck"]
             task_metadata = {field: metadata_dict[field] for field in model_fields if field in metadata_dict}
             if task_metadata:
                 (spec_dir / "task_metadata.json").write_text(json.dumps(task_metadata, indent=2))
@@ -1343,6 +1515,11 @@ async def update_task(task_id: str, update: TaskUpdate):
                     # Update the field
                     requirements["metadata"][field] = value
 
+            # Materialize any newly-pasted screenshots to <spec_dir>/attachments/
+            # and replace base64 blobs with on-disk references (idempotent for
+            # already-materialized entries).
+            _materialize_attachments(spec_dir, requirements["metadata"])
+
             # Sync task_metadata.json for phase_config.py to read model/thinking settings
             task_metadata_file = spec_dir / "task_metadata.json"
             task_metadata = {}
@@ -1354,7 +1531,8 @@ async def update_task(task_id: str, update: TaskUpdate):
 
             # Update model-related fields that phase_config.py expects
             # Also include selectedSkills so agent_service.py can inject skill context
-            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills"]
+            # and taskType so bug tasks get the browser + reproduction protocol.
+            model_fields = ["model", "thinkingLevel", "isAutoProfile", "phaseModels", "phaseThinking", "mode", "requireReviewBeforeCoding", "selectedSkills", "taskType", "uiCheck"]
             for field in model_fields:
                 if field in metadata_dict:
                     if metadata_dict[field] is None:
@@ -1560,6 +1738,237 @@ async def approve_plan(
     }
 
 
+class SubmitReviewRequest(BaseModel):
+    """Human review decision for a task awaiting review (merge/QA sign-off)."""
+
+    approved: bool = Field(..., description="True to approve, False to request changes")
+    feedback: Optional[str] = Field(
+        None, description="Change request feedback (required when rejecting)"
+    )
+
+
+@router.post("/{task_id}/review")
+async def submit_review(
+    task_id: str,
+    raw_request: Request,
+    request: SubmitReviewRequest,
+):
+    """Submit a human review decision for a task in human_review.
+
+    - ``approved=True``: marks the build approved (the user merges separately).
+    - ``approved=False``: writes the feedback to ``QA_FIX_REQUEST.md`` and restarts the
+      build. ``setup_workspace`` copies the main spec dir into the build worktree on
+      start, so the QA loop detects the file as pending human feedback and runs the QA
+      fixer before re-validating. This backs the "Request Changes" UI button.
+    """
+    logger = logging.getLogger(__name__)
+
+    if ":" not in task_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid task ID format",
+        )
+
+    project_id, spec_id = task_id.split(":", 1)
+    projects = load_projects()
+
+    if project_id not in projects:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    project_path = Path(projects[project_id]["path"])
+    spec_dir = project_path / ".magestic-ai" / "specs" / spec_id
+
+    if not spec_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    from ..websockets.events import emit_task_status
+
+    plan_file = spec_dir / "implementation_plan.json"
+
+    # ----- Approve path -----
+    if request.approved:
+        if plan_file.exists():
+            try:
+                plan = json.loads(plan_file.read_text())
+                plan["status"] = "done"
+                plan.pop("reviewReason", None)
+                plan_file.write_text(json.dumps(plan, indent=2))
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"[SubmitReview] Failed to mark plan done for {task_id}: {e}")
+        await emit_task_status(task_id, "done")
+        return {
+            "success": True,
+            "task_id": task_id,
+            "approved": True,
+            "message": "Build approved",
+        }
+
+    # ----- Request changes path -----
+    feedback = (request.feedback or "").strip()
+    if not feedback:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Feedback is required when requesting changes",
+        )
+
+    # Remove any stale QA fix-request file so the QA fixer doesn't also act on this
+    # feedback — we route it to the coder instead.
+    stale_fix = spec_dir / "QA_FIX_REQUEST.md"
+    if stale_fix.exists():
+        try:
+            stale_fix.unlink()
+        except OSError:
+            pass
+
+    # Route the change request to the CODER, not the QA fixer. We append a new pending
+    # subtask (in its own phase) describing the reviewer's request; on restart the coder
+    # implements it and QA re-validates afterwards. Routing to the QA fixer instead is
+    # unreliable: it is geared to fixing QA-flagged defects and no-ops feature-style change
+    # requests (it just re-approves without editing anything).
+    #
+    # We also reset the plan/QA state so the build actually resumes: mark it in_progress,
+    # clear reviewReason, and drop any prior qa_signoff approval (should_run_qa() returns
+    # False while qa_signoff.status == "approved", which would otherwise skip QA and bounce
+    # straight back to human_review).
+    if plan_file.exists():
+        try:
+            plan = json.loads(plan_file.read_text())
+
+            phases = plan.get("phases")
+            if isinstance(phases, list):
+                # Drop any prior *unstarted* feedback phases (e.g. a malformed earlier
+                # attempt) so re-clicking is self-healing and doesn't pile up duplicates.
+                # Keep feedback phases that actually completed work.
+                phases[:] = [
+                    ph for ph in phases
+                    if not (
+                        str(ph.get("id", "")).startswith("phase-feedback-")
+                        and all(
+                            s.get("status") != "completed"
+                            for s in ph.get("subtasks", [])
+                        )
+                    )
+                ]
+                existing_fb = sum(
+                    1 for ph in phases
+                    if str(ph.get("id", "")).startswith("phase-feedback-")
+                )
+                n = existing_fb + 1
+                depends_on = (
+                    [phases[-1]["id"]] if phases and phases[-1].get("id") else []
+                )
+                phases.append({
+                    "id": f"phase-feedback-{n}",
+                    "name": "Human Change Request",
+                    "type": "implementation",
+                    "depends_on": depends_on,
+                    "parallel_safe": False,
+                    "subtasks": [{
+                        "id": f"subtask-feedback-{n}-1",
+                        "description": (
+                            "HUMAN CHANGE REQUEST — implement exactly as described by the "
+                            "reviewer. This is a required change, not optional. Explore the "
+                            "codebase to locate the relevant code, make the change, and "
+                            "verify it:\n\n"
+                            f"{feedback}"
+                        ),
+                        "service": "frontend",
+                        "files_to_modify": [],
+                        "files_to_create": [],
+                        "patterns_from": [],
+                        # NOTE: verification must be a dict ({type, command, expected}) —
+                        # the build code calls .get() on it; a string crashes run.py with
+                        # "'str' object has no attribute 'get'".
+                        "verification": {
+                            "type": "manual",
+                            "command": "",
+                            "expected": (
+                                "The reviewer's requested change is implemented and "
+                                "visible in the running app."
+                            ),
+                        },
+                        "status": "pending",
+                        "notes": "Added from the web UI 'Request Changes' action.",
+                    }],
+                })
+
+            plan["status"] = "in_progress"
+            plan["planStatus"] = "in_progress"
+            plan.pop("reviewReason", None)
+            qa_signoff = plan.get("qa_signoff")
+            if isinstance(qa_signoff, dict):
+                qa_signoff["status"] = "rejected"
+                qa_signoff["ready_for_qa_revalidation"] = False
+            plan_file.write_text(json.dumps(plan, indent=2))
+        except (json.JSONDecodeError, OSError, KeyError, IndexError) as e:
+            logger.warning(
+                f"[SubmitReview] Failed to append feedback subtask for {task_id}: {e}"
+            )
+
+    await emit_task_status(task_id, "in_progress")
+
+    # Restart the build so the QA fixer picks up the feedback.
+    auto_restarted = False
+    try:
+        from ..services.agent_service import get_agent_service
+
+        agent_service = get_agent_service()
+
+        # Clean up any stale running process before restarting (start_task_execution
+        # raises if the task is still tracked as running).
+        if agent_service.is_running(task_id):
+            logger.info(f"[SubmitReview] Cleaning up stale process for {task_id}")
+            try:
+                await agent_service.stop_task(task_id)
+            except Exception as stop_err:
+                logger.warning(f"[SubmitReview] Failed to stop stale process: {stop_err}")
+                agent_service.running_tasks.pop(task_id, None)
+
+        # Read mode from task_metadata.json. Force "full" so QA validates the coder's work
+        # — quick mode skips QA (--skip-qa), which would land the change with no re-review.
+        mode = "full"
+        task_metadata_file = spec_dir / "task_metadata.json"
+        if task_metadata_file.exists():
+            try:
+                if json.loads(task_metadata_file.read_text()).get("mode") == "quick":
+                    logger.info(
+                        f"[SubmitReview] Overriding quick mode to full for {task_id} "
+                        "so QA re-validates the coder's change"
+                    )
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        _user = getattr(raw_request.state, "user", None)
+        _user_id = _user["id"] if isinstance(_user, dict) and _user.get("id") else ""
+        await agent_service.start_task_execution(
+            task_id=task_id,
+            project_path=project_path,
+            spec_id=spec_id,
+            auto_continue=True,
+            mode=mode,
+            force=True,  # Plan review already cleared; bypass the gate.
+            user_id=_user_id,
+        )
+        auto_restarted = True
+    except Exception as e:
+        logger.warning(f"[SubmitReview] Auto-restart failed for {task_id}: {e}")
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "approved": False,
+        "autoRestarted": auto_restarted,
+        "message": "Changes requested"
+        + (" and build restarted" if auto_restarted else ""),
+    }
+
+
 @router.get("/{task_id}/plan-html")
 async def get_plan_html(task_id: str):
     """Generate and return HTML view of the implementation plan.
@@ -1727,6 +2136,109 @@ async def get_task_logs(task_id: str):
     return result
 
 
+@router.get("/{task_id}/reproduction-report")
+async def get_reproduction_report(task_id: str):
+    """Return the bug reproduction report (markdown) and evidence file list.
+
+    Bug-report tasks produce ``<spec_dir>/reproduction_report.md`` and
+    ``<spec_dir>/evidence/*`` screenshots during QA. Returns
+    ``{exists, content, evidence: [{name, path}]}``. Non-bug tasks (or before QA
+    runs) return ``{exists: false}``. Prefers the main spec dir (synced from the
+    worktree); falls back to the worktree copy.
+    """
+    project_id, spec_id, project_path, spec_dir = _resolve_task(task_id)
+
+    worktree_spec = (
+        project_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
+        / ".magestic-ai" / "specs" / spec_id
+    )
+
+    _img_ext = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")
+    for base in (spec_dir, worktree_spec):
+        report_file = base / "reproduction_report.md"
+        if not report_file.exists():
+            continue
+        try:
+            content = report_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        evidence: list[dict] = []
+        evidence_dir = base / "evidence"
+        if evidence_dir.is_dir():
+            try:
+                for p in sorted(evidence_dir.iterdir()):
+                    if p.is_file() and p.suffix.lower() in _img_ext:
+                        # Path is spec-dir-relative (matches how the report
+                        # references screenshots); never expose absolute
+                        # server paths to the client.
+                        evidence.append({"name": p.name, "path": f"evidence/{p.name}"})
+            except OSError:
+                pass
+        return {"exists": True, "content": content, "evidence": evidence}
+
+    return {"exists": False, "content": None, "evidence": []}
+
+
+@router.get("/{task_id}/ui-check-report")
+async def get_ui_check_report(task_id: str):
+    """Return the UI-check report (markdown), verdict, and evidence file list.
+
+    UI-check tasks produce ``<spec_dir>/ui_check_report.md``,
+    ``<spec_dir>/ui_check_result.json`` and ``<spec_dir>/evidence-ui-check/*``
+    screenshots. Returns ``{exists, verdict, content, evidence: [{name, path}]}``.
+    Before the check runs, returns ``{exists: false}``. Prefers the main spec
+    dir; falls back to the worktree copy (defensive — UI checks normally run
+    without a worktree).
+    """
+    project_id, spec_id, project_path, spec_dir = _resolve_task(task_id)
+
+    worktree_spec = (
+        project_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
+        / ".magestic-ai" / "specs" / spec_id
+    )
+
+    _img_ext = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")
+    for base in (spec_dir, worktree_spec):
+        report_file = base / "ui_check_report.md"
+        if not report_file.exists():
+            continue
+        try:
+            content = report_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        verdict = None
+        result_file = base / "ui_check_result.json"
+        if result_file.exists():
+            try:
+                verdict = (json.loads(result_file.read_text()) or {}).get("verdict")
+            except (json.JSONDecodeError, OSError, TypeError):
+                verdict = None
+        # Normalise for the frontend's verdict-pill lookup (uppercase keys).
+        if isinstance(verdict, str):
+            verdict = verdict.upper()
+        evidence: list[dict] = []
+        evidence_dir = base / "evidence-ui-check"
+        if evidence_dir.is_dir():
+            try:
+                for p in sorted(evidence_dir.iterdir()):
+                    if p.is_file() and p.suffix.lower() in _img_ext:
+                        # Spec-dir-relative paths only (matches report refs);
+                        # never expose absolute server paths to the client.
+                        evidence.append(
+                            {"name": p.name, "path": f"evidence-ui-check/{p.name}"}
+                        )
+            except OSError:
+                pass
+        return {
+            "exists": True,
+            "verdict": verdict,
+            "content": content,
+            "evidence": evidence,
+        }
+
+    return {"exists": False, "verdict": None, "content": None, "evidence": []}
+
+
 @router.post("/{task_id}/logs/watch")
 async def watch_task_logs(task_id: str):
     """
@@ -1821,149 +2333,92 @@ async def get_worktree_merge_preview(task_id: str):
     if not worktree_path.exists():
         return {"success": False, "error": "No worktree found for this task"}
 
-    # Get the branch name from the worktree
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=worktree_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        worktree_branch = result.stdout.strip()
-    except subprocess.CalledProcessError:
+    # Resolve every repo this task touches. For a composite task the project
+    # root isn't a git repo, so all git below must run inside each repo / its
+    # worktree — driven by the resolver, which works for single and multi alike.
+    entries = resolve_task_worktrees(project_path, task_id)
+    if not entries:
         return {"success": False, "error": "Could not determine worktree branch"}
 
-    # Get the base branch (usually develop or main)
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        base_branch = result.stdout.strip()
-    except subprocess.CalledProcessError:
-        base_branch = "develop"
+    multi = len(entries) > 1
+    worktree_branch = entries[0]["branch"]
+    base_branch = entries[0]["base"]
 
-    # Get list of changed files
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-status", f"{base_branch}...{worktree_branch}"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        changed_files = []
-        for line in result.stdout.strip().split("\n"):
-            if line:
-                parts = line.split("\t")
-                if len(parts) >= 2:
-                    status = parts[0]
-                    filename = parts[1]
-                    changed_files.append({
-                        "path": filename,
-                        "status": "added" if status == "A" else "modified" if status == "M" else "deleted" if status == "D" else status
-                    })
-    except subprocess.CalledProcessError:
-        changed_files = []
-
-    # Check for potential conflicts using merge-tree (dry run)
-    # Git 2.38+ uses new merge-tree format with --write-tree mode by default
+    changed_files: list[dict] = []
     has_conflicts = False
-    conflicting_files = []
-    try:
-        # Use --write-tree explicitly for git 2.38+ behavior
-        result = subprocess.run(
-            ["git", "merge-tree", "--write-tree", base_branch, worktree_branch],
-            cwd=project_path,
-            capture_output=True,
-            text=True
-        )
-        # Git 2.38+: Return code 1 means conflicts exist
-        # stdout format: "<tree_oid>\nCONFLICT (type): description"
-        if result.returncode == 1:
-            has_conflicts = True
-            # Parse CONFLICT lines to get conflicting files
-            for line in result.stdout.split('\n'):
-                if line.startswith('CONFLICT'):
-                    # Extract filename from "CONFLICT (content): Merge conflict in path/file"
-                    if ' in ' in line:
-                        file_path = line.split(' in ')[-1].strip()
-                        if file_path:
-                            conflicting_files.append(file_path)
-        # Fallback: Check for CONFLICT keyword even on return code 0
-        # (some edge cases may not set return code correctly)
-        elif "CONFLICT" in result.stdout or "CONFLICT" in result.stderr:
-            has_conflicts = True
-            for line in (result.stdout + result.stderr).split('\n'):
-                if line.startswith('CONFLICT') and ' in ' in line:
-                    file_path = line.split(' in ')[-1].strip()
-                    if file_path:
-                        conflicting_files.append(file_path)
-        # Legacy fallback: Check for conflict markers (older git versions < 2.38)
-        elif "<<<<<<" in result.stdout:
-            has_conflicts = True
-    except subprocess.CalledProcessError as e:
-        # Command failed - check output for conflict indicators
-        output = (e.stdout or '') + (e.stderr or '')
-        if "CONFLICT" in output or "<<<<<<" in output:
-            has_conflicts = True
-            for line in output.split('\n'):
-                if line.startswith('CONFLICT') and ' in ' in line:
-                    file_path = line.split(' in ')[-1].strip()
-                    if file_path:
-                        conflicting_files.append(file_path)
-
-    # Filter out gitignored files from conflict list (e.g. build artifacts)
-    if conflicting_files:
-        try:
-            result = subprocess.run(
-                ["git", "check-ignore"] + conflicting_files,
-                cwd=project_path,
-                capture_output=True, text=True
-            )
-            ignored = set(result.stdout.strip().splitlines())
-            conflicting_files = [f for f in conflicting_files if f not in ignored]
-            if not conflicting_files:
-                has_conflicts = False
-        except Exception:
-            pass  # If check-ignore fails, keep the original list
-
-    # Check if there's an active merge in progress (MERGE_HEAD exists)
-    # This is different from the merge-tree dry run above - this means a real merge
-    # is in progress with unresolved conflict markers in files
+    conflicting_files: list[str] = []
+    commits_ahead = 0
+    commits_behind = 0
     merge_in_progress = False
-    merge_head_file = project_path / ".git" / "MERGE_HEAD"
-    if merge_head_file.exists():
-        merge_in_progress = True
 
-    # Get commit counts
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", f"{base_branch}..{worktree_branch}"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        commits_ahead = int(result.stdout.strip())
-    except (subprocess.CalledProcessError, ValueError):
-        commits_ahead = 0
+    for entry in entries:
+        repo = entry["repo"]
+        branch = entry["branch"]
+        base = entry["base"]
+        prefix = f"{entry['name']}/" if multi else ""
 
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", f"{worktree_branch}..{base_branch}"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        commits_behind = int(result.stdout.strip())
-    except (subprocess.CalledProcessError, ValueError):
-        commits_behind = 0
+        # Changed files for this repo.
+        namestatus = _git_out(["diff", "--name-status", f"{base}...{branch}"], repo) or ""
+        for line in namestatus.split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                status = parts[0]
+                changed_files.append({
+                    "path": prefix + parts[1],
+                    "status": "added" if status == "A" else "modified" if status == "M" else "deleted" if status == "D" else status,
+                })
+
+        # Conflict dry-run via merge-tree (git 2.38+).
+        import subprocess as _sp
+        repo_conflicts: list[str] = []
+        try:
+            mt = _sp.run(
+                ["git", "-c", "safe.directory=*", "merge-tree", "--write-tree", base, branch],
+                cwd=str(repo), capture_output=True, text=True,
+            )
+            out = (mt.stdout or "") + (mt.stderr or "")
+            if mt.returncode == 1 or "CONFLICT" in out:
+                for line in out.split("\n"):
+                    if line.startswith("CONFLICT") and " in " in line:
+                        fp = line.split(" in ")[-1].strip()
+                        if fp:
+                            repo_conflicts.append(fp)
+                if mt.returncode == 1 or repo_conflicts:
+                    has_conflicts = True
+            elif "<<<<<<" in (mt.stdout or ""):
+                has_conflicts = True
+        except OSError:
+            pass
+
+        # Drop gitignored files from the conflict list.
+        if repo_conflicts:
+            ignored_out = _git_out(["check-ignore", *repo_conflicts], repo) or ""
+            ignored = set(ignored_out.splitlines())
+            repo_conflicts = [f for f in repo_conflicts if f not in ignored]
+        conflicting_files.extend(prefix + f for f in repo_conflicts)
+
+        # Commit counts (summed across repos).
+        ca = _git_out(["rev-list", "--count", f"{base}..{branch}"], repo)
+        cb = _git_out(["rev-list", "--count", f"{branch}..{base}"], repo)
+        try:
+            commits_ahead += int(ca) if ca is not None else 0
+        except ValueError:
+            pass
+        try:
+            commits_behind += int(cb) if cb is not None else 0
+        except ValueError:
+            pass
+
+        # A real merge in progress in any repo.
+        if (repo / ".git" / "MERGE_HEAD").exists():
+            merge_in_progress = True
+
+    if conflicting_files and not has_conflicts:
+        has_conflicts = True
+    if not conflicting_files and has_conflicts and commits_ahead == 0:
+        has_conflicts = False
 
     # Detect uncommitted changes in the main project that could conflict
     uncommitted_files = []
@@ -3363,10 +3818,18 @@ async def create_pr_from_task(task_id: str, options: CreatePRFromTaskOptions = N
 
 class DeployPreviewOptions(BaseModel):
     lane: Optional[str] = Field(None, description="Override lane (A or B); default derived from branch")
+    strategy: Optional[str] = Field(
+        None,
+        description="Override preview strategy: docker-remote | dev-server | compose-local (default from config)",
+    )
 
 
 class PromoteOptions(BaseModel):
     lane: Optional[str] = Field(None, description="Override target static lane (A or B)")
+
+
+class ExtendPreviewOptions(BaseModel):
+    hours: int = Field(1, ge=1, le=24, description="Hours to add to the preview's expiry")
 
 
 @router.post("/{task_id}/deploy-preview")
@@ -3378,7 +3841,9 @@ async def deploy_preview(task_id: str, options: DeployPreviewOptions = None):
     if options is None:
         options = DeployPreviewOptions()
     try:
-        state = pds.deploy_preview(task_id, lane_override=options.lane)
+        state = pds.deploy_preview(
+            task_id, lane_override=options.lane, strategy_override=options.strategy,
+        )
     except pds.PreviewError as exc:
         return {"success": False, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
@@ -3412,6 +3877,60 @@ async def stop_deploy_preview(task_id: str):
     return {"success": True, "data": state}
 
 
+@router.post("/{task_id}/deploy-preview/extend")
+async def extend_deploy_preview(task_id: str, options: ExtendPreviewOptions = None):
+    """Extend a running preview's lifetime (default +1h) so the reaper keeps it."""
+    from ..services import preview_deploy_service as pds
+
+    if options is None:
+        options = ExtendPreviewOptions()
+    try:
+        state = pds.extend_preview(task_id, hours=options.hours)
+    except pds.PreviewError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"extend failed: {exc}"}
+    return {"success": True, "data": state}
+
+
+# --------------------------------------------------------------------------
+# Jenkins deploy ("Развернуть на Jenkins") — publish the task's library changes
+# (gradle uploadArchives + version bumps), push the task branches, and trigger
+# the project's parameterized Jenkins job. See services/jenkins_deploy_service.py.
+# --------------------------------------------------------------------------
+
+
+@router.post("/{task_id}/deploy-jenkins")
+async def deploy_jenkins(task_id: str):
+    """Start a Jenkins deploy of the task's branch. Returns immediately; poll
+    GET /deploy-jenkins for status (bumping -> publishing -> pushing ->
+    triggering -> queued -> building -> success/failed)."""
+    from ..services import jenkins_deploy_service as jds
+
+    try:
+        state = jds.deploy(task_id)
+    except jds.JenkinsError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"deploy-jenkins failed: {exc}"}
+    return {"success": True, "data": state}
+
+
+@router.get("/{task_id}/deploy-jenkins")
+async def get_deploy_jenkins(task_id: str):
+    """Current Jenkins deploy status + build URL for a task. ``enabled`` tells
+    the UI whether this project has a jenkins section in deploy.config.json."""
+    from ..services import jenkins_deploy_service as jds
+
+    try:
+        state = jds.get_state(task_id)
+    except jds.JenkinsError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"deploy-jenkins status failed: {exc}"}
+    return {"success": True, "data": state}
+
+
 @router.post("/{task_id}/promote")
 async def promote_preview(task_id: str, options: PromoteOptions = None):
     """Promote a validated preview onto its branch's static lane, then tear the
@@ -3427,6 +3946,178 @@ async def promote_preview(task_id: str, options: PromoteOptions = None):
     except Exception as exc:  # noqa: BLE001
         return {"success": False, "error": f"promote failed: {exc}"}
     return {"success": True, "data": state}
+
+
+def _git_out(args: list[str], cwd: Path) -> str | None:
+    """Run a git command, return stripped stdout or None on failure.
+
+    Uses safe.directory=* so git works on bind-mounted repos owned by a
+    different uid than the web process (dockerized deploy) — without it git
+    aborts with "detected dubious ownership".
+    """
+    import subprocess
+
+    try:
+        res = subprocess.run(
+            ["git", "-c", "safe.directory=*", *args],
+            cwd=str(cwd), capture_output=True, text=True,
+        )
+    except OSError:
+        return None
+    return res.stdout.strip() if res.returncode == 0 else None
+
+
+def _repo_of_worktree(worktree: Path) -> Path | None:
+    """Resolve the main repo a worktree belongs to via its git-common-dir.
+
+    ``git rev-parse --git-common-dir`` points at the repo's shared ``.git``; its
+    parent is the repo root. Works for both classic worktrees and the per-repo
+    sub-worktrees inside a composite task dir.
+    """
+    common = _git_out(["rev-parse", "--git-common-dir"], worktree)
+    if not common:
+        return None
+    common_path = Path(common)
+    if not common_path.is_absolute():
+        common_path = (worktree / common_path).resolve()
+    return common_path.parent if common_path.name == ".git" else common_path
+
+
+def resolve_task_worktrees(project_path: Path, spec_id: str) -> list[dict]:
+    """Resolve a task's worktree(s), handling single- and multi-repo layouts.
+
+    Returns a list of ``{repo, name, worktree, branch, base}`` dicts:
+
+    * **Single-repo** — the task dir ``…/tasks/{spec}`` is itself a git worktree;
+      one entry, ``repo`` = its owning repo.
+    * **Composite (multi-repo)** — the task dir is a plain folder whose children
+      are per-repo worktrees; one entry per child.
+
+    ``base`` is each repo's currently checked-out branch (the merge target).
+    Returns ``[]`` when there's no worktree. This is the single source of truth
+    every worktree endpoint uses so they all behave the same across layouts.
+    """
+    task_dir = project_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
+    if not task_dir.exists():
+        return []
+
+    def _entry(worktree: Path, name: str) -> dict | None:
+        branch = _git_out(["rev-parse", "--abbrev-ref", "HEAD"], worktree)
+        if branch is None:
+            return None
+        repo = _repo_of_worktree(worktree) or project_path
+        base = _git_out(["rev-parse", "--abbrev-ref", "HEAD"], repo) or "main"
+        return {
+            "repo": repo,
+            "name": name,
+            "worktree": worktree,
+            "branch": branch,
+            "base": base,
+        }
+
+    # Classic single worktree: the task dir has its own .git file.
+    if (task_dir / ".git").exists():
+        entry = _entry(task_dir, task_dir.name)
+        return [entry] if entry else []
+
+    # Composite: each child that is a git worktree is one repo's slice.
+    entries: list[dict] = []
+    for child in sorted(task_dir.iterdir(), key=lambda p: p.name.lower()):
+        try:
+            if child.is_dir() and (child / ".git").exists():
+                entry = _entry(child, child.name)
+                if entry:
+                    entries.append(entry)
+        except OSError:
+            continue
+    return entries
+
+
+def _docs_refresh_on_merge_enabled() -> bool:
+    """Whether a merge triggers a change-aware docs refresh. Default ON.
+
+    Set DOCS_REFRESH_ON_MERGE to a falsey value to disable. CGC re-indexing
+    (free) always runs regardless of this flag.
+    """
+    return str(os.environ.get("DOCS_REFRESH_ON_MERGE", "true")).lower() not in (
+        "false", "0", "no",
+    )
+
+
+def _project_id_for_repo(repo: Path) -> str | None:
+    """Resolve the registered project UUID that owns ``repo``.
+
+    The docs single-flight guard (DocsGeneratorService._running) is keyed by
+    the registered project UUID — the same key the interactive /docs/generate
+    route uses. Matching by path (exact, or the repo being a child of a
+    multi-repo project's root) keeps merge-triggered refreshes on that same
+    key so they can't run concurrently with a UI-initiated generation.
+    """
+    try:
+        resolved = repo.resolve()
+        for pid, pdata in load_projects().items():
+            ppath = pdata.get("path")
+            if not ppath:
+                continue
+            try:
+                project_path = Path(ppath).resolve()
+            except OSError:
+                continue
+            if resolved == project_path:
+                return pid
+            # Multi-repo project: the merged repo is a child of the project root.
+            try:
+                resolved.relative_to(project_path)
+                return pid
+            except ValueError:
+                continue
+    except Exception:
+        logger.warning("[merge] project lookup failed for %s", repo, exc_info=True)
+    return None
+
+
+async def _post_merge_refresh(repo_paths: list[Path]) -> None:
+    """Background, best-effort post-merge refresh for each merged repo.
+
+    Always re-indexes CodeGraphContext (cheap, no LLM). When DOCS_REFRESH_ON_MERGE
+    is truthy AND the repo already has docs, also runs a change-aware docs
+    regeneration + site rebuild. Failures only log — never surface to the caller.
+    """
+    try:
+        from ..config import get_settings
+        from ..services.docs_generator_service import get_docs_generator_service
+
+        backend_path = Path(get_settings().BACKEND_PATH)
+        svc = get_docs_generator_service(backend_path)
+        do_docs = _docs_refresh_on_merge_enabled()
+        token = await svc.resolve_oauth_token() if do_docs else None
+
+        for repo in repo_paths:
+            try:
+                # (a) Always refresh the code graph (tree-sitter, no tokens).
+                await svc.index_codegraph(repo)
+                # (b) Optionally refresh docs when they exist for this repo.
+                if do_docs and svc.docs_exist(repo):
+                    # The single-flight guard is keyed by the registered project
+                    # UUID (what the interactive route passes). Resolve it so a
+                    # merge refresh and a UI generation can never overlap on the
+                    # same docs/ tree; skip if the repo isn't registered.
+                    project_id = _project_id_for_repo(repo)
+                    if project_id is None:
+                        logger.warning(
+                            "[merge] no registered project found for %s; "
+                            "skipping docs refresh", repo,
+                        )
+                        continue
+                    await svc.refresh_docs_incremental(
+                        project_id=project_id,
+                        project_path=repo,
+                        oauth_token=token,
+                    )
+            except Exception:
+                logger.warning("[merge] post-merge refresh failed for %s", repo, exc_info=True)
+    except Exception:
+        logger.warning("[merge] post-merge refresh could not start", exc_info=True)
 
 
 @router.post("/{task_id}/worktree/merge")
@@ -3473,118 +4164,122 @@ async def merge_worktree(task_id: str, options: WorktreeMergeOptions = None):
     if not spec_dir.exists():
         return {"success": False, "error": f"Task {task_id} not found"}
 
-    # Find the worktree
-    worktree_path = project_path / ".magestic-ai" / "worktrees" / "tasks" / spec_id
-
-    if not worktree_path.exists():
+    # Resolve every repo this task touches (one for single-repo, several for a
+    # composite multi-repo task). Each is merged into its own repo independently.
+    entries = resolve_task_worktrees(project_path, spec_id)
+    if not entries:
         return {"success": False, "error": "No worktree found for this task"}
 
-    # Get the branch name from the worktree
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=worktree_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        worktree_branch = result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return {"success": False, "error": f"Could not determine worktree branch: {e}"}
-
-    # Get the current branch in main repo
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        base_branch = result.stdout.strip()
-    except subprocess.CalledProcessError:
-        base_branch = "develop"
-
-    # Clean up internal auto-generated files that can block merge
-    # These are untracked files created by agents in worktrees that would
-    # collide with the same untracked files in the main working directory.
     _INTERNAL_MERGE_BLOCKERS = [
         ".magestic-ai-security.json",
         ".magestic-ai-status",
     ]
-    for fname in _INTERNAL_MERGE_BLOCKERS:
-        blocker = project_path / fname
-        if blocker.exists():
-            try:
-                blocker.unlink()
-                logger.info(f"Removed merge-blocking file: {fname}")
-            except OSError:
-                pass
 
-    # Perform the merge
-    try:
-        merge_cmd = ["git", "merge", worktree_branch]
+    results: list[dict] = []
+    any_conflict = False
+    merged_repo_paths: list[Path] = []
+    for entry in entries:
+        repo = entry["repo"]
+        branch = entry["branch"]
+        base = entry["base"]
+        worktree = entry["worktree"]
+
+        # Skip repos with no commits on the task branch — nothing to land.
+        ahead = _git_out(["rev-list", "--count", f"{base}..{branch}"], repo)
+        if ahead is not None and ahead == "0":
+            results.append({
+                "repo": entry["name"], "merged": True, "skipped": True,
+                "message": f"{entry['name']}: no changes",
+            })
+            continue
+
+        # Clear untracked runtime files that would collide with the merge.
+        for fname in _INTERNAL_MERGE_BLOCKERS:
+            blocker = repo / fname
+            if blocker.exists():
+                try:
+                    blocker.unlink()
+                except OSError:
+                    pass
+
+        merge_cmd = ["git", "-c", "safe.directory=*", "merge", branch]
         if options.noCommit:
             merge_cmd.append("--no-commit")
-
-        result = subprocess.run(
-            merge_cmd,
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-
-        # Clean up worktree after successful merge
-        worktree_deleted = False
-        branch_deleted = False
         try:
-            # Remove git worktree
-            cleanup_result = subprocess.run(
-                ["git", "worktree", "remove", str(worktree_path), "--force"],
-                cwd=project_path,
-                capture_output=True,
-                text=True
+            result = subprocess.run(
+                merge_cmd, cwd=str(repo), capture_output=True, text=True, check=True
             )
-            worktree_deleted = cleanup_result.returncode == 0
+        except subprocess.CalledProcessError as e:
+            out = (e.stdout or "") + (e.stderr or "")
+            if "CONFLICT" in out:
+                any_conflict = True
+                # Leave the conflict in place for manual resolution; don't abort
+                # other repos that merged cleanly.
+                results.append({
+                    "repo": entry["name"], "merged": False, "conflict": True,
+                    "message": f"{entry['name']}: merge conflict", "output": out,
+                })
+            else:
+                results.append({
+                    "repo": entry["name"], "merged": False,
+                    "message": f"{entry['name']}: merge failed", "output": out,
+                })
+            continue
 
-            # Delete the branch (it's merged now)
-            branch_result = subprocess.run(
-                ["git", "branch", "-d", worktree_branch],
-                cwd=project_path,
-                capture_output=True,
-                text=True
+        # Clean up this repo's worktree + branch after a clean (committed) merge.
+        worktree_deleted = branch_deleted = False
+        if not options.noCommit:
+            cleanup = subprocess.run(
+                ["git", "-c", "safe.directory=*", "worktree", "remove", str(worktree), "--force"],
+                cwd=str(repo), capture_output=True, text=True,
             )
-            branch_deleted = branch_result.returncode == 0
-        except Exception as e:
-            logger.warning(f"Failed to cleanup worktree after merge: {e}")
-            # Don't fail the merge just because cleanup failed
+            worktree_deleted = cleanup.returncode == 0
+            br = subprocess.run(
+                ["git", "-c", "safe.directory=*", "branch", "-d", branch],
+                cwd=str(repo), capture_output=True, text=True,
+            )
+            branch_deleted = br.returncode == 0
 
-        return {
-            "success": True,
-            "data": {
-                "success": True,  # Frontend checks this for merge result display
-                "merged": True,
-                "message": f"Successfully merged {worktree_branch} into {base_branch}",
-                "output": result.stdout,
-                "worktreeDeleted": worktree_deleted,
-                "branchDeleted": branch_deleted
-            }
-        }
-    except subprocess.CalledProcessError as e:
-        # Check if it's a conflict
-        if "CONFLICT" in e.stdout or "CONFLICT" in e.stderr:
-            return {
-                "success": False,
-                "error": "Merge conflicts detected. Please resolve manually.",
-                "conflicts": True,
-                "output": e.stdout + e.stderr
-            }
+        results.append({
+            "repo": entry["name"], "merged": True,
+            "message": f"{entry['name']}: merged {branch} into {base}",
+            "output": result.stdout,
+            "worktreeDeleted": worktree_deleted, "branchDeleted": branch_deleted,
+        })
+        # Real, committed merge landed code into this repo — refresh it below.
+        # --no-commit merges are excluded: HEAD hasn't moved yet, so the doc
+        # agent would run against staged-but-uncommitted content.
+        if not options.noCommit:
+            merged_repo_paths.append(repo)
+
+    merged_ok = [r for r in results if r.get("merged")]
+    if any_conflict:
         return {
             "success": False,
-            "error": f"Merge failed: {e.stderr or e.stdout}",
-            "output": e.stdout + e.stderr
+            "error": "Merge conflicts detected in one or more repos. Resolve manually.",
+            "conflicts": True,
+            "data": {"repos": results},
         }
+
+    # Code changed → schedule a non-blocking refresh (CGC always; docs when
+    # enabled + present). Guarded so a refresh failure never affects the merge
+    # response. This is the primary "code changed" trigger for auto-refresh.
+    if merged_repo_paths:
+        import asyncio
+        asyncio.create_task(_post_merge_refresh(merged_repo_paths))
+
+    all_merged = all(r.get("merged") for r in results)
+    return {
+        "success": all_merged,
+        "error": None if all_merged else "One or more repos failed to merge.",
+        "data": {
+            "success": all_merged,
+            "merged": all_merged,
+            "multiRepo": len(entries) > 1,
+            "repos": results,
+            "message": "; ".join(r["message"] for r in results),
+        },
+    }
 
 
 @router.get("/{task_id}/worktree/status")
@@ -3659,86 +4354,74 @@ async def get_worktree_status(task_id: str):
             }
         }
 
-    # Get worktree branch
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=worktree_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        worktree_branch = result.stdout.strip()
-    except subprocess.CalledProcessError:
-        worktree_branch = f"feature/{spec_id}"
+    # Resolve every repo this task touches and aggregate stats across them. For
+    # a single-repo task this is just one entry; for a composite task it sums
+    # the per-repo numbers and reports each repo's slice under "repos".
+    import re as _re
 
-    # Get base branch from main project
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        base_branch = result.stdout.strip()
-    except subprocess.CalledProcessError:
-        base_branch = "develop"
+    entries = resolve_task_worktrees(project_path, spec_id)
+    if not entries:
+        return {"success": True, "data": {"exists": False}}
 
-    # Count commits ahead
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", f"{base_branch}..{worktree_branch}"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        commit_count = int(result.stdout.strip())
-    except (subprocess.CalledProcessError, ValueError):
-        commit_count = 0
-
-    # Get changed files stats
+    commit_count = 0
     files_changed = 0
     additions = 0
     deletions = 0
+    per_repo: list[dict] = []
 
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--stat", f"{base_branch}...{worktree_branch}"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        # Parse the last line for summary (e.g., "5 files changed, 100 insertions(+), 20 deletions(-)")
-        lines = result.stdout.strip().split('\n')
-        if lines:
-            summary_line = lines[-1]
-            import re
-            files_match = re.search(r'(\d+) files? changed', summary_line)
-            if files_match:
-                files_changed = int(files_match.group(1))
-            insert_match = re.search(r'(\d+) insertions?\(\+\)', summary_line)
-            if insert_match:
-                additions = int(insert_match.group(1))
-            del_match = re.search(r'(\d+) deletions?\(-\)', summary_line)
-            if del_match:
-                deletions = int(del_match.group(1))
-    except subprocess.CalledProcessError:
-        pass
+    for entry in entries:
+        repo = entry["repo"]
+        branch = entry["branch"]
+        base = entry["base"]
 
+        rc = 0
+        cnt = _git_out(["rev-list", "--count", f"{base}..{branch}"], repo)
+        if cnt is not None:
+            try:
+                rc = int(cnt)
+            except ValueError:
+                rc = 0
+
+        rf = ra = rd = 0
+        stat = _git_out(["diff", "--stat", f"{base}...{branch}"], repo)
+        if stat:
+            summary_line = stat.split("\n")[-1]
+            m = _re.search(r"(\d+) files? changed", summary_line)
+            if m:
+                rf = int(m.group(1))
+            m = _re.search(r"(\d+) insertions?\(\+\)", summary_line)
+            if m:
+                ra = int(m.group(1))
+            m = _re.search(r"(\d+) deletions?\(-\)", summary_line)
+            if m:
+                rd = int(m.group(1))
+
+        commit_count += rc
+        files_changed += rf
+        additions += ra
+        deletions += rd
+        per_repo.append({
+            "repo": entry["name"], "branch": branch, "baseBranch": base,
+            "commitCount": rc, "filesChanged": rf,
+            "additions": ra, "deletions": rd,
+        })
+
+    primary = per_repo[0]
     return {
         "success": True,
         "data": {
             "exists": True,
             "worktreePath": str(worktree_path),
-            "branch": worktree_branch,
-            "baseBranch": base_branch,
+            # Top-level fields stay populated for existing single-repo UI; for a
+            # composite task they reflect the first repo, with totals alongside.
+            "branch": primary["branch"],
+            "baseBranch": primary["baseBranch"],
             "commitCount": commit_count,
             "filesChanged": files_changed,
             "additions": additions,
             "deletions": deletions,
+            "multiRepo": len(entries) > 1,
+            "repos": per_repo,
         }
     }
 
@@ -3806,189 +4489,94 @@ async def get_worktree_diff(task_id: str):
             "error": "No worktree found for this task"
         }
 
-    # Run all git operations INSIDE the worktree. The worktree knows its own
-    # repo even for multi-repo projects, where the project root itself is not a
-    # git repo (e.g. a parent folder of several child repos like `cts`). Running
-    # git in project_path there fails and yields a file list with empty diffs.
-    git_cwd = worktree_path
-
-    # Get worktree branch (the task branch checked out in this worktree)
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=git_cwd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        worktree_branch = result.stdout.strip()
-    except subprocess.CalledProcessError:
-        worktree_branch = f"magestic-ai/{spec_id}"
-
-    # Base = the ref checked out in the repo's MAIN worktree (the first entry of
-    # `git worktree list`). This works for both single-repo and multi-repo
-    # projects. Falls back to the main project's HEAD, then a sensible default.
-    base_branch = None
-    try:
-        wl = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            cwd=git_cwd,
-            capture_output=True,
-            text=True,
-            check=True
-        ).stdout
-        main_block = wl.strip().split("\n\n")[0].splitlines() if wl.strip() else []
-        head_sha = None
-        for ln in main_block:
-            if ln.startswith("branch "):
-                base_branch = ln.split(" ", 1)[1].strip().replace("refs/heads/", "")
-                break
-            if ln.startswith("HEAD "):
-                head_sha = ln.split(" ", 1)[1].strip()
-        if not base_branch:
-            base_branch = head_sha
-    except subprocess.CalledProcessError:
-        pass
-
-    if not base_branch:
-        try:
-            base_branch = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=project_path,
-                capture_output=True,
-                text=True,
-                check=True
-            ).stdout.strip()
-        except subprocess.CalledProcessError:
-            base_branch = "main"
-
-    # Three-dot range against HEAD (= the worktree branch, since git_cwd is the
-    # worktree) shows only the task's changes since it diverged from base.
-    diff_range = f"{base_branch}...HEAD"
-
-    # Get detailed diff with numstat
-    files = []
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--numstat", diff_range],
-            cwd=git_cwd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        for line in result.stdout.strip().split('\n'):
-            if line:
-                parts = line.split('\t')
-                if len(parts) >= 3:
-                    added = parts[0]
-                    deleted = parts[1]
-                    path = parts[2]
-                    # Handle binary files (show as -)
-                    additions = int(added) if added != '-' else 0
-                    deletions = int(deleted) if deleted != '-' else 0
-                    files.append({
-                        "path": path,
-                        "status": "modified",  # Will be refined below
-                        "additions": additions,
-                        "deletions": deletions,
-                    })
-    except subprocess.CalledProcessError:
-        pass
-
-    # Get file statuses (A/M/D/R)
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-status", diff_range],
-            cwd=git_cwd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        status_map = {}
-        for line in result.stdout.strip().split('\n'):
-            if line:
-                parts = line.split('\t')
-                if len(parts) >= 2:
-                    status_code = parts[0][0]  # First char (R100 -> R)
-                    filename = parts[-1]  # Last part is the filename
-                    status = "modified"
-                    if status_code == 'A':
-                        status = "added"
-                    elif status_code == 'D':
-                        status = "deleted"
-                    elif status_code == 'R':
-                        status = "renamed"
-                    elif status_code == 'M':
-                        status = "modified"
-                    status_map[filename] = status
-
-        # Update files with proper status
-        for f in files:
-            if f["path"] in status_map:
-                f["status"] = status_map[f["path"]]
-    except subprocess.CalledProcessError:
-        pass
-
-    # Filter out internal magestic-ai files and agent artifacts (not relevant for user review)
+    # Internal magestic-ai files / agent artifacts that shouldn't appear in review.
     INTERNAL_FILES = {".magestic-ai-security.json", ".magestic-ai-status"}
     INTERNAL_PREFIXES = (".magestic-ai/", "VERIFICATION_REPORT", "LANGUAGE_CHOICE")
-    files = [
-        f for f in files
-        if f["path"] not in INTERNAL_FILES
-        and not any(f["path"].startswith(p) for p in INTERNAL_PREFIXES)
-    ]
 
-    # Fallback: if git diff shows no user-facing files but worktree has changes,
-    # list files that exist in worktree but not in the main project
-    if not files and worktree_path.exists():
-        for f in worktree_path.iterdir():
-            # Skip internal files, directories, and dotfiles
-            if f.name.startswith('.') or f.name.startswith('__') or f.is_dir():
+    def _diff_for_worktree(git_cwd: Path, path_prefix: str = "") -> list[dict]:
+        """File-by-file diff for one worktree vs its repo's checked-out base.
+
+        ``path_prefix`` (e.g. ``"backend/"``) is prepended to displayed paths so
+        a composite task shows which repo each file belongs to; git itself is
+        always run with the real, un-prefixed path inside ``git_cwd``.
+        """
+        # Base = ref checked out in the repo's MAIN worktree (first `worktree list`
+        # entry); falls back to HEAD sha, then "main".
+        base_branch = None
+        wl = _git_out(["worktree", "list", "--porcelain"], git_cwd)
+        if wl:
+            main_block = wl.split("\n\n")[0].splitlines()
+            head_sha = None
+            for ln in main_block:
+                if ln.startswith("branch "):
+                    base_branch = ln.split(" ", 1)[1].strip().replace("refs/heads/", "")
+                    break
+                if ln.startswith("HEAD "):
+                    head_sha = ln.split(" ", 1)[1].strip()
+            base_branch = base_branch or head_sha
+        if not base_branch:
+            base_branch = "main"
+        diff_range = f"{base_branch}...HEAD"
+
+        wt_files: list[dict] = []
+        numstat = _git_out(["diff", "--numstat", diff_range], git_cwd) or ""
+        for line in numstat.split("\n"):
+            if not line:
                 continue
-            if f.name in INTERNAL_FILES or any(f.name.startswith(p) for p in INTERNAL_PREFIXES):
-                continue
-            # Check if this file exists in the main project
-            main_file = project_path / f.name
-            if not main_file.exists():
-                # New file created by the agent
-                try:
-                    content = f.read_text(errors='replace')
-                    line_count = content.count('\n') + (1 if content and not content.endswith('\n') else 0)
-                    # Generate a unified diff for display
-                    diff_lines = [f"--- /dev/null", f"+++ b/{f.name}"]
-                    diff_lines.append(f"@@ -0,0 +1,{line_count} @@")
-                    for line in content.splitlines():
-                        diff_lines.append(f"+{line}")
-                    synthetic_diff = "\n".join(diff_lines) + "\n"
-                except OSError:
-                    line_count = 0
-                    synthetic_diff = ""
-                files.append({
-                    "path": f.name,
-                    "status": "added",
-                    "additions": line_count,
-                    "deletions": 0,
-                    "diff": synthetic_diff,
+            parts = line.split("\t")
+            if len(parts) >= 3:
+                added, deleted, path = parts[0], parts[1], parts[2]
+                wt_files.append({
+                    "path": path,
+                    "status": "modified",
+                    "additions": int(added) if added != "-" else 0,
+                    "deletions": int(deleted) if deleted != "-" else 0,
                 })
 
-    # Get actual diff content for each file
-    for f in files:
-        try:
-            result = subprocess.run(
-                ["git", "diff", diff_range, "--", f["path"]],
-                cwd=git_cwd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            # Don't clobber a synthetic diff (e.g. for a new untracked file in
-            # the fallback path) with an empty result when git produced nothing.
-            if result.stdout or not f.get("diff"):
-                f["diff"] = result.stdout
-        except subprocess.CalledProcessError:
-            f.setdefault("diff", "")
+        namestatus = _git_out(["diff", "--name-status", diff_range], git_cwd) or ""
+        status_map: dict[str, str] = {}
+        for line in namestatus.split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                code = parts[0][0]
+                status_map[parts[-1]] = {
+                    "A": "added", "D": "deleted", "R": "renamed",
+                }.get(code, "modified")
+        for f in wt_files:
+            if f["path"] in status_map:
+                f["status"] = status_map[f["path"]]
 
-    # Generate summary
+        wt_files = [
+            f for f in wt_files
+            if f["path"] not in INTERNAL_FILES
+            and not any(f["path"].startswith(p) for p in INTERNAL_PREFIXES)
+        ]
+
+        # Per-file diff content (git run with the real path inside git_cwd).
+        for f in wt_files:
+            content = _git_out(["diff", diff_range, "--", f["path"]], git_cwd)
+            f["diff"] = content or ""
+            if path_prefix:
+                f["path"] = path_prefix + f["path"]
+        return wt_files
+
+    # Resolve the task's repos (one, or several for a composite task) and gather
+    # diffs from each. Prefix paths with the repo name only when multi-repo so
+    # single-repo review UIs are unchanged.
+    entries = resolve_task_worktrees(project_path, spec_id)
+    files: list[dict] = []
+    if entries:
+        multi = len(entries) > 1
+        for entry in entries:
+            prefix = f"{entry['name']}/" if multi else ""
+            files.extend(_diff_for_worktree(entry["worktree"], prefix))
+    else:
+        # Worktree dir exists but no git worktree resolved — fall back to the
+        # classic single-worktree behavior against the task dir directly.
+        files = _diff_for_worktree(worktree_path)
+
     total_additions = sum(f["additions"] for f in files)
     total_deletions = sum(f["deletions"] for f in files)
     summary = f"{len(files)} files changed, +{total_additions} -{total_deletions}"
@@ -3998,6 +4586,7 @@ async def get_worktree_diff(task_id: str):
         "data": {
             "files": files,
             "summary": summary,
+            "multiRepo": len(entries) > 1,
         }
     }
 

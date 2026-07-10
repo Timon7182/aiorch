@@ -95,5 +95,17 @@
     "cancel": "Cancelar",
     "remove": "Remover",
     "error": "Falha ao remover projeto"
+  },
+  "clone": {
+    "branchDefault": "Branch padrão",
+    "branchPlaceholder": "Branch (opcional)",
+    "branchHint": "Branch para fazer checkout. Deixe vazio para o branch padrão do repositório.",
+    "branchListFailed": "Não foi possível listar os branches — digite um nome de branch se precisar de um específico."
+  },
+  "addDatabase": {
+    "scope": {
+      "label": "Limitar aos projetos",
+      "hint": "Deixe vazio para tornar esta conexão disponível em todos os projetos."
+    }
   }
 }

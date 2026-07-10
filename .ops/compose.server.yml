@@ -15,8 +15,8 @@ services:
     ports:
       - "3101:3101"
     volumes:
-      - /home/saya/magestic-data:/home/magesticai/.magestic-ai
-      - /home/saya/projects:/home/magesticai/projects:rw
+      - /home/ai-dev/magestic-data:/home/magesticai/.magestic-ai
+      - /home/ai-dev/projects:/home/magesticai/projects:rw
       # Persist the Claude config (credentials.json + session state) across
       # container restarts. Without this, every restart wipes the refreshed
       # OAuth tokens — and Anthropic rotates refresh tokens on each use,
@@ -25,10 +25,16 @@ services:
       # (Docker creates the volume with the right ownership for the
       # container user on first start).
       - magesticai-claude-config:/home/magesticai/.claude
-      # Seed file (read-only) for the very first start when the named
-      # volume above is empty. UID 1000 on host → only readable by root in
-      # the container, but the env-var bootstrap covers the common case.
-      - /home/saya/.claude/.credentials.json:/home/magesticai/.claude-seed.json:ro
+      # Seed (read-only) for first start / re-adoption when the container's
+      # own credentials go stale. Mount the DIRECTORY, not the file: the
+      # Claude CLI on the host replaces .credentials.json via atomic rename,
+      # and a single-file bind mount stays pinned to the old inode — the
+      # container keeps seeing a dead, rotated-out refresh token until the
+      # next force-recreate (the recurring "401 Invalid authentication
+      # credentials"). A directory mount always resolves the current file,
+      # so claude_token_service self-heals from a host re-login within one
+      # 30-min refresh cycle, no container recreate needed.
+      - /home/ai-dev/magestic-claude-seed:/home/magesticai/.claude-seed:ro
     cap_add:
       - NET_ADMIN
     # Loaded by ABSOLUTE path so secrets reach the container on ANY deploy
@@ -36,16 +42,16 @@ services:
     # sourced /home/saya/.aiorch-secrets (compose's auto-loaded `.env` is
     # cwd-dependent and kept getting missed, which blanked GEMINI_API_KEY and
     # broke Hermes). This file is `KEY=VAL` (no `export`); keep it in sync via
-    #   sed 's/^export //' /home/saya/.aiorch-secrets > /home/saya/.aiorch.env
+    #   sed 's/^export //' /home/saya/.aiorch-secrets > /home/ai-dev/.aiorch.env
     # NOTE: vars also listed under `environment:` below are overridden by it,
     # so only keys absent there (e.g. GEMINI_API_KEY) are sourced from here.
     env_file:
-      - /home/saya/.aiorch.env
+      - /home/ai-dev/.aiorch.env
     environment:
       - APP_DEBUG=false
       - CONTAINER_LAN_FIREWALL=false
       - CONTAINER_GATEWAY=192.168.88.1
-      - APP_CORS_ORIGINS=["http://192.168.88.55:3101","http://192.168.88.220:3101","http://localhost:3101"]
+      - APP_CORS_ORIGINS=["http://192.168.88.39:3101","http://192.168.88.220:3101","http://localhost:3101"]
       # GEMINI_API_KEY intentionally NOT listed here — it comes from the
       # absolute-path env_file above so it survives deploys that don't source
       # secrets. Listing it here as ${GEMINI_API_KEY:-} would override that

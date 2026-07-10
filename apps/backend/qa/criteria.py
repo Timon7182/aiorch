@@ -51,6 +51,23 @@ def get_qa_signoff_status(spec_dir: Path) -> dict | None:
     return plan.get("qa_signoff")
 
 
+def is_browser_verified(spec_dir: Path) -> bool:
+    """Whether the QA reviewer verified the result in a real browser.
+
+    Reads the optional ``browser_verified`` flag on the ``qa_signoff`` object
+    (set by the QA reviewer on bug-reproduction tasks). Absent on non-bug tasks
+    and older plans -> defaults to False (backward compatible).
+
+    NOTE: this flag is informational only — it is NOT enforced as an approval
+    gate (a bug task can be approved without it). Deliberate for now; revisit
+    if browser verification should become mandatory for bug tasks.
+    """
+    status = get_qa_signoff_status(spec_dir)
+    if not status:
+        return False
+    return bool(status.get("browser_verified", False))
+
+
 def is_qa_approved(spec_dir: Path) -> bool:
     """Check if QA has approved the build."""
     status = get_qa_signoff_status(spec_dir)

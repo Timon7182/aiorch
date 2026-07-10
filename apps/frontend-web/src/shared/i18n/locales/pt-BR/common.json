@@ -250,6 +250,16 @@
         "files": "Arquivos",
         "filesDesc": "Read / Grep / Glob simples",
         "cgcUnavailable": "Não indexado para esta branch"
+      },
+      "logs": {
+        "label": "Logs",
+        "enable": "Ativar acesso aos logs",
+        "desc": "Ler logs de aplicação, servidor e contêiner (somente leitura)"
+      },
+      "uiCheck": {
+        "label": "Verificação de UI",
+        "enable": "Ativar verificações no navegador",
+        "desc": "Verificar o funcionamento do frontend em um navegador headless (capturas, console, rede)"
       }
     },
     "createTask": {
@@ -293,6 +303,17 @@
     "done": "Concluído",
     "failedLabel": "Falhou",
     "starting": "Iniciando..."
+  },
+  "documentation": {
+    "edit": "Editar",
+    "save": "Salvar",
+    "saving": "Salvando...",
+    "cancel": "Cancelar",
+    "rebuilding": "Reconstruindo o site...",
+    "saveFailed": "Falha ao salvar o arquivo",
+    "autoBlockWarning": "Este arquivo contém blocos gerados automaticamente. As edições dentro dos marcadores <!-- docgen:auto --> serão sobrescritas na próxima vez que a documentação for regenerada.",
+    "unsavedConfirm": "Você tem alterações não salvas. Descartá-las?",
+    "template": "Modelo"
   },
   "lastChecked": "Última verificação"
 }

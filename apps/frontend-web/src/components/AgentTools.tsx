@@ -31,7 +31,8 @@ import {
   Loader2,
   RefreshCw,
   AlertTriangle,
-  Lock
+  Lock,
+  Network
 } from 'lucide-react';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { ScrollArea } from './ui/scroll-area';
@@ -645,7 +646,7 @@ export function AgentTools() {
   // Update MCP server toggle
   const updateMcpServer = useCallback(async (
     key: keyof NonNullable<ProjectEnvConfig['mcpServers']>,
-    value: boolean
+    value: boolean | string
   ) => {
     if (!selectedProjectId || !envConfig) return;
 
@@ -1093,6 +1094,36 @@ export function AgentTools() {
                     onCheckedChange={(checked) => updateMcpServer('graphitiEnabled', checked)}
                     disabled={!envConfig.graphitiProviderConfig}
                   />
+                </div>
+
+                {/* Code Graph Provider (exclusive: CodeGraphContext or graphify) */}
+                <div className="py-2 border-b border-border">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Network className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <span className="text-sm font-medium">{t('settings:mcp.codeGraph.name')}</span>
+                      <p className="text-xs text-muted-foreground">{t('settings:mcp.codeGraph.description')}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 pl-7">
+                    {([
+                      { value: 'codegraph', label: t('settings:mcp.codeGraph.codegraph') },
+                      { value: 'graphify', label: t('settings:mcp.codeGraph.graphify') },
+                    ] as const).map((opt) => {
+                      const active = (mcpServers.codeGraphProvider ?? 'codegraph') === opt.value;
+                      return (
+                        <Button
+                          key={opt.value}
+                          type="button"
+                          variant={active ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => updateMcpServer('codeGraphProvider', opt.value)}
+                        >
+                          {opt.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* Browser Automation Section */}

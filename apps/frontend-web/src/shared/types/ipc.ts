@@ -45,7 +45,9 @@ import type {
   TaskRecoveryOptions,
   TaskMetadata,
   TaskLogs,
-  TaskLogStreamChunk
+  TaskLogStreamChunk,
+  ReproductionReport,
+  UiCheckReport
 } from './task';
 import type {
   TerminalCreateOptions,
@@ -140,8 +142,12 @@ export type PreviewStatus =
   | 'promoting'
   | 'promoted';
 
+export type PreviewStrategy = 'docker-remote' | 'dev-server' | 'compose-local';
+
 export interface PreviewState {
   status: PreviewStatus;
+  /** Which preview strategy produced this state. Absent = docker-remote (legacy). */
+  strategy?: PreviewStrategy;
   lane?: 'A' | 'B' | string;
   branch?: string;
   ref?: string;
@@ -153,12 +159,53 @@ export interface PreviewState {
   error?: string | null;
   startedAt?: number;
   updatedAt?: number;
+  /** Epoch seconds when the reaper will tear this preview down (extendable). */
+  expiresAt?: number | null;
+}
+
+export type JenkinsStatus =
+  | 'none'
+  | 'bumping'
+  | 'publishing'
+  | 'pushing'
+  | 'triggering'
+  | 'queued'
+  | 'building'
+  | 'success'
+  | 'failed';
+
+export interface JenkinsState {
+  status: JenkinsStatus;
+  /** Whether this project has a jenkins section in deploy.config.json (hides the panel otherwise). */
+  enabled?: boolean;
+  branch?: string;
+  /** Library version counter published during this deploy (when the library step ran). */
+  libVersion?: number | null;
+  buildUrl?: string | null;
+  buildNumber?: number | null;
+  result?: string | null;
+  error?: string | null;
+  startedAt?: number;
+  updatedAt?: number;
 }
 
 export interface API {
   // Project operations
   addProject: (projectPath: string) => Promise<IPCResult<Project>>;
-  cloneProject: (url: string, name?: string, targetDir?: string) => Promise<IPCResult<Project>>;
+  cloneProject: (
+    url: string,
+    name?: string,
+    targetDir?: string,
+    branch?: string,
+  ) => Promise<IPCResult<Project>>;
+  cloneMultiProject: (
+    name: string,
+    repos: { url: string; name?: string; branch?: string }[],
+    targetDir?: string,
+  ) => Promise<IPCResult<Project>>;
+  getRemoteBranches: (
+    url: string,
+  ) => Promise<IPCResult<{ branches: { name: string }[]; error?: string }>>;
   createProjectFromPrompt: (
     prompt: string,
     name?: string,
@@ -207,13 +254,21 @@ export interface API {
     targetRepo?: string;
   }) => Promise<IPCResult<{ prUrl: string; prNumber: number | null; branch: string; baseBranch: string }>>;
   // Preview deploy ("Run on server")
-  deployPreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
+  deployPreview: (taskId: string, options?: { lane?: string; strategy?: PreviewStrategy }) => Promise<IPCResult<PreviewState>>;
   getPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
   stopPreview: (taskId: string) => Promise<IPCResult<PreviewState>>;
+  extendPreview: (taskId: string, options?: { hours?: number }) => Promise<IPCResult<PreviewState>>;
   promotePreview: (taskId: string, options?: { lane?: string }) => Promise<IPCResult<PreviewState>>;
+  onPreviewStatus: (callback: (data: { taskId: string; projectId?: string | null; status: PreviewStatus; strategy: PreviewStrategy; url?: string | null; error?: string | null }) => void) => () => void;
+  onPreviewLog: (callback: (data: { taskId: string; line: string }) => void) => () => void;
+  // Jenkins deploy ("Развернуть на Jenkins")
+  deployJenkins: (taskId: string) => Promise<IPCResult<JenkinsState>>;
+  getJenkins: (taskId: string) => Promise<IPCResult<JenkinsState>>;
+  onJenkinsStatus: (callback: (data: { taskId: string; projectId?: string | null; status: JenkinsStatus; buildUrl?: string | null; error?: string | null }) => void) => () => void;
+  onJenkinsLog: (callback: (data: { taskId: string; line: string }) => void) => () => void;
   // Databases (chat DB connection)
   listDatabases: () => Promise<IPCResult<import('./insights').DatabaseProfileSummary[]>>;
-  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string }) => Promise<IPCResult<import('./insights').DatabaseProfileSummary>>;
+  createDatabase: (profile: { name: string; kind: string; env?: string; host?: string; port?: number; database: string; username?: string; password?: string; projectIds?: string[] }) => Promise<IPCResult<import('./insights').DatabaseProfileSummary>>;
   deleteDatabase: (dbId: string) => Promise<IPCResult<{ status: string }>>;
   getForkInfo: (projectPath: string) => Promise<IPCResult<{
     isFork: boolean;
@@ -546,6 +601,7 @@ export interface API {
   detectInsightsProviders: (projectId: string) => Promise<IPCResult<InsightsProviderInfo[]>>;
   sendInsightsMessage: (projectId: string, message: string, attachments?: ChatAttachment[], modelConfig?: InsightsModelConfig, branch?: string, repo?: string) => void;
   getInsightsCodeSearchAvailability: (projectId: string, branch?: string, repo?: string) => Promise<IPCResult<CodeSearchAvailability>>;
+  refreshInsightsCodegraph: (projectId: string, repo?: string) => Promise<IPCResult<{ state?: string; error?: string }>>;
   stopInsightsMessage: (projectId: string) => Promise<IPCResult>;
   clearInsightsSession: (projectId: string) => Promise<IPCResult>;
   createTaskFromInsights: (
@@ -578,6 +634,8 @@ export interface API {
 
   // Task logs operations
   getTaskLogs: (projectId: string, specId: string) => Promise<IPCResult<TaskLogs | null>>;
+  getReproductionReport: (projectId: string, specId: string) => Promise<IPCResult<ReproductionReport | null>>;
+  getUiCheckReport: (projectId: string, specId: string) => Promise<IPCResult<UiCheckReport | null>>;
   watchTaskLogs: (projectId: string, specId: string) => Promise<IPCResult>;
   unwatchTaskLogs: (projectId: string, specId: string) => Promise<IPCResult>;
 
