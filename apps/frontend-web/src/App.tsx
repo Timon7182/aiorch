@@ -421,8 +421,6 @@ function AuthenticatedApp() {
                       <WelcomeScreen
                         projects={projects}
                         activeProject={selectedProject}
-                        onNewProject={handleAddProject}
-                        onOpenProject={handleAddProject}
                         onSelectProject={(projectId) => {
                           openProjectTab(projectId);
                           navigate(`/p/${projectId}/overview`);
@@ -486,8 +484,6 @@ function AuthenticatedApp() {
                   <WelcomeScreen
                     projects={projects}
                     activeProject={dashboardProject}
-                    onNewProject={handleAddProject}
-                    onOpenProject={handleAddProject}
                     onSelectProject={(projectId) => {
                       openProjectTab(projectId);
                       navigate(`/p/${projectId}/kanban`);
