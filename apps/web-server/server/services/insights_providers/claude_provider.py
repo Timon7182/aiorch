@@ -655,6 +655,7 @@ class ClaudeProvider(ProviderStrategy):
         attachment_dir: Path | None = None,
         resume_session_id: str | None = None,
         session_capture: dict | None = None,
+        session_id: str | None = None,
     ) -> str:
         # Run the CLI in the branch worktree when one was selected; usage and
         # token resolution below still key off the main project_path.
@@ -847,7 +848,7 @@ class ClaudeProvider(ProviderStrategy):
 
         try:
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "text",
                 "content": "",
             })
@@ -914,7 +915,7 @@ class ClaudeProvider(ProviderStrategy):
                                         "timestamp": datetime.now().isoformat(),
                                     })
                                     await broadcast_event("insights:chunk", {
-                                        "projectId": project_id,
+                                        "projectId": project_id, "sessionId": session_id,
                                         "type": "tool_start",
                                         "tool": {"name": tool_name, "input": ""},
                                     })
@@ -926,7 +927,7 @@ class ClaudeProvider(ProviderStrategy):
                                     if text:
                                         accumulated_content += text
                                         await broadcast_event("insights:chunk", {
-                                            "projectId": project_id,
+                                            "projectId": project_id, "sessionId": session_id,
                                             "type": "text",
                                             "content": text,
                                         })
@@ -934,7 +935,7 @@ class ClaudeProvider(ProviderStrategy):
                                     thought = delta.get("thinking", "")
                                     if thought:
                                         await broadcast_event("insights:chunk", {
-                                            "projectId": project_id,
+                                            "projectId": project_id, "sessionId": session_id,
                                             "type": "thinking",
                                             "content": thought,
                                         })
@@ -954,7 +955,7 @@ class ClaudeProvider(ProviderStrategy):
                                     if tools_used:
                                         tools_used[-1]["input"] = input_str
                                     await broadcast_event("insights:chunk", {
-                                        "projectId": project_id,
+                                        "projectId": project_id, "sessionId": session_id,
                                         "type": "tool_input",
                                         "tool": {"name": buf["name"], "input": input_str},
                                     })
@@ -973,7 +974,7 @@ class ClaudeProvider(ProviderStrategy):
                                     tools_used[-1]["result"] = result_text
                                     tools_used[-1]["isError"] = tool_is_error
                                 await broadcast_event("insights:chunk", {
-                                    "projectId": project_id,
+                                    "projectId": project_id, "sessionId": session_id,
                                     "type": "tool_end",
                                     "result": result_text,
                                     "isError": tool_is_error,
@@ -997,7 +998,7 @@ class ClaudeProvider(ProviderStrategy):
                                         text = block.get("text", "")
                                         accumulated_content += text
                                         await broadcast_event("insights:chunk", {
-                                            "projectId": project_id,
+                                            "projectId": project_id, "sessionId": session_id,
                                             "type": "text",
                                             "content": text,
                                         })
@@ -1005,7 +1006,7 @@ class ClaudeProvider(ProviderStrategy):
                                         thought = block.get("thinking", "")
                                         if thought:
                                             await broadcast_event("insights:chunk", {
-                                                "projectId": project_id,
+                                                "projectId": project_id, "sessionId": session_id,
                                                 "type": "thinking",
                                                 "content": thought,
                                             })
@@ -1024,14 +1025,14 @@ class ClaudeProvider(ProviderStrategy):
                                             "timestamp": datetime.now().isoformat(),
                                         })
                                         await broadcast_event("insights:chunk", {
-                                            "projectId": project_id,
+                                            "projectId": project_id, "sessionId": session_id,
                                             "type": "tool_start",
                                             "tool": {"name": tool_name, "input": str(tool_input)[:200]},
                                         })
                             elif isinstance(content, str):
                                 accumulated_content += content
                                 await broadcast_event("insights:chunk", {
-                                    "projectId": project_id,
+                                    "projectId": project_id, "sessionId": session_id,
                                     "type": "text",
                                     "content": content,
                                 })
@@ -1052,7 +1053,7 @@ class ClaudeProvider(ProviderStrategy):
                                 if result and result != accumulated_content:
                                     accumulated_content = result
                                     await broadcast_event("insights:chunk", {
-                                        "projectId": project_id,
+                                        "projectId": project_id, "sessionId": session_id,
                                         "type": "text",
                                         "content": result,
                                     })
@@ -1088,7 +1089,7 @@ class ClaudeProvider(ProviderStrategy):
 
                 accumulated_content += line + "\n"
                 await broadcast_event("insights:chunk", {
-                    "projectId": project_id,
+                    "projectId": project_id, "sessionId": session_id,
                     "type": "text",
                     "content": line + "\n",
                 })
@@ -1124,11 +1125,12 @@ class ClaudeProvider(ProviderStrategy):
                         attachment_dir=attachment_dir,
                         resume_session_id=None,
                         session_capture=session_capture,
+                        session_id=session_id,
                     )
                 error_msg = stderr_text or f"Claude CLI exited with code {proc.returncode}"
                 logger.error(f"[ClaudeProvider] CLI failed: {error_msg}")
                 await broadcast_event("insights:chunk", {
-                    "projectId": project_id,
+                    "projectId": project_id, "sessionId": session_id,
                     "type": "error",
                     "error": error_msg,
                 })
@@ -1149,7 +1151,7 @@ class ClaudeProvider(ProviderStrategy):
             )
 
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "done",
                 "metrics": {
                     "outputTokens": estimated_tokens,
@@ -1164,7 +1166,7 @@ class ClaudeProvider(ProviderStrategy):
         except Exception as e:
             logger.error(f"[ClaudeProvider] Error: {e}", exc_info=True)
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "error",
                 "error": str(e),
             })

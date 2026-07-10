@@ -14,6 +14,7 @@ import type {
   Task
 } from '../shared/types';
 import { DEFAULT_FEATURE_MODELS, DEFAULT_FEATURE_THINKING } from '../shared/constants/models';
+import { onWsReconnected } from '../lib/api-adapter';
 
 interface ToolUsage {
   name: string;
@@ -244,6 +245,106 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
 
 // Helper functions
 
+// ---------------------------------------------------------------------------
+// Stream watchdog + reconnect resync
+//
+// Server events are fire-and-forget broadcasts: a websocket drop mid-turn can
+// swallow the terminal `done` chunk, leaving the UI on "thinking" forever
+// while the backend finished and persisted the answer. Two safety nets:
+//  - a watchdog: while a turn looks busy, if no chunk arrives for WATCHDOG_MS
+//    we refetch the session over REST and reconcile with the server's
+//    running-flag;
+//  - a resync on `ws:reconnected` (emitted by the api-adapter when the events
+//    channel comes back after a drop).
+// ---------------------------------------------------------------------------
+
+let currentProjectId: string | null = null;
+let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+const WATCHDOG_MS = 60_000;
+
+function clearWatchdog(): void {
+  if (watchdogTimer) {
+    clearTimeout(watchdogTimer);
+    watchdogTimer = null;
+  }
+}
+
+function armWatchdog(): void {
+  clearWatchdog();
+  watchdogTimer = setTimeout(() => {
+    watchdogTimer = null;
+    void resyncFromServer('watchdog');
+  }, WATCHDOG_MS);
+}
+
+/** True while the UI believes a turn is in flight. */
+function isBusy(): boolean {
+  const phase = useInsightsStore.getState().status.phase;
+  return phase === 'thinking' || phase === 'streaming';
+}
+
+/**
+ * Refetch the current session over REST and reconcile the streaming state
+ * with the server: if the turn is still running keep waiting; if it finished
+ * (or died) show the persisted messages and drop the stuck spinner.
+ */
+async function resyncFromServer(reason: string): Promise<void> {
+  const projectId = currentProjectId;
+  if (!projectId) return;
+  const wasBusy = isBusy();
+
+  let fresh: InsightsSession | null = null;
+  try {
+    const result = await window.API.getInsightsSession(projectId);
+    if (result.success && result.data) fresh = result.data;
+  } catch {
+    // Network hiccup — if we're still busy, keep the watchdog alive to retry.
+    if (wasBusy) armWatchdog();
+    return;
+  }
+  if (!fresh) {
+    if (wasBusy) armWatchdog();
+    return;
+  }
+
+  const store = useInsightsStore.getState();
+  const stillRunning = fresh.running === true && (!fresh.runningSessionId || fresh.runningSessionId === fresh.id);
+
+  if (wasBusy && stillRunning) {
+    // Turn genuinely in flight — leave the optimistic streaming state alone
+    // and keep watching.
+    armWatchdog();
+    return;
+  }
+
+  console.log(`[Insights] resync (${reason}): running=${stillRunning}, busy=${wasBusy}`);
+  store.setSession(fresh);
+  if (wasBusy && !stillRunning) {
+    // The turn ended while we weren't listening — the refetched session holds
+    // the persisted answer; clear the stranded streaming state.
+    store.clearStreamingContent();
+    store.clearStreamingThinking();
+    store.clearToolsUsed();
+    store.setCurrentTool(null);
+    store.setStatus({ phase: 'idle', message: '' });
+    clearWatchdog();
+  } else if (!wasBusy && stillRunning && fresh.runningSessionId === fresh.id) {
+    // Opposite recovery: a turn is running (e.g. started before a reload) but
+    // the UI shows nothing — restore the indicator.
+    store.setStatus({ phase: 'thinking', message: 'Processing your message...' });
+    armWatchdog();
+  }
+}
+
+/** Apply the server's running-flag to the indicator after a session (re)load. */
+function applyRunningFlag(session: InsightsSession | null): void {
+  if (!session) return;
+  if (session.running === true && session.runningSessionId === session.id) {
+    useInsightsStore.getState().setStatus({ phase: 'thinking', message: 'Processing your message...' });
+    armWatchdog();
+  }
+}
+
 export async function loadInsightsSessions(projectId: string): Promise<void> {
   const store = useInsightsStore.getState();
   store.setLoadingSessions(true);
@@ -279,9 +380,13 @@ export async function loadInsightsProviders(projectId: string): Promise<void> {
 }
 
 export async function loadInsightsSession(projectId: string): Promise<void> {
+  currentProjectId = projectId;
   const result = await window.API.getInsightsSession(projectId);
   if (result.success && result.data) {
     useInsightsStore.getState().setSession(result.data);
+    // A turn may be in flight for this session (page reloaded / view switched
+    // mid-stream) — restore the thinking indicator so the user sees it.
+    applyRunningFlag(result.data);
   } else {
     useInsightsStore.getState().setSession(null);
   }
@@ -290,6 +395,7 @@ export async function loadInsightsSession(projectId: string): Promise<void> {
 }
 
 export function sendMessage(projectId: string, message: string, attachments?: ChatAttachment[], modelConfig?: InsightsModelConfig, branch?: string, repo?: string): void {
+  currentProjectId = projectId;
   const store = useInsightsStore.getState();
   const session = store.session;
 
@@ -328,6 +434,9 @@ export function sendMessage(projectId: string, message: string, attachments?: Ch
   // Send to main process (branch grounds the chat in a read-only worktree;
   // repo scopes a multi-repo project's grounding to a chosen child repo)
   window.API.sendInsightsMessage(projectId, message, attachments, configWithProvider as InsightsModelConfig, branch, repo);
+  // Safety net: if event delivery breaks mid-turn, resync from the server
+  // instead of spinning forever.
+  armWatchdog();
 }
 
 export async function stopMessage(projectId: string): Promise<void> {
@@ -341,6 +450,7 @@ export async function stopMessage(projectId: string): Promise<void> {
   store.setCurrentTool(null);
   store.finalizeStreamingMessage();
   store.setStatus({ phase: 'idle', message: '' });
+  clearWatchdog();
 }
 
 export async function clearSession(projectId: string): Promise<void> {
@@ -362,6 +472,7 @@ export async function newSession(projectId: string): Promise<void> {
 }
 
 export async function switchSession(projectId: string, sessionId: string): Promise<void> {
+  currentProjectId = projectId;
   const result = await window.API.switchInsightsSession(projectId, sessionId);
   if (result.success && result.data) {
     useInsightsStore.getState().setSession(result.data);
@@ -371,6 +482,10 @@ export async function switchSession(projectId: string, sessionId: string): Promi
     useInsightsStore.getState().clearToolsUsed();
     useInsightsStore.getState().setCurrentTool(null);
     useInsightsStore.getState().setStatus({ phase: 'idle', message: '' });
+    clearWatchdog();
+    // If a turn is in flight for the session we just switched to, restore the
+    // thinking indicator instead of showing a silent idle chat.
+    applyRunningFlag(result.data);
   }
 }
 
@@ -460,6 +575,26 @@ export function setupInsightsListeners(): () => void {
     (_projectId, chunk: InsightsStreamChunk) => {
       // Ignore events from the generate-task sentinel to avoid polluting the chat
       if (_projectId.startsWith('__gen_task_')) return;
+      // Drop chunks that belong to another session (e.g. a turn finishing
+      // after the user switched chats). Local placeholder sessions (created
+      // optimistically as `session-...` before the backend id is known) accept
+      // everything; backend ids are UUIDs.
+      const currentSession = store().session;
+      if (
+        chunk.sessionId &&
+        currentSession?.id &&
+        !currentSession.id.startsWith('session-') &&
+        chunk.sessionId !== currentSession.id
+      ) {
+        return;
+      }
+      // Any chunk of an in-flight turn feeds the watchdog; terminal chunks
+      // disarm it below.
+      if (chunk.type === 'done' || chunk.type === 'error') {
+        clearWatchdog();
+      } else {
+        armWatchdog();
+      }
       switch (chunk.type) {
         case 'text':
           if (chunk.content) {
@@ -565,4 +700,20 @@ export function setupInsightsListeners(): () => void {
     unsubStatus();
     unsubError();
   };
+}
+
+// Registered once at app startup (main.tsx). Global — NOT tied to the
+// Insights component's mount — so streaming keeps accumulating in the store
+// while the user is on another view, and reconnect resyncs always fire.
+let insightsListenersInitialized = false;
+
+export function initInsightsListeners(): void {
+  if (insightsListenersInitialized) return;
+  insightsListenersInitialized = true;
+  setupInsightsListeners();
+  // The events websocket came back after a drop: anything broadcast in the
+  // gap (possibly the terminal `done`) is gone — reconcile with the server.
+  onWsReconnected(() => {
+    void resyncFromServer('ws:reconnected');
+  });
 }

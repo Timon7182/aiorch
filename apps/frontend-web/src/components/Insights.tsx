@@ -46,8 +46,7 @@ import {
   renameSession,
   updateModelConfig,
   createTaskFromSuggestion,
-  generateTaskFromChat,
-  setupInsightsListeners
+  generateTaskFromChat
 } from '../stores/insights-store';
 import { loadTasks } from '../stores/task-store';
 import { useProjectStore, ALL_REPOS } from '../stores/project-store';
@@ -240,12 +239,11 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load session and set up listeners on mount
+  // Load session on mount. Stream listeners are global (initInsightsListeners
+  // in main.tsx) so chunks arriving while this view is unmounted aren't lost.
   useEffect(() => {
     didApplyUrlSession.current = false;
     loadInsightsSession(projectId);
-    const cleanup = setupInsightsListeners();
-    return cleanup;
   }, [projectId]);
 
   // Apply a ?session= deep link once the session list has loaded.

@@ -105,18 +105,30 @@ def _unregister_client(ws: WebSocket) -> None:
 
 
 async def broadcast_event(event_type: str, payload: dict):
-    """Broadcast an event to all connected clients (legacy behavior)."""
+    """Broadcast an event to all connected clients (legacy behavior).
+
+    Sends run concurrently with a per-client timeout. The old sequential
+    ``await ws.send_text`` had head-of-line blocking: one slow/half-open
+    client (full TCP send buffer) stalled the whole broadcast — and since
+    providers await this inline in their streaming loops, it stalled the
+    stream for every client too.
+    """
     message = json.dumps({"type": event_type, "payload": payload})
-    disconnected: list[WebSocket] = []
+    targets = list(active_connections)
+    if not targets:
+        return
 
-    for ws in list(active_connections):
+    async def _send_one(ws: WebSocket) -> WebSocket | None:
         try:
-            await ws.send_text(message)
+            await asyncio.wait_for(ws.send_text(message), timeout=5)
+            return None
         except Exception:
-            disconnected.append(ws)
+            return ws
 
-    for ws in disconnected:
-        _unregister_client(ws)
+    results = await asyncio.gather(*(_send_one(ws) for ws in targets))
+    for ws in results:
+        if ws is not None:
+            _unregister_client(ws)
 
 
 async def send_to_user(user_id: str, event_type: str, payload: dict):

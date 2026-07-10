@@ -6,7 +6,7 @@
  */
 
 import { get, post, put, del, patch } from './api-client';
-import { wsManager, terminalWs, taskLogsWs, taskProgressWs } from './websocket';
+import { wsManager, terminalWs } from './websocket';
 import { createLogger } from './logger';
 import type { API, TabState } from '../shared/types';
 
@@ -136,6 +136,14 @@ function cleanupTerminalWebSocket(terminalId: string): void {
 
 function emitEvent<T>(event: string, data: T): void {
   eventCallbacks.get(event)?.forEach((cb) => cb(data));
+}
+
+/**
+ * Subscribe to the internal "events websocket reconnected" signal. Stores use
+ * this to resync state that may have missed fire-and-forget broadcasts.
+ */
+export function onWsReconnected(callback: () => void): () => void {
+  return registerCallback('ws:reconnected', callback);
 }
 
 // GitHub API subset (nested object in API)
@@ -865,6 +873,10 @@ export const webAPI: API & { _isWebMode: boolean } = {
   },
   onInsightsStatus: (callback) => {
     return registerCallback('insights:status', (payload: { projectId: string; status: string }) => {
+      // Only forward known phases — an unrecognized status string written
+      // straight into `phase` used to hide the thinking indicator entirely.
+      const known = ['idle', 'thinking', 'streaming', 'complete', 'error'];
+      if (!known.includes(payload.status)) return;
       callback(payload.projectId, { phase: payload.status, message: '' } as never);
     });
   },
@@ -993,6 +1005,20 @@ export function initWebAPI(): void {
  */
 function setupEventBroadcast(): void {
   log.debug('Setting up WebSocket event broadcast');
+
+  // Notify stores when the events channel comes back after a drop so they can
+  // resync state (server events are fire-and-forget: anything broadcast while
+  // we were disconnected is gone — e.g. an insights turn's terminal `done`).
+  let firstConnect = true;
+  wsManager.onConnect('/ws/events', () => {
+    if (firstConnect) {
+      firstConnect = false;
+      return;
+    }
+    log.info('[WS Broadcast] events channel reconnected — emitting ws:reconnected');
+    emitEvent('ws:reconnected', {});
+  });
+
   // Subscribe to global events channel
   wsManager.subscribe('/ws/events', (data: unknown) => {
     const event = data as { type: string; payload: unknown };

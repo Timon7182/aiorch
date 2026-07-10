@@ -59,6 +59,8 @@ class GeminiProvider(ProviderStrategy):
         model_config: dict | None,
         conversation_history: list[dict] | None,
         working_dir: Path | None = None,
+        attachment_dir: Path | None = None,  # unused — attachments are inlined upstream
+        session_id: str | None = None,
     ) -> str:
         run_dir = working_dir or project_path
         cmd = ["bash", "-l", "-c"]
@@ -87,7 +89,7 @@ class GeminiProvider(ProviderStrategy):
 
         try:
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "text",
                 "content": "",
             })
@@ -109,7 +111,7 @@ class GeminiProvider(ProviderStrategy):
                     continue
                 accumulated += line + "\n"
                 await broadcast_event("insights:chunk", {
-                    "projectId": project_id,
+                    "projectId": project_id, "sessionId": session_id,
                     "type": "text",
                     "content": line + "\n",
                 })
@@ -121,7 +123,7 @@ class GeminiProvider(ProviderStrategy):
                 stderr_text = stderr_output.decode("utf-8", errors="replace").strip() if stderr_output else ""
                 error_msg = stderr_text or f"Gemini CLI exited with code {proc.returncode}"
                 await broadcast_event("insights:chunk", {
-                    "projectId": project_id,
+                    "projectId": project_id, "sessionId": session_id,
                     "type": "error",
                     "error": error_msg,
                 })
@@ -132,7 +134,7 @@ class GeminiProvider(ProviderStrategy):
             tokens_per_sec = round(estimated_tokens / elapsed, 1) if elapsed > 0 else 0
 
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "done",
                 "metrics": {
                     "outputTokens": estimated_tokens,
@@ -147,7 +149,7 @@ class GeminiProvider(ProviderStrategy):
         except Exception as e:
             logger.error(f"[GeminiProvider] Error: {e}", exc_info=True)
             await broadcast_event("insights:chunk", {
-                "projectId": project_id,
+                "projectId": project_id, "sessionId": session_id,
                 "type": "error",
                 "error": str(e),
             })

@@ -124,6 +124,10 @@ export interface InsightsSession {
   modelConfig?: InsightsModelConfig; // Per-session model configuration
   createdAt: Date;
   updatedAt: Date;
+  // Server-side turn state: true while a chat turn is running for this project
+  // (lets the UI restore/clear the thinking indicator after reload/reconnect).
+  running?: boolean;
+  runningSessionId?: string;
 }
 
 // Summary of a session for the history list (without full messages)
@@ -153,6 +157,9 @@ export interface InsightsStreamMetrics {
 
 export interface InsightsStreamChunk {
   type: 'text' | 'thinking' | 'task_suggestion' | 'tool_start' | 'tool_input' | 'tool_end' | 'done' | 'error';
+  // Session the chunk belongs to — lets the UI drop chunks from a turn whose
+  // session is no longer on screen (absent on older backends).
+  sessionId?: string;
   content?: string;
   suggestedTask?: {
     title: string;

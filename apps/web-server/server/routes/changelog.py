@@ -881,6 +881,10 @@ async def get_insights_session(projectId: str = Path(...)):
             "modelConfig": session.model_config,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
+            # Turn state: lets the frontend restore the thinking indicator
+            # after a reload/reconnect/switch, or clear a stranded one.
+            "running": service.is_running(projectId),
+            "runningSessionId": service.running_session_id(projectId),
         }
     }
 
@@ -1114,6 +1118,10 @@ async def switch_insights_session(projectId: str = Path(...), sessionId: str = P
             "modelConfig": session.model_config,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
+            # Turn state: lets the frontend restore the thinking indicator
+            # after a reload/reconnect/switch, or clear a stranded one.
+            "running": service.is_running(projectId),
+            "runningSessionId": service.running_session_id(projectId),
         }
     }
 

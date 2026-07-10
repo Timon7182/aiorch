@@ -54,8 +54,13 @@ class ProviderStrategy(abc.ABC):
         conversation_history: list[dict] | None,
         working_dir: Path | None = None,
         attachment_dir: Path | None = None,
+        session_id: str | None = None,
     ) -> str:
         """Send a message and stream the response via WebSocket events.
+
+        ``session_id`` is the insights session this turn belongs to; providers
+        must include it as ``sessionId`` in every broadcast chunk so the
+        frontend can route/drop chunks per session.
 
         Must broadcast insights:chunk events with types:
         text, tool_start, tool_end, done, error.

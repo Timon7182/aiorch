@@ -138,6 +138,10 @@ class InsightsService:
 
     def __init__(self):
         self._running_tasks: dict[str, asyncio.Task] = {}  # projectId -> running asyncio task
+        # projectId -> session id of the in-flight turn. Surfaced via
+        # is_running()/running_session_id() so the frontend can restore or
+        # clear the thinking indicator after a reload/reconnect.
+        self._running_sessions: dict[str, str] = {}
         self._sessions: dict[str, InsightsSession] = {}  # Cache
         # Strong refs to fire-and-forget memory-store tasks so they aren't GC'd
         # mid-flight (asyncio only holds weak references to bare tasks).
@@ -540,6 +544,9 @@ class InsightsService:
         """
         # Where to ground/cwd the provider. Sessions always use project_path.
         ground_dir = repo_path or project_path
+        # Session id of this turn — stamped onto every streamed event so the
+        # frontend can route/drop chunks per session (None until loaded).
+        turn_session_id: str | None = None
         # NOTE: session loading/saving is inside the try below on purpose. This
         # coroutine runs as a fire-and-forget asyncio task (see start_message), so
         # any exception raised here is otherwise silently dropped ("Task exception
@@ -548,6 +555,8 @@ class InsightsService:
         try:
             # Get current session
             session = self.get_current_session(project_path, project_id)
+            turn_session_id = session.id
+            self._running_sessions[project_id] = session.id
 
             # Merge session config with message-level config (message takes precedence)
             effective_config = dict(self.DEFAULT_MODEL_CONFIG)
@@ -678,6 +687,7 @@ class InsightsService:
                 model_config=model_config,
                 conversation_history=conversation_history if provider_id != "claude" else None,
                 working_dir=working_dir,
+                session_id=session.id,
                 **claude_extras,
             )
 
@@ -715,17 +725,20 @@ class InsightsService:
             # Finalize partial content if any
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
+                "sessionId": turn_session_id,
                 "type": "done",
             })
         except Exception as e:
             logger.error(f"[InsightsService] Provider error: {e}", exc_info=True)
             await broadcast_event("insights:chunk", {
                 "projectId": project_id,
+                "sessionId": turn_session_id,
                 "type": "error",
                 "error": str(e),
             })
         finally:
             self._running_tasks.pop(project_id, None)
+            self._running_sessions.pop(project_id, None)
 
     def start_message(
         self,
@@ -756,6 +769,17 @@ class InsightsService:
             logger.info(f"[InsightsService] Cancelled running task for project {project_id}")
             return True
         return False
+
+    def is_running(self, project_id: str) -> bool:
+        """Whether a chat turn is currently in flight for this project."""
+        task = self._running_tasks.get(project_id)
+        return bool(task and not task.done())
+
+    def running_session_id(self, project_id: str) -> str | None:
+        """Session id of the in-flight turn (None when idle)."""
+        if not self.is_running(project_id):
+            return None
+        return self._running_sessions.get(project_id)
 
     async def generate_task_from_chat(
         self,
