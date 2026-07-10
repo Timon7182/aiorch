@@ -997,7 +997,7 @@ export function TaskCreationWizard({
                         </Label>
                         <Input
                           id="ui-check-url"
-                          placeholder="http://192.168.88.55:3100"
+                          placeholder="http://192.168.88.39:3100"
                           value={uiCheckUrl}
                           onChange={(e) => setUiCheckUrl(e.target.value)}
                           disabled={isCreating}

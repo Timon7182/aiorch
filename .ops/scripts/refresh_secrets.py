@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh /home/saya/.aiorch-secrets from /home/saya/.claude/.credentials.json.
+"""Refresh /home/ai-dev/.aiorch-secrets from /home/ai-dev/magestic-claude-seed/.credentials.json.
 
 Extracts the accessToken + refreshToken from the host's Claude credentials
 file (kept refreshed by the host's `claude` CLI) and writes them into the
@@ -18,8 +18,8 @@ import os
 import sys
 from pathlib import Path
 
-CREDS_PATH = Path("/home/saya/.claude/.credentials.json")
-SECRETS_PATH = Path("/home/saya/.aiorch-secrets")
+CREDS_PATH = Path("/home/ai-dev/magestic-claude-seed/.credentials.json")
+SECRETS_PATH = Path("/home/ai-dev/.aiorch-secrets")
 
 
 def main() -> int:
