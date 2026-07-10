@@ -800,14 +800,26 @@ class ClaudeProvider(ProviderStrategy):
                 logger.info("[ClaudeProvider] UI-check (Playwright) MCP enabled for this turn")
 
         if mcp_servers:
-            # --allowedTools is variadic, so it must be followed by another flag
-            # (--append-system-prompt) — never by the trailing positional message.
             cmd.extend([
                 "--mcp-config", json.dumps({"mcpServers": mcp_servers}),
                 "--strict-mcp-config",
-                "--allowedTools", *allowed_tools, "Read", "Glob", "Grep",
-                "--append-system-prompt", "\n\n".join(sys_prompt_appends),
             ])
+
+        # Base file tools for every turn. Edit/Write let the chat update project
+        # files (e.g. docs) on request; disable with APP_CHAT_FILE_EDITS=false.
+        base_tools = ["Read", "Glob", "Grep"]
+        if os.environ.get("APP_CHAT_FILE_EDITS", "true").lower() != "false":
+            base_tools.extend(["Edit", "Write"])
+
+        # Always emitted (even with no MCP servers) so Edit/Write are
+        # pre-approved in headless --print mode. The `=` single-value form with
+        # a comma-joined list keeps this array-typed flag from greedily
+        # swallowing the trailing positional message.
+        cmd.append("--allowedTools=" + ",".join([*allowed_tools, *base_tools]))
+        if sys_prompt_appends:
+            # Previously only emitted alongside --mcp-config; now the docs
+            # grounding nudge reaches the model even on MCP-less turns.
+            cmd.extend(["--append-system-prompt", "\n\n".join(sys_prompt_appends)])
 
         # Grant the CLI read access to attachment files that live outside the
         # run dir (e.g. images written under the project's .magestic-ai while the
