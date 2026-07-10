@@ -10,7 +10,6 @@ take effect in the backend subprocess.
 from pathlib import Path
 
 import pytest
-
 from prompts_pkg.prompt_resolver import (
     BUNDLED_PROMPTS_DIR,
     bundled_prompt_path,
