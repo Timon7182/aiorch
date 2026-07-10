@@ -403,10 +403,11 @@ function AuthenticatedApp() {
               />
             )}
 
-            <main className="flex-1 overflow-hidden">
+            <main className="flex-1 overflow-y-auto">
               {/* View content stays mounted (preserving e.g. the terminal grid)
                   but is hidden while a task page is open. */}
-              <div className={cn('h-full overflow-hidden', selectedTaskId && 'hidden')}>
+              {/*<div className={cn('h-full overflow-hidden', selectedTaskId && 'hidden')}>*/}
+              <div className={cn('min-h-full', selectedTaskId && 'hidden')}>
                 {activeView === 'hermes' ? (
                   <HermesPage />
                 ) : activeView === 'members' ? (

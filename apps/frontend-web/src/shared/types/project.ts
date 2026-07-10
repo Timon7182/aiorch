@@ -28,6 +28,7 @@ export interface ProjectSettings {
   mainBranch?: string;
   /** Include CLAUDE.md instructions in agent system prompt (default: true) */
   useClaudeMd?: boolean;
+  dashboardNote?: string;
 }
 
 export interface NotificationSettings {
