@@ -575,6 +575,10 @@ class ClaudeProvider(ProviderStrategy):
 
         mcp_servers: dict = {}
         lines: list[str] = []
+        # `"default": true` on a server entry makes it the go-to when the user
+        # doesn't name one (e.g. "проверь в базе" with both prod and test DB
+        # servers wired — without this the model just guesses).
+        default_directive: str | None = None
         for s in servers:
             if not isinstance(s, dict):
                 continue
@@ -622,10 +626,20 @@ class ClaudeProvider(ProviderStrategy):
             # for and picks the right one instead of guessing (e.g. two DBs).
             name = s.get("name") or sid
             desc = s.get("description")
+            is_default = s.get("default") is True
             line = f"- {name} (tools: mcp__{sid}__*)"
+            if is_default:
+                line += " [DEFAULT]"
             if isinstance(desc, str) and desc.strip():
                 line += f" — {desc.strip()}"
             lines.append(line)
+            if is_default and default_directive is None:
+                default_directive = (
+                    f"\nWhen the user asks to check or query a database (or another "
+                    f"resource these servers provide) without naming which one, use "
+                    f"{name} (mcp__{sid}__*) by default; use the other servers only "
+                    f"when the user explicitly asks for them."
+                )
         if not mcp_servers:
             return None
         return {
@@ -636,6 +650,7 @@ class ClaudeProvider(ProviderStrategy):
                 "matching mcp__<server>__* tools when the user's question relates to "
                 "what a server provides; pick the server whose description fits best:\n"
                 + "\n".join(lines)
+                + (default_directive or "")
             ),
         }
 
