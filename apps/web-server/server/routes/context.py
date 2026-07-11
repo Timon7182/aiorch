@@ -43,6 +43,13 @@ class ProjectEnvUpdate(BaseModel):
     # headers,description,...}). Round-tripped as the CUSTOM_MCP_SERVERS JSON
     # line that both the chat provider and the build agents read.
     customMcpServers: list | None = None
+    # Telegram bot bridge (per-project chat binding) + Graylog log reader
+    telegramEnabled: bool | None = None
+    telegramBotToken: str | None = None
+    telegramChatId: str | None = None
+    graylogUrl: str | None = None
+    graylogUsername: str | None = None
+    graylogPassword: str | None = None
 
 
 class TestGraphitiRequest(BaseModel):
@@ -448,6 +455,20 @@ async def get_project_env(projectId: str = Path(...)):
                                 config["customMcpServers"] = parsed
                         except json.JSONDecodeError:
                             pass
+                    elif key == "TELEGRAM_ENABLED":
+                        config["telegramEnabled"] = value.lower() == "true"
+                    elif key == "TELEGRAM_BOT_TOKEN":
+                        # Secrets are never echoed back (same convention as
+                        # GITHUB_TOKEN -> githubTokenSet above).
+                        config["telegramBotTokenSet"] = bool(value)
+                    elif key == "TELEGRAM_CHAT_ID":
+                        config["telegramChatId"] = value
+                    elif key == "GRAYLOG_URL":
+                        config["graylogUrl"] = value
+                    elif key == "GRAYLOG_USERNAME":
+                        config["graylogUsername"] = value
+                    elif key == "GRAYLOG_PASSWORD":
+                        config["graylogPasswordSet"] = bool(value)
         except Exception:
             pass
 
@@ -546,6 +567,11 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
         # Map plain string settings (no token validation needed)
         string_mapping = {
             "githubRepo": "GITHUB_REPO",
+            "telegramBotToken": "TELEGRAM_BOT_TOKEN",
+            "telegramChatId": "TELEGRAM_CHAT_ID",
+            "graylogUrl": "GRAYLOG_URL",
+            "graylogUsername": "GRAYLOG_USERNAME",
+            "graylogPassword": "GRAYLOG_PASSWORD",
         }
 
         for config_key, env_key in string_mapping.items():
@@ -562,6 +588,7 @@ async def update_project_env(projectId: str = Path(...), config: ProjectEnvUpdat
         bool_mapping = {
             "graphitiEnabled": "GRAPHITI_ENABLED",
             "enableFancyUi": "ENABLE_FANCY_UI",
+            "telegramEnabled": "TELEGRAM_ENABLED",
         }
 
         for config_key, env_key in bool_mapping.items():

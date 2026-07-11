@@ -254,6 +254,26 @@
       "integrationDescription": "Connect to GitLab for issue tracking",
       "syncDescription": "Sync with GitLab Issues"
     },
+    "telegram": {
+      "title": "Telegram & Graylog",
+      "description": "Alert chat bot bridge",
+      "integrationTitle": "Telegram & Graylog Integration",
+      "integrationDescription": "Bind a Telegram alert chat to this project so the bot can analyze errors using full Graylog logs",
+      "syncDescription": "Bind a Telegram alert chat to this project",
+      "enable": "Enable Telegram bot",
+      "enableDescription": "Respond when the bot is mentioned in the bound chat; conversations appear in this project's chat history",
+      "howItWorks": "Add the bot to your alerts group, then reply to an error alert mentioning the bot with a question (e.g. \"find the root cause\"). The bot fetches the full log entry from Graylog, analyzes it against this project's code, and replies in the thread. Replying to the bot continues the same conversation. Important: disable the bot's privacy mode in @BotFather (/setprivacy → Disable) or make it a group admin — otherwise Telegram won't deliver group mentions to it.",
+      "botToken": "Bot token",
+      "botTokenHint": "Create a bot with @BotFather and paste its token. Several projects may share one bot.",
+      "chatId": "Chat ID",
+      "chatIdHint": "The id of the group chat the bot was added to (e.g. -1001234567890). Comma-separate multiple ids.",
+      "graylogTitle": "Graylog log reader",
+      "graylogDescription": "Credentials used to fetch the full log entry referenced by alerts (the _id in the alert link)",
+      "graylogUrl": "Graylog URL",
+      "graylogUsername": "Username",
+      "graylogPassword": "Password",
+      "secretConfigured": "Configured — enter a new value to replace"
+    },
     "memory": {
       "title": "Memory",
       "description": "Graphiti memory backend",

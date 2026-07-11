@@ -30,6 +30,7 @@ from .qa_commands import (
     handle_review_status_command,
 )
 from .spec_commands import print_specs_list
+from .ui_check_commands import handle_ui_check_command
 from .utils import (
     DEFAULT_MODEL,
     find_spec,

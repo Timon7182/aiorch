@@ -15,6 +15,7 @@
   "branchFreshness": "Atualidade da branch",
   "noCommits": "Nenhum commit recente encontrado para esta branch",
   "codegraphStatus": "Status do CodeGraph",
+  "codegraphSync": "CodeGraph sync",
   "lastCodegraphUpdate": "Ultima atualizacao do CodeGraph",
   "codegraphState": "Estado do indice",
   "codegraphReady": "O indice do CodeGraph esta disponivel",

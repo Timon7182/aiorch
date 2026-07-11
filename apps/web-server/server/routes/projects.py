@@ -170,6 +170,7 @@ class ProjectSettings(BaseModel):
     graphitiMcpUrl: str | None = Field(default=None, alias="graphiti_mcp_url")
     mainBranch: str | None = Field(default=None, alias="main_branch")
     useClaudeMd: bool = Field(default=True, alias="use_claude_md")
+    dashboardNote: str | None = Field(default=None, alias="dashboard_note")
 
     @field_validator("memoryBackend", mode="before")
     @classmethod
@@ -286,6 +287,7 @@ def project_to_response(project_id: str, project_data: dict) -> dict:
         "graphitiMcpUrl": None,
         "mainBranch": None,
         "useClaudeMd": True,
+        "dashboardNote": None,
     }
     # Merge saved settings from projects.json (written by update_project_settings)
     saved_settings = project_data.get("settings", {})
@@ -1187,6 +1189,7 @@ class ProjectSettingsUpdate(BaseModel):
     graphitiMcpUrl: str | None = None
     mainBranch: str | None = None
     useClaudeMd: bool | None = None
+    dashboardNote: str | None = None
 
     @field_validator("memoryBackend", mode="before")
     @classmethod

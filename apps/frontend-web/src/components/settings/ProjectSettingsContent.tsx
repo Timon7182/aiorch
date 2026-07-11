@@ -8,7 +8,7 @@ import { SectionRouter } from './sections/SectionRouter';
 import { createHookProxy } from './utils/hookProxyFactory';
 import type { Project } from '../../shared/types';
 
-export type ProjectSettingsSection = 'general' | 'github' | 'memory' | 'agentPrompts';
+export type ProjectSettingsSection = 'general' | 'github' | 'telegram' | 'memory' | 'agentPrompts';
 
 interface ProjectSettingsContentProps {
   project: Project | undefined;

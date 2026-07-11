@@ -5,6 +5,7 @@ import { GeneralSettings } from '../../project-settings/GeneralSettings';
 import { SecuritySettings } from '../../project-settings/SecuritySettings';
 import { AgentPromptsSettings } from '../../project-settings/AgentPromptsSettings';
 import { GitHubIntegration } from '../integrations/GitHubIntegration';
+import { TelegramIntegration } from '../integrations/TelegramIntegration';
 import { InitializationGuard } from '../common/InitializationGuard';
 import type { ProjectSettingsSection } from '../ProjectSettingsContent';
 
@@ -96,6 +97,25 @@ export function SectionRouter({
               projectId={project.id}
               settings={settings}
               setSettings={setSettings}
+            />
+          </InitializationGuard>
+        </SettingsSection>
+      );
+
+    case 'telegram':
+      return (
+        <SettingsSection
+          title={t('projectSections.telegram.integrationTitle')}
+          description={t('projectSections.telegram.integrationDescription')}
+        >
+          <InitializationGuard
+            initialized={!!project.autoBuildPath}
+            title={t('projectSections.telegram.integrationTitle')}
+            description={t('projectSections.telegram.syncDescription')}
+          >
+            <TelegramIntegration
+              envConfig={envConfig}
+              updateEnvConfig={updateEnvConfig}
             />
           </InitializationGuard>
         </SettingsSection>

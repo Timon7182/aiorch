@@ -254,6 +254,26 @@
       "integrationDescription": "Se connecter à GitLab pour le suivi des issues",
       "syncDescription": "Synchroniser avec GitLab Issues"
     },
+    "telegram": {
+      "title": "Telegram & Graylog",
+      "description": "Pont bot pour le chat d'alertes",
+      "integrationTitle": "Intégration Telegram & Graylog",
+      "integrationDescription": "Lier un chat d'alertes Telegram à ce projet pour que le bot analyse les erreurs avec les logs complets Graylog",
+      "syncDescription": "Lier un chat d'alertes Telegram à ce projet",
+      "enable": "Activer le bot Telegram",
+      "enableDescription": "Répond lorsque le bot est mentionné dans le chat lié ; les conversations apparaissent dans l'historique de chat du projet",
+      "howItWorks": "Ajoutez le bot à votre groupe d'alertes, puis répondez à une alerte d'erreur en mentionnant le bot avec une question (ex. « trouve la cause racine »). Le bot récupère le log complet depuis Graylog, l'analyse avec le code du projet et répond dans le fil. Répondre au bot poursuit la même conversation. Important : désactivez le mode privé du bot dans @BotFather (/setprivacy → Disable) ou nommez-le admin du groupe — sinon Telegram ne lui transmet pas les mentions du groupe.",
+      "botToken": "Jeton du bot",
+      "botTokenHint": "Créez un bot avec @BotFather et collez son jeton. Plusieurs projets peuvent partager un même bot.",
+      "chatId": "ID du chat",
+      "chatIdHint": "L'identifiant du groupe où le bot a été ajouté (ex. -1001234567890). Séparez plusieurs ids par des virgules.",
+      "graylogTitle": "Lecteur de logs Graylog",
+      "graylogDescription": "Identifiants utilisés pour récupérer le log complet référencé par les alertes (le _id dans le lien de l'alerte)",
+      "graylogUrl": "URL Graylog",
+      "graylogUsername": "Nom d'utilisateur",
+      "graylogPassword": "Mot de passe",
+      "secretConfigured": "Configuré — saisissez une nouvelle valeur pour remplacer"
+    },
     "memory": {
       "title": "Mémoire",
       "description": "Backend mémoire Graphiti",

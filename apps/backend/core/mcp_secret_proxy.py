@@ -52,7 +52,8 @@ def load_secrets(environ: dict | None = None) -> dict[str, str]:
             continue
         value = env.get(name)
         if value:
-            secrets["${%s}" % name] = value
+            #secrets["${%s}" % name] = value
+            secrets[f"${{{name}}}"] = value
     return secrets
 
 
