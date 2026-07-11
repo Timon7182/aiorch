@@ -340,6 +340,15 @@ def create_app() -> FastAPI:
         dependencies=require_active,
     )
 
+    # Audio transcription via the external Transcriber service (GPU faster-whisper)
+    from .routes import transcription as transcription_routes
+    app.include_router(
+        transcription_routes.router,
+        prefix="/api/ext",
+        tags=["Transcription"],
+        dependencies=require_active,
+    )
+
     # MkDocs-based per-project documentation: agent generates markdown,
     # service runs `mkdocs build`, viewer serves the static site.
     from .routes import docs as docs_routes
