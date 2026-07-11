@@ -14,7 +14,8 @@ import {
   Sparkles,
   Globe,
   Bug,
-  FileText
+  FileText,
+  Send
 } from 'lucide-react';
 
 import {
@@ -69,6 +70,7 @@ const appNavItemsConfig: NavItemConfig<AppSection>[] = [
 const projectNavItemsConfig: NavItemConfig<ProjectSettingsSection>[] = [
   { id: 'general', icon: Settings2 },
   { id: 'github', icon: Github },
+  { id: 'telegram', icon: Send },
   { id: 'memory', icon: Database },
   { id: 'agentPrompts', icon: FileText }
 ];

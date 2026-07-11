@@ -128,6 +128,12 @@ async def lifespan(app: FastAPI):
     from .services import preview_reaper
     preview_reaper.start()
 
+    # Telegram bot bridge: long-polls the bots configured in per-project
+    # settings and routes chat mentions into insights-chat sessions.
+    from .services.telegram_service import get_telegram_service
+    telegram_service = get_telegram_service()
+    telegram_service.start()
+
     # Build/refresh the CodeGraphContext index for any registered project that
     # doesn't have one yet, so the planner/coder/QA agents get CGC's code-graph
     # MCP tools without a manual index step. Idempotent (skips already-indexed
@@ -169,6 +175,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Magestic AI Web Server...")
     preview_reaper.stop()
+    await telegram_service.stop()
 
     # Tear down any local (dev-server / compose-local) previews so their
     # subprocesses / compose projects don't outlive the server.

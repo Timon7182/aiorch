@@ -295,6 +295,16 @@ export interface ProjectEnvConfig {
   githubAutoSync?: boolean; // Auto-sync issues on project load
   githubAuthMethod?: 'oauth' | 'pat'; // How the token was obtained
 
+  // Telegram bot bridge (chat mentions → insights chat) + Graylog log reader
+  telegramEnabled?: boolean;
+  telegramBotToken?: string; // write-only: GET returns telegramBotTokenSet instead
+  telegramBotTokenSet?: boolean;
+  telegramChatId?: string; // Telegram chat id(s), comma-separated (e.g. '-3192691355')
+  graylogUrl?: string; // e.g. 'http://192.168.88.10:9000'
+  graylogUsername?: string;
+  graylogPassword?: string; // write-only: GET returns graylogPasswordSet instead
+  graylogPasswordSet?: boolean;
+
   // Git/Worktree Settings
   defaultBranch?: string; // Base branch for worktree creation (e.g., 'main', 'develop')
 

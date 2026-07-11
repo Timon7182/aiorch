@@ -262,21 +262,37 @@ class InsightsService:
     # than argv). Claude instead reads the file from disk, so it isn't capped here.
     MAX_INLINE_TEXT_CHARS = 100_000
 
-    def create_session(self, project_path: Path, project_id: str) -> InsightsSession:
-        """Create a new session."""
+    def create_session(
+        self,
+        project_path: Path,
+        project_id: str,
+        *,
+        set_current: bool = True,
+        title: str | None = None,
+    ) -> InsightsSession:
+        """Create a new session.
+
+        ``set_current=False`` creates the session without stealing the UI's
+        active session (used by programmatic clients like the Telegram bot).
+        """
         session = InsightsSession(
             id=str(uuid.uuid4()),
             project_id=project_id,
-            title="New Session",
+            title=title or "New Session",
             model_config=dict(self.DEFAULT_MODEL_CONFIG),
         )
 
         self._save_session(project_path, session)
 
-        current_file = self._get_current_session_file(project_path)
-        current_file.write_text(session.id)
+        if set_current:
+            current_file = self._get_current_session_file(project_path)
+            current_file.write_text(session.id)
 
         return session
+
+    def get_session(self, project_path: Path, session_id: str) -> InsightsSession | None:
+        """Load a session by id (public accessor for programmatic clients)."""
+        return self._load_session(project_path, session_id)
 
     def switch_session(self, project_path: Path, session_id: str) -> InsightsSession | None:
         """Switch to a different session."""
@@ -528,8 +544,17 @@ class InsightsService:
         branch: str | None = None,
         repo_path: Path | None = None,
         attachments: list | None = None,
-    ) -> None:
+        session_id: str | None = None,
+        register_running: bool = True,
+    ) -> str | None:
         """Send a message and stream the response via the appropriate provider.
+
+        ``session_id`` targets a specific session instead of the project's
+        current one, and ``register_running=False`` skips the per-project
+        running-turn bookkeeping — together they let programmatic clients
+        (e.g. the Telegram bot) run turns without hijacking or cancelling the
+        chat the user has open in the UI. Returns the assistant's final text
+        (``None`` on error/cancel).
 
         When ``branch`` names a branch other than the current checkout, the
         provider runs against a read-only worktree of that branch so the chat
@@ -546,17 +571,23 @@ class InsightsService:
         ground_dir = repo_path or project_path
         # Session id of this turn — stamped onto every streamed event so the
         # frontend can route/drop chunks per session (None until loaded).
-        turn_session_id: str | None = None
+        turn_session_id: str | None = session_id
         # NOTE: session loading/saving is inside the try below on purpose. This
         # coroutine runs as a fire-and-forget asyncio task (see start_message), so
         # any exception raised here is otherwise silently dropped ("Task exception
         # was never retrieved") and the frontend hangs forever with no error. e.g.
         # a PermissionError creating .magestic-ai/insights must reach the client.
         try:
-            # Get current session
-            session = self.get_current_session(project_path, project_id)
+            # Get the targeted session (or the project's current one)
+            if session_id:
+                session = self._load_session(project_path, session_id)
+                if session is None:
+                    raise ValueError(f"Session {session_id} not found")
+            else:
+                session = self.get_current_session(project_path, project_id)
             turn_session_id = session.id
-            self._running_sessions[project_id] = session.id
+            if register_running:
+                self._running_sessions[project_id] = session.id
 
             # Merge session config with message-level config (message takes precedence)
             effective_config = dict(self.DEFAULT_MODEL_CONFIG)
@@ -720,6 +751,8 @@ class InsightsService:
                     self._memory_tasks.add(task)
                     task.add_done_callback(self._memory_tasks.discard)
 
+            return response_content
+
         except asyncio.CancelledError:
             logger.info(f"[InsightsService] Chat cancelled for project {project_id}")
             # Finalize partial content if any
@@ -728,6 +761,9 @@ class InsightsService:
                 "sessionId": turn_session_id,
                 "type": "done",
             })
+            # Propagate: swallowing cancellation would let direct awaiters
+            # (Telegram bot) carry on mid-shutdown as if the turn finished.
+            raise
         except Exception as e:
             logger.error(f"[InsightsService] Provider error: {e}", exc_info=True)
             await broadcast_event("insights:chunk", {
@@ -736,9 +772,16 @@ class InsightsService:
                 "type": "error",
                 "error": str(e),
             })
+            # Fire-and-forget UI turns must swallow (a raise here would only
+            # surface as "Task exception was never retrieved"); direct
+            # programmatic callers (Telegram bot) get the real error.
+            if not register_running:
+                raise
+            return None
         finally:
-            self._running_tasks.pop(project_id, None)
-            self._running_sessions.pop(project_id, None)
+            if register_running:
+                self._running_tasks.pop(project_id, None)
+                self._running_sessions.pop(project_id, None)
 
     def start_message(
         self,
