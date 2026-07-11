@@ -450,16 +450,30 @@ class TelegramBotService:
         if not mentioned and not replying_to_bot:
             return
 
-        # Diagnostic: log the shape of what Telegram actually delivered —
-        # reply context can silently go missing (privacy mode, external
-        # replies, quote-replies), and this is the only way to see it.
+        # Diagnostic: log the SHAPE of what Telegram delivered — reply context
+        # can silently go missing (privacy mode, external replies, quote
+        # replies) and this is the only way to see it. Metadata only: message
+        # contents and sender names are chat data and must not land in logs.
         try:
+            def _shape(msg: dict | None) -> dict | None:
+                if not isinstance(msg, dict):
+                    return None
+                frm = msg.get("from") or {}
+                return {
+                    "message_id": msg.get("message_id"),
+                    "from_id": frm.get("id"),
+                    "from_is_bot": frm.get("is_bot"),
+                    "text_len": len(msg.get("text") or ""),
+                    "caption_len": len(msg.get("caption") or ""),
+                    "keys": sorted(msg.keys()),
+                }
             snapshot = {
-                k: message.get(k)
-                for k in ("message_id", "from", "text", "caption",
-                          "reply_to_message", "quote", "external_reply",
-                          "forward_origin", "via_bot", "message_thread_id")
-                if message.get(k) is not None
+                **(_shape(message) or {}),
+                "reply_to_message": _shape(message.get("reply_to_message")),
+                "quote_len": len((message.get("quote") or {}).get("text") or ""),
+                "has_external_reply": bool(message.get("external_reply")),
+                "forward_origin_type": (message.get("forward_origin") or {}).get("type"),
+                "message_thread_id": message.get("message_thread_id"),
             }
             logger.info(
                 "[Telegram] dispatch %s: %s", chat_id,
