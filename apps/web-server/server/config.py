@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     PORT: int = 3101
     DEBUG: bool = False
 
+    # Public URL of the web UI (e.g. "http://192.168.88.39:3101") used when a
+    # service links back into the app from outside — e.g. the Telegram bot
+    # appending a "continue in MagesticAI" chat link. Empty = no links emitted.
+    PUBLIC_URL: str = ""
+
     # SSL configuration
     SSL_ENABLED: bool = False
     SSL_CERTFILE: str = ""  # Path to SSL certificate

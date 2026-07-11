@@ -52,9 +52,27 @@ MAX_THREAD_KEYS = 1000     # cap for the thread → session map
 STATE_FILE = "telegram_bot_state.json"
 
 
+ACK_TEXT = "🔎 Проверяю…"
+
+
 def _mention_re(bot_username: str) -> re.Pattern:
     """Case-insensitive @mention matcher with a trailing username boundary."""
     return re.compile(rf"@{re.escape(bot_username)}(?![A-Za-z0-9_])", re.IGNORECASE)
+
+
+def _chat_id_variants(chat_id: str) -> set[str]:
+    """Both spellings of a group chat id.
+
+    Supergroup ids carry a ``-100`` prefix (``-1003192691355``) while users
+    often copy the short form (``-3192691355``) from other tooling. Accept
+    either in the settings by binding both.
+    """
+    variants = {chat_id}
+    if chat_id.startswith("-100") and len(chat_id) > 4:
+        variants.add("-" + chat_id[4:])
+    elif chat_id.startswith("-") and not chat_id.startswith("-100"):
+        variants.add("-100" + chat_id[1:])
+    return variants
 
 
 @dataclass
@@ -128,7 +146,8 @@ def collect_bot_configs() -> dict[str, BotConfig]:
         )
         bot = configs.setdefault(token, BotConfig(token=token))
         for chat_id in chat_ids:
-            bot.bindings.setdefault(chat_id, binding)
+            for variant in _chat_id_variants(chat_id):
+                bot.bindings.setdefault(variant, binding)
 
     return configs
 
@@ -275,6 +294,58 @@ class TelegramBotService:
             except Exception as e:
                 logger.error(f"[Telegram] sendMessage failed: {e}")
                 break
+        return sent_ids
+
+    async def _react(
+        self, client: httpx.AsyncClient, token: str, chat_id: str, message_id: int | None
+    ) -> None:
+        """Best-effort 👀 reaction on the user's message (instant feedback)."""
+        if message_id is None:
+            return
+        try:
+            await self._api(
+                client, token, "setMessageReaction",
+                chat_id=chat_id, message_id=message_id,
+                reaction=[{"type": "emoji", "emoji": "👀"}],
+            )
+        except Exception as e:
+            logger.info(f"[Telegram] setMessageReaction skipped: {e}")
+
+    async def _deliver_answer(
+        self, client: httpx.AsyncClient, token: str, chat_id: str,
+        reply_to: int | None, ack_id: int | None, text: str,
+    ) -> list[int]:
+        """Deliver the final answer, editing the ack message in place.
+
+        The first chunk replaces the "🔎 Проверяю…" ack (editMessageText); any
+        remaining chunks follow as new messages. Falls back to plain replies
+        when there is no ack or the edit fails. Returns the answer message ids.
+        """
+        chunks = [text[i: i + MAX_REPLY_CHUNK] for i in range(0, len(text), MAX_REPLY_CHUNK)] or [""]
+        sent_ids: list[int] = []
+        rest = chunks
+        if ack_id is not None:
+            try:
+                await self._api(
+                    client, token, "editMessageText",
+                    chat_id=chat_id, message_id=ack_id, text=chunks[0],
+                )
+                sent_ids.append(ack_id)
+                rest = chunks[1:]
+            except Exception as e:
+                logger.warning(f"[Telegram] editMessageText failed, sending anew: {e}")
+        if rest:
+            for idx, chunk in enumerate(rest):
+                params: dict = {"chat_id": chat_id, "text": chunk}
+                if not sent_ids and idx == 0 and reply_to:
+                    params["reply_to_message_id"] = reply_to
+                    params["allow_sending_without_reply"] = True
+                try:
+                    result = await self._api(client, token, "sendMessage", **params)
+                    sent_ids.append(result["message_id"])
+                except Exception as e:
+                    logger.error(f"[Telegram] sendMessage failed: {e}")
+                    break
         return sent_ids
 
     async def _typing_loop(self, client: httpx.AsyncClient, token: str, chat_id: str) -> None:
@@ -461,6 +532,16 @@ class TelegramBotService:
             self._remember_thread(chat_id, reply_to_id, session_id)
 
         async with httpx.AsyncClient(timeout=60) as client:
+            # Instant feedback: 👀 reaction + a "checking…" reply that is later
+            # edited into the actual answer.
+            await self._react(client, token, chat_id, message_id)
+            ack_ids = await self._send_reply(client, token, chat_id, message_id, ACK_TEXT)
+            ack_id = ack_ids[0] if ack_ids else None
+            if ack_id is not None:
+                # Replies to the ack continue this session even mid-turn.
+                self._remember_thread(chat_id, ack_id, session_id)
+                await self._save_state_async()
+
             typing = asyncio.create_task(self._typing_loop(client, token, chat_id))
             try:
                 # Pull the full log from Graylog when the alert references one.
@@ -485,6 +566,9 @@ class TelegramBotService:
                     "⚠️ The agent returned an empty response. "
                     "Check the chat session in the MagesticAI UI."
                 )
+                session_link = self._session_url(binding.project_id, session_id)
+                if session_link:
+                    reply_text += f"\n\n💬 Чат в MagesticAI: {session_link}"
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -493,10 +577,22 @@ class TelegramBotService:
             finally:
                 typing.cancel()
 
-            sent_ids = await self._send_reply(client, token, chat_id, message_id, reply_text)
+            sent_ids = await self._deliver_answer(
+                client, token, chat_id, message_id, ack_id, reply_text
+            )
             for sid in sent_ids:
                 self._remember_thread(chat_id, sid, session_id)
             await self._save_state_async()
+
+    @staticmethod
+    def _session_url(project_id: str, session_id: str) -> str:
+        """Deep link to the chat session in the web UI (empty when no PUBLIC_URL)."""
+        from ..config import get_settings
+
+        base = get_settings().PUBLIC_URL.strip().rstrip("/")
+        if not base:
+            return ""
+        return f"{base}/p/{project_id}/insights?session={session_id}"
 
 
 _service: TelegramBotService | None = None
