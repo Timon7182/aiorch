@@ -7,15 +7,18 @@
  * graph and which ones need a fresh `graphify extract`.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Calendar,
   CheckCircle2,
   Eye,
   FileAudio,
+  Loader2,
+  Mic,
   Network,
   RefreshCw,
+  Square,
   Upload,
   Users as UsersIcon,
 } from 'lucide-react';
@@ -57,6 +60,221 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 function projectSlug(name: string | undefined, id: string | undefined): string {
   const raw = (name || id || '').toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   return raw || 'default';
+}
+
+type TranscribeJob = {
+  id: string;
+  status: string;
+  progress?: number;
+  text?: string | null;
+  error?: string | null;
+};
+
+function fmtElapsed(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * Record from the mic (or pick an audio/video file) → send to the external
+ * Transcriber service → poll → the finished transcript is saved server-side and
+ * shows up in the list below (parent refreshes via onComplete).
+ */
+function AudioTranscribeSection({ slug, onComplete }: { slug: string; onComplete: () => void }) {
+  const [recording, setRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [language, setLanguage] = useState('');
+  const [job, setJob] = useState<TranscribeJob | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<number | null>(null);
+  const pollRef = useRef<number | null>(null);
+
+  const clearTimers = () => {
+    if (timerRef.current) window.clearInterval(timerRef.current);
+    if (pollRef.current) window.clearInterval(pollRef.current);
+    timerRef.current = null;
+    pollRef.current = null;
+  };
+
+  useEffect(() => () => {
+    clearTimers();
+    recorderRef.current?.stream?.getTracks().forEach((t) => t.stop());
+  }, []);
+
+  const pollJob = (id: string) => {
+    if (pollRef.current) window.clearInterval(pollRef.current);
+    pollRef.current = window.setInterval(async () => {
+      try {
+        const s = await api<TranscribeJob>(
+          `/api/ext/projects/${encodeURIComponent(slug)}/transcribe/${id}`,
+        );
+        setJob({ ...s, id });
+        if (s.status === 'completed' || s.status === 'failed') {
+          if (pollRef.current) window.clearInterval(pollRef.current);
+          pollRef.current = null;
+          if (s.status === 'completed') onComplete();
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+    }, 2000);
+  };
+
+  const submitBlob = async (blob: Blob, filename: string) => {
+    setErr(null);
+    setJob({ id: '', status: 'uploading' });
+    const fd = new FormData();
+    fd.append('audio', blob, filename);
+    if (language.trim()) fd.append('language', language.trim());
+    try {
+      const res = await fetch(`/api/ext/projects/${encodeURIComponent(slug)}/transcribe`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders() },
+        body: fd,
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(typeof j.detail === 'string' ? j.detail : res.statusText);
+      setJob({ id: j.job_id, status: j.status });
+      pollJob(j.job_id);
+    } catch (e) {
+      setErr(`Upload failed: ${(e as Error).message}`);
+      setJob(null);
+    }
+  };
+
+  const startRecording = async () => {
+    setErr(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const type = mr.mimeType || 'audio/webm';
+        const blob = new Blob(chunksRef.current, { type });
+        const ext = type.includes('ogg') ? 'ogg' : 'webm';
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        void submitBlob(blob, `recording-${stamp}.${ext}`);
+      };
+      recorderRef.current = mr;
+      mr.start();
+      setRecording(true);
+      setElapsed(0);
+      timerRef.current = window.setInterval(() => setElapsed((e) => e + 1), 1000);
+    } catch {
+      setErr('Microphone access was denied or is unavailable in this browser.');
+    }
+  };
+
+  const stopRecording = () => {
+    recorderRef.current?.stop();
+    setRecording(false);
+    if (timerRef.current) window.clearInterval(timerRef.current);
+    timerRef.current = null;
+  };
+
+  const busy = !!job && !['completed', 'failed'].includes(job.status);
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-5">
+      <h2 className="font-semibold mb-3 flex items-center gap-2">
+        <Mic className="h-4 w-4" /> Record or transcribe audio
+      </h2>
+      <p className="text-xs text-muted-foreground mb-3">
+        Record a meeting or upload an audio/video file. It’s transcribed on the GPU and saved below.
+      </p>
+
+      <div className="flex flex-wrap items-center gap-3">
+        {!recording ? (
+          <button
+            onClick={() => void startRecording()}
+            disabled={busy}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+          >
+            <Mic className="h-4 w-4" /> Start recording
+          </button>
+        ) : (
+          <button
+            onClick={stopRecording}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-destructive text-destructive-foreground text-sm font-medium"
+          >
+            <Square className="h-4 w-4" /> Stop {fmtElapsed(elapsed)}
+          </button>
+        )}
+
+        <label className="cursor-pointer inline-flex items-center gap-2 text-xs px-3 py-2 rounded-md border border-border hover:bg-accent">
+          <Upload className="h-3.5 w-3.5" />
+          Upload audio / video
+          <input
+            type="file"
+            accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.opus,.webm,.mp4,.mov,.mkv,.m4v"
+            className="hidden"
+            disabled={busy || recording}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void submitBlob(f, f.name);
+              e.target.value = '';
+            }}
+          />
+        </label>
+
+        <input
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+          placeholder="lang (auto)"
+          title="Optional language code, e.g. en, ru, kk. Blank = auto-detect."
+          className="w-28 rounded-md border border-border bg-background px-3 py-2 text-sm"
+        />
+      </div>
+
+      {recording && (
+        <div className="mt-3 flex items-center gap-2 text-sm text-destructive">
+          <span className="h-2.5 w-2.5 rounded-full bg-destructive animate-pulse" />
+          Recording… {fmtElapsed(elapsed)}
+        </div>
+      )}
+
+      {job && (
+        <div className="mt-4 rounded-md border border-border bg-background px-4 py-3 text-sm">
+          {job.status === 'uploading' && (
+            <span className="inline-flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Uploading…
+            </span>
+          )}
+          {(job.status === 'queued' || job.status === 'processing') && (
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              <span className="capitalize">{job.status}</span>
+              {job.status === 'processing' && typeof job.progress === 'number' && (
+                <div className="flex-1 h-1.5 rounded bg-muted overflow-hidden">
+                  <div className="h-full bg-primary transition-all" style={{ width: `${job.progress}%` }} />
+                </div>
+              )}
+            </div>
+          )}
+          {job.status === 'completed' && (
+            <span className="inline-flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2 className="h-4 w-4" /> Transcription complete — saved below.
+            </span>
+          )}
+          {job.status === 'failed' && (
+            <span className="inline-flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-4 w-4" /> Failed: {job.error || 'unknown error'}
+            </span>
+          )}
+        </div>
+      )}
+
+      {err && <div className="mt-3 text-sm text-destructive">{err}</div>}
+    </section>
+  );
 }
 
 export function TranscriptsPage() {
@@ -234,6 +452,8 @@ export function TranscriptsPage() {
             </div>
           )
         )}
+
+        <AudioTranscribeSection slug={slug} onComplete={() => void refresh()} />
 
         <section className="rounded-lg border border-border bg-card p-5">
           <h2 className="font-semibold mb-3 flex items-center gap-2">
