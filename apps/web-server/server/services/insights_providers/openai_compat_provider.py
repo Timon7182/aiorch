@@ -45,12 +45,40 @@ OPENAI_COMPAT_PROVIDERS = {
 class OpenAICompatProvider(ProviderStrategy):
     """Provider for OpenAI-compatible HTTP servers."""
 
-    def __init__(self, provider_id: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        provider_id: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        display_name: str | None = None,
+        icon: str | None = None,
+        headers: dict[str, str] | None = None,
+        default_model: str | None = None,
+    ) -> None:
         config = OPENAI_COMPAT_PROVIDERS.get(provider_id, {})
         self.provider_id = provider_id
-        self.base_url = base_url or config.get("base_url", "http://localhost:8080")
-        self.display_name = config.get("display_name", provider_id.title())
-        self.icon = config.get("icon", provider_id)
+        self.base_url = (base_url or config.get("base_url", "http://localhost:8080")).rstrip("/")
+        # Fallback model advertised when the server is reachable but /v1/models
+        # lists nothing (some servers don't implement listing).
+        self.default_model = default_model
+        # api_key / extra headers are used by user-defined endpoints (OpenRouter,
+        # remote vLLM behind a gateway, etc.); the built-in localhost servers
+        # leave them unset.
+        self.api_key = api_key
+        self.extra_headers = headers or {}
+        self.display_name = display_name or config.get("display_name", provider_id.title())
+        self.icon = icon or config.get("icon", provider_id)
+
+    def _auth_headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """Build request headers with optional Bearer auth and custom headers."""
+        headers: dict[str, str] = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.extra_headers:
+            headers.update(self.extra_headers)
+        if extra:
+            headers.update(extra)
+        return headers
 
     async def detect(self) -> ProviderInfo:
         info = ProviderInfo(
@@ -65,7 +93,10 @@ class OpenAICompatProvider(ProviderStrategy):
         try:
             import httpx
             async with httpx.AsyncClient(timeout=1.5) as client:
-                resp = await client.get(f"{self.base_url}/v1/models")
+                resp = await client.get(
+                    f"{self.base_url}/v1/models",
+                    headers=self._auth_headers(),
+                )
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -76,6 +107,14 @@ class OpenAICompatProvider(ProviderStrategy):
                             id=model_id,
                             label=model_id,
                         ))
+
+                # Reachable but the server lists no models — advertise the
+                # configured default so the endpoint is still selectable.
+                if not info.models and self.default_model:
+                    info.models.append(ProviderModel(
+                        id=self.default_model,
+                        label=self.default_model,
+                    ))
 
                 if info.models:
                     info.available = True
@@ -145,7 +184,7 @@ class OpenAICompatProvider(ProviderStrategy):
                     "POST",
                     f"{self.base_url}/v1/chat/completions",
                     json=payload,
-                    headers={"Accept": "text/event-stream"},
+                    headers=self._auth_headers({"Accept": "text/event-stream"}),
                 ) as resp:
                     resp.raise_for_status()
 

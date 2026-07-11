@@ -124,6 +124,13 @@ class InsightsSession:
     title: str
     messages: list[InsightsMessage] = field(default_factory=list)
     model_config: dict | None = None
+    # Per-session chat scope, persisted so re-entering a chat restores what the
+    # user was reading against. ``branch`` is the branch the chat grounds in
+    # (``""``/None = the current working tree); ``repo_path`` is the multi-repo
+    # child-repo scope as the frontend's chat-ground value (a repo path or the
+    # ``__all__`` sentinel; None = not set → fall back to the per-project default).
+    branch: str | None = None
+    repo_path: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     # The Claude CLI's own conversation id for this chat. Persisted so each turn
@@ -185,6 +192,8 @@ class InsightsService:
                 for msg in session.messages
             ],
             "modelConfig": session.model_config,
+            "branch": session.branch,
+            "repoPath": session.repo_path,
             "claudeSessionId": session.claude_session_id,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
@@ -227,6 +236,8 @@ class InsightsService:
                     for msg in data.get("messages", [])
                 ],
                 model_config=data.get("modelConfig"),
+                branch=data.get("branch"),
+                repo_path=data.get("repoPath"),
                 claude_session_id=data.get("claudeSessionId"),
                 created_at=data.get("createdAt", datetime.now().isoformat()),
                 updated_at=data.get("updatedAt", datetime.now().isoformat()),
@@ -253,7 +264,7 @@ class InsightsService:
     # Default model config for new sessions
     DEFAULT_MODEL_CONFIG = {
         "provider": "claude",
-        "model": "sonnet",
+        "model": "opus",
         "thinkingLevel": "medium",
     }
 
@@ -381,6 +392,28 @@ class InsightsService:
         session = self._load_session(project_path, session_id)
         if session:
             session.model_config = model_config
+            self._save_session(project_path, session)
+            return True
+        return False
+
+    def update_session_scope(
+        self,
+        project_path: Path,
+        session_id: str,
+        *,
+        branch: str | None = None,
+        repo_path: str | None = None,
+    ) -> bool:
+        """Persist the chat's branch + repo scope for a session.
+
+        The frontend always sends the session's full current scope, so both
+        fields are overwritten (``None`` = cleared → the working tree / the
+        per-project repo-ground fallback).
+        """
+        session = self._load_session(project_path, session_id)
+        if session:
+            session.branch = branch
+            session.repo_path = repo_path
             self._save_session(project_path, session)
             return True
         return False

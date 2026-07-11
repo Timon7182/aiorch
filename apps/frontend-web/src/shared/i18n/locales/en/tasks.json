@@ -157,7 +157,8 @@
       "resets": "Resets",
       "recentActivity": "Recent activity (msgs/day)",
       "byModel": "By model (all-time)",
-      "source": "Source: ~/.claude/stats-cache.json — same data as `claude /usage`."
+      "source": "Source: ~/.claude/stats-cache.json — same data as `claude /usage`.",
+      "notAvailable": "Claude CLI stats are not available on this server."
     }
   },
   "status": {

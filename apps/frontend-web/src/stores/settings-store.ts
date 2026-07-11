@@ -4,6 +4,7 @@ import type { APIProfile, ProfileFormData, TestConnectionResult, DiscoverModelsR
 import { DEFAULT_APP_SETTINGS } from '../shared/constants';
 import { toast } from '../hooks/use-toast';
 import i18n from '../shared/i18n';
+import { persistTheme } from '../lib/apply-theme';
 
 interface SettingsState {
   settings: AppSettings;
@@ -63,12 +64,21 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   modelsError: null,
   discoveredModels: new Map<string, ModelInfo[]>(),
 
-  setSettings: (settings) => set({ settings }),
+  setSettings: (settings) => {
+    // Cache theme for the pre-paint inline script the moment authoritative
+    // settings arrive (e.g. from the server via loadSettings).
+    persistTheme(settings.theme, settings.colorTheme ?? undefined);
+    set({ settings });
+  },
 
   updateSettings: (updates) =>
-    set((state) => ({
-      settings: { ...state.settings, ...updates }
-    })),
+    set((state) => {
+      const settings = { ...state.settings, ...updates };
+      if (updates.theme !== undefined || updates.colorTheme !== undefined) {
+        persistTheme(settings.theme, settings.colorTheme ?? undefined);
+      }
+      return { settings };
+    }),
 
   setLoading: (isLoading) => set({ isLoading }),
 

@@ -311,6 +311,86 @@ class GraphitiMemory:
             return False
         return await self._queries.add_chat_episode(text, name_hint)
 
+    # Episode listing / deletion (user-facing memory management)
+
+    async def list_episodes(self, limit: int = 50) -> list[dict]:
+        """
+        List recent raw episodes stored for this memory's group.
+
+        Uses graphiti-core's ``retrieve_episodes`` to read the episodic nodes
+        directly (unlike search, which returns extracted facts). Returned
+        newest-first as plain dicts so callers (e.g. the web UI) can render and
+        manage them.
+
+        Args:
+            limit: Maximum number of episodes to return
+
+        Returns:
+            List of dicts with uuid, name, content, source_description,
+            created_at, valid_at. Empty list if unavailable or on error.
+        """
+        if not await self._ensure_initialized():
+            return []
+
+        try:
+            episodes = await self._client.graphiti.retrieve_episodes(
+                reference_time=datetime.now(timezone.utc),
+                last_n=max(1, int(limit)),
+                group_ids=[self.group_id],
+            )
+        except Exception as e:
+            logger.warning(f"Failed to list episodes: {e}")
+            return []
+
+        def _iso(value):
+            return value.isoformat() if hasattr(value, "isoformat") else value
+
+        items: list[dict] = []
+        for ep in episodes or []:
+            items.append(
+                {
+                    "uuid": getattr(ep, "uuid", None),
+                    "name": getattr(ep, "name", None),
+                    "content": getattr(ep, "content", None),
+                    "source_description": getattr(ep, "source_description", None),
+                    "created_at": _iso(getattr(ep, "created_at", None)),
+                    "valid_at": _iso(getattr(ep, "valid_at", None)),
+                }
+            )
+
+        # retrieve_episodes returns chronological (oldest-first); show newest-first.
+        items.reverse()
+        return items
+
+    async def delete_episode(self, episode_uuid: str) -> bool:
+        """
+        Delete an episode (and its solely-owned entities/facts) from the graph.
+
+        Wraps graphiti-core's ``remove_episode``, which cascades: entities and
+        facts created only by this episode are removed, while those also
+        supported by other episodes are preserved.
+
+        Args:
+            episode_uuid: UUID of the episode to remove
+
+        Returns:
+            True if the episode was removed, False if unavailable or on error.
+        """
+        if not episode_uuid or not await self._ensure_initialized():
+            return False
+
+        try:
+            await self._client.graphiti.remove_episode(episode_uuid)
+        except Exception as e:
+            logger.warning(f"Failed to delete episode {episode_uuid}: {e}")
+            return False
+
+        # Keep the tracked counter roughly in sync (best-effort).
+        if self.state and self.state.episode_count > 0:
+            self.state.episode_count -= 1
+            self.state.save(self.spec_dir)
+        return True
+
     # Delegate methods to search module
 
     async def get_relevant_context(

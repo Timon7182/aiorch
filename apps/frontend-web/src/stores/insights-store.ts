@@ -536,6 +536,22 @@ export async function updateModelConfig(projectId: string, sessionId: string, mo
   return false;
 }
 
+export async function updateSessionScope(
+  projectId: string,
+  sessionId: string,
+  branch?: string,
+  repoPath?: string
+): Promise<boolean> {
+  const result = await window.API.updateInsightsSessionScope(projectId, sessionId, branch, repoPath);
+  if (result.success) {
+    const store = useInsightsStore.getState();
+    if (store.session?.id === sessionId) {
+      store.setSession({ ...store.session, branch, repoPath, updatedAt: new Date() });
+    }
+  }
+  return result.success;
+}
+
 export async function createTaskFromSuggestion(
   projectId: string,
   title: string,

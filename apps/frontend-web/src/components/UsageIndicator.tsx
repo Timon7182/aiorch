@@ -43,6 +43,11 @@ export function UsageIndicator() {
     return null;
   }
 
+  // No Claude CLI stats on this server — hide the widget rather than showing 0%.
+  if (usage.available === false) {
+    return null;
+  }
+
   // Determine color based on highest usage percentage
   const maxUsage = Math.max(usage.sessionPercent, usage.weeklyPercent);
 

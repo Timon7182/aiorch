@@ -124,9 +124,9 @@ export function InsightsModelSelector({
   // Build display text
   const getDisplayText = () => {
     if (currentConfig?.model) {
-      const providerName = PROVIDER_INFO[currentProvider]?.displayName || currentProvider;
-      // Find the model label from available providers
+      // Find the provider (incl. dynamic endpoint:* entries) from detection.
       const providerData = availableProviders.find(p => p.provider === currentProvider);
+      const providerName = providerData?.displayName || PROVIDER_INFO[currentProvider]?.displayName || currentProvider;
       const modelLabel = providerData?.models.find(m => m.id === currentConfig.model)?.label || currentConfig.model;
       return `${providerName}: ${modelLabel}`;
     }

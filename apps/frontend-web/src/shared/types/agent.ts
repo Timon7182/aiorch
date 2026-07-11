@@ -45,6 +45,10 @@ export interface ClaudeUsageSnapshot {
   fetchedAt: Date;
   /** Which limit is closest to threshold ('session' or 'weekly') */
   limitType?: 'session' | 'weekly';
+  /** False when the server has no Claude CLI stats file (renders empty state) */
+  available?: boolean;
+  /** Human-readable reason when `available` is false */
+  reason?: string;
 }
 
 /**

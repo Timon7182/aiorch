@@ -213,5 +213,10 @@
         "unknown": "Alternado automaticamente para {{profileName}}"
       }
     }
+  },
+  "usage": {
+    "claudeCli": {
+      "notAvailable": "As estatísticas do Claude CLI não estão disponíveis neste servidor."
+    }
   }
 }

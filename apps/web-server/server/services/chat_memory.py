@@ -97,6 +97,26 @@ async def _get_memory(project_path: Path):
             return None
 
 
+async def get_memory(project_path: Path):
+    """Public accessor: the cached, initialised project-scoped GraphitiMemory.
+
+    Returns the same shared handle the chat path uses (see module docstring on
+    why it must be reused, not reopened), or ``None`` when Graphiti is disabled
+    or cannot initialise. Callers that mutate the DB should serialise via
+    :func:`get_lock`.
+    """
+    return await _get_memory(project_path)
+
+
+def get_lock(project_path: Path) -> asyncio.Lock:
+    """Return the per-project lock serialising ops on the shared DB handle.
+
+    Falls back to a throwaway lock if the memory was never opened (defensive;
+    callers should only reach here after :func:`get_memory` returned a handle).
+    """
+    return _locks.get(str(project_path.resolve())) or asyncio.Lock()
+
+
 def _format(items) -> str:
     """Render recalled context items into a compact, model-facing block."""
     lines: list[str] = []

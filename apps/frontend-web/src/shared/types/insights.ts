@@ -122,6 +122,12 @@ export interface InsightsSession {
   title?: string; // Auto-generated from first message or user-set
   messages: InsightsChatMessage[];
   modelConfig?: InsightsModelConfig; // Per-session model configuration
+  // Per-session chat scope, restored when re-entering the chat. `branch` is the
+  // branch the chat reads from ('' / undefined = current working tree);
+  // `repoPath` is the multi-repo chat-ground value (a repo path or the
+  // '__all__' sentinel; undefined = not set → per-project fallback).
+  branch?: string;
+  repoPath?: string;
   createdAt: Date;
   updatedAt: Date;
   // Server-side turn state: true while a chat turn is running for this project

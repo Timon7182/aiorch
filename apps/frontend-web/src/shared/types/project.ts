@@ -250,7 +250,37 @@ export interface GraphitiMemoryState {
   last_session?: number;
   episode_count: number;
   error_log: Array<{ timestamp: string; error: string }>;
+  // Graph-memory extras (populated when Graphiti is available)
+  enabled?: boolean;
+  groupId?: string;
+  embedderProvider?: string | null;
+  hasApiKey?: boolean;
 }
+
+// A raw episode stored in the Graphiti knowledge graph (editable via the UI).
+export interface GraphMemoryEpisode {
+  uuid: string | null;
+  name: string | null;
+  content: string | null;
+  source_description: string | null;
+  created_at: string | null;
+  valid_at: string | null;
+}
+
+export interface GraphMemoryEpisodesResponse {
+  available: boolean;
+  reason?: string;
+  groupId?: string;
+  episodes: GraphMemoryEpisode[];
+}
+
+export interface GraphMemorySearchResponse {
+  available: boolean;
+  reason?: string;
+  results: ContextSearchResult[];
+}
+
+export type GraphMemoryKind = 'fact' | 'pattern' | 'gotcha';
 
 export interface MemoryEpisode {
   id: string;

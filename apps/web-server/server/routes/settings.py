@@ -1715,9 +1715,22 @@ async def request_usage_update():
     """
     from datetime import datetime, timedelta
 
-    stats_file = Path.home() / ".claude" / "stats-cache.json"
+    # Resolve the Claude CLI stats file. Order:
+    #   1. CLAUDE_STATS_PATH env (explicit absolute path — e.g. in Docker)
+    #   2. ~/.claude/stats-cache.json (native CLI location)
+    #   3. ~/.claude-seed/stats-cache.json (host seed dir mounted into the
+    #      container, mirroring claude_token_service's _SEED_DIR_PATH)
+    stats_candidates: list[Path] = []
+    env_stats = os.environ.get("CLAUDE_STATS_PATH")
+    if env_stats:
+        stats_candidates.append(Path(env_stats))
+    stats_candidates.append(Path.home() / ".claude" / "stats-cache.json")
+    stats_candidates.append(Path.home() / ".claude-seed" / "stats-cache.json")
+    stats_file = next((p for p in stats_candidates if p.exists()), None)
 
-    # Default response
+    # Default response. `available=false` tells the frontend to render an
+    # empty state instead of a misleading all-zero dashboard. Shape is
+    # otherwise backward-compatible.
     default_response = {
         "sessionPercent": 0,
         "weeklyPercent": 0,
@@ -1726,10 +1739,12 @@ async def request_usage_update():
         "profileId": "local",
         "profileName": "Local Stats",
         "fetchedAt": datetime.now().isoformat(),
-        "limitType": None
+        "limitType": None,
+        "available": False,
+        "reason": "Claude CLI stats file not found on this server.",
     }
 
-    if not stats_file.exists():
+    if stats_file is None:
         return default_response
 
     try:
@@ -1814,10 +1829,14 @@ async def request_usage_update():
             "recentDaily": recent_daily,
             "dailyLimit": DAILY_LIMIT_ESTIMATE,
             "weeklyLimit": WEEKLY_LIMIT_ESTIMATE,
+            "available": True,
         }
 
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return default_response
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        return {
+            **default_response,
+            "reason": f"Failed to read Claude CLI stats: {exc}",
+        }
 
 
 # --------------------------------------------------------------------------
