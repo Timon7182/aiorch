@@ -450,6 +450,24 @@ class TelegramBotService:
         if not mentioned and not replying_to_bot:
             return
 
+        # Diagnostic: log the shape of what Telegram actually delivered —
+        # reply context can silently go missing (privacy mode, external
+        # replies, quote-replies), and this is the only way to see it.
+        try:
+            snapshot = {
+                k: message.get(k)
+                for k in ("message_id", "from", "text", "caption",
+                          "reply_to_message", "quote", "external_reply",
+                          "forward_origin", "via_bot", "message_thread_id")
+                if message.get(k) is not None
+            }
+            logger.info(
+                "[Telegram] dispatch %s: %s", chat_id,
+                json.dumps(snapshot, ensure_ascii=False, default=str)[:2000],
+            )
+        except Exception:
+            pass
+
         task = asyncio.create_task(
             self._handle_request(token, bot_username, binding, message)
         )
@@ -509,6 +527,10 @@ class TelegramBotService:
         reply_to = message.get("reply_to_message") or {}
         reply_to_id = reply_to.get("message_id")
         replied_text = reply_to.get("text") or reply_to.get("caption") or ""
+        # Quote-replies carry the selected excerpt in message.quote even when
+        # the full replied-to message text is unavailable.
+        if not replied_text:
+            replied_text = (message.get("quote") or {}).get("text") or ""
 
         service = get_insights_service()
 
