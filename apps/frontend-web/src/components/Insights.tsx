@@ -45,6 +45,7 @@ import {
   deleteSession,
   renameSession,
   updateModelConfig,
+  updateSessionScope,
   createTaskFromSuggestion,
   generateTaskFromChat
 } from '../stores/insights-store';
@@ -198,6 +199,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   // loaded into the store by the sidebar when a project is selected.
   const reposByProject = useProjectStore((state) => state.reposByProject);
   const chatGroundByProject = useProjectStore((state) => state.chatGroundByProject);
+  const setChatGround = useProjectStore((state) => state.setChatGround);
   const repos = reposByProject[projectId] ?? [];
   const isMultiRepo = repos.length > 1;
   // Chat grounding: a multi-repo project defaults to ALL_REPOS (the whole
@@ -236,6 +238,15 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
   const [generatedDescription, setGeneratedDescription] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  // Whether new content should keep the view pinned to the bottom. Flipped off
+  // when the user scrolls up to read history, back on when they return to the
+  // bottom. Reset to true on every session open/switch.
+  const stickToBottomRef = useRef(true);
+  // Set on session open/switch so the streaming auto-scroll effect skips the
+  // one render caused by loading a whole history (that jump is handled instantly
+  // below, without smooth animation).
+  const sessionJustLoadedRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -270,8 +281,58 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
 
-  // Auto-scroll to bottom when messages change
+  // Track whether the user is parked near the bottom. A persistent listener on
+  // the Radix viewport keeps stickToBottomRef in sync so streaming never yanks
+  // the user up while they're reading older messages.
   useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const onScroll = () => {
+      stickToBottomRef.current =
+        vp.scrollHeight - vp.scrollTop - vp.clientHeight < 120;
+    };
+    vp.addEventListener('scroll', onScroll, { passive: true });
+    return () => vp.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // On session OPEN/SWITCH: jump to the bottom instantly (no smooth animation)
+  // and re-assert it after late layout — ReactMarkdown + rehypeHighlight and
+  // images/attachments grow the content by thousands of px AFTER this commit, so
+  // a single scroll would settle far above the true bottom. A ResizeObserver
+  // keeps the view pinned to the bottom for a brief window (or until the user
+  // scrolls away) to absorb that late growth.
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    stickToBottomRef.current = true;
+    sessionJustLoadedRef.current = true;
+    const jump = () => { vp.scrollTop = vp.scrollHeight; };
+    jump();
+    const raf = requestAnimationFrame(() => { jump(); requestAnimationFrame(jump); });
+    const timeout = window.setTimeout(jump, 150);
+    const content = vp.firstElementChild;
+    const ro = new ResizeObserver(() => {
+      if (stickToBottomRef.current) vp.scrollTop = vp.scrollHeight;
+    });
+    if (content) ro.observe(content);
+    const stop = window.setTimeout(() => ro.disconnect(), 1500);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timeout);
+      window.clearTimeout(stop);
+      ro.disconnect();
+    };
+  }, [session?.id]);
+
+  // Smooth auto-scroll for live streaming / new messages, but only when the user
+  // is already near the bottom. Skips the render triggered by a session load
+  // (handled instantly above) so history never animates from the top.
+  useEffect(() => {
+    if (sessionJustLoadedRef.current) {
+      sessionJustLoadedRef.current = false;
+      return;
+    }
+    if (!stickToBottomRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [session?.messages, streamingContent, streamingThinking]);
 
@@ -312,11 +373,48 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     };
   }, [activeRepoPath]);
 
-  // Reset branch choice back to the working tree when the project or active
-  // repo changes (each repo has its own branches).
+  // Seed the repo ground from the session's saved scope (multi-repo only), once
+  // per session. The per-session server value takes precedence over the
+  // per-project localStorage fallback; sessions without a saved repo keep the
+  // current fallback.
+  const seededRepoForSession = useRef<string | null>(null);
   useEffect(() => {
-    setSelectedBranch('');
-  }, [activeRepoPath]);
+    if (!session?.id || !isMultiRepo) return;
+    if (seededRepoForSession.current === session.id) return;
+    seededRepoForSession.current = session.id;
+    if (session.repoPath) {
+      setChatGround(projectId, session.repoPath);
+    }
+  }, [session?.id, session?.repoPath, isMultiRepo, projectId, setChatGround]);
+
+  // Seed the branch selector from the session, and reset it to the working tree
+  // when the user switches repos (each repo has its own branches). We track the
+  // previous session id + active repo so a session load — which may also change
+  // the active repo via the seed above — applies the saved branch instead of
+  // being clobbered by the repo-change reset.
+  const prevScopeRef = useRef<{ sessionId: string | null; repo: string | null }>({
+    sessionId: null,
+    repo: null,
+  });
+  useEffect(() => {
+    const sessionId = session?.id ?? null;
+    if (prevScopeRef.current.sessionId !== sessionId) {
+      // New session: record the repo it will settle on (the repo seed above may
+      // still be pending) so the next render's repo comparison is a no-op.
+      const targetRepo = isMultiRepo
+        ? (session?.repoPath
+            ? (session.repoPath === ALL_REPOS ? null : session.repoPath)
+            : activeRepoPath)
+        : activeRepoPath;
+      prevScopeRef.current = { sessionId, repo: targetRepo };
+      setSelectedBranch(session?.branch ?? '');
+      return;
+    }
+    if (prevScopeRef.current.repo !== activeRepoPath) {
+      prevScopeRef.current.repo = activeRepoPath;
+      setSelectedBranch('');
+    }
+  }, [session?.id, session?.branch, session?.repoPath, activeRepoPath, isMultiRepo]);
 
   // CodeGraph is only offered when the selected branch/repo's working dir is
   // actually indexed (a fresh branch worktree has no .codegraphcontext/). Fetch
@@ -483,6 +581,14 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
     }
   };
 
+  // Persist the chat's scope (branch + repo ground) onto the session so
+  // re-entering the chat restores it. `ground` is the multi-repo chat-ground
+  // value (repo path or ALL_REPOS), or null for single-repo projects.
+  const persistScope = useCallback((branch: string, ground: string | null) => {
+    if (!session?.id) return;
+    void updateSessionScope(projectId, session.id, branch || undefined, ground ?? undefined);
+  }, [projectId, session?.id]);
+
   const handleGenerateTask = async () => {
     setShowCreateTaskDialog(true);
     setIsGeneratingTask(true);
@@ -586,7 +692,14 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
           <div className="flex shrink-0 items-center gap-2">
             {/* Repo picker — only renders for multi-repo projects (e.g. cts).
                 Scopes the branch list + chat grounding to the chosen repo. */}
-            <RepoSwitcher projectId={projectId} />
+            <RepoSwitcher
+              projectId={projectId}
+              onChange={(value) => {
+                // Repo changed → branch resets to the working tree (handled by
+                // the scope effect); persist the new repo with a cleared branch.
+                persistScope('', value);
+              }}
+            />
             <InsightsModelSelector
               projectId={projectId}
               currentConfig={session?.modelConfig}
@@ -656,7 +769,7 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
       )}
 
       {/* Messages */}
-      <ScrollArea className="flex-1 px-6 py-4">
+      <ScrollArea viewportRef={viewportRef} className="flex-1 px-6 py-4">
         {messages.length === 0 && !streamingContent ? (
           <div className="flex h-full flex-col items-center justify-center text-center">
             <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted">
@@ -817,7 +930,11 @@ export function Insights({ projectId, onNavigate }: InsightsProps) {
             <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <select
               value={selectedBranch}
-              onChange={(e) => setSelectedBranch(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setSelectedBranch(value);
+                persistScope(value, isMultiRepo ? chatGround : null);
+              }}
               disabled={isLoading}
               title="Read from a specific branch (a read-only worktree; your working tree is not touched)"
               className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"

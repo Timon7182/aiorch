@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSettingsStore, saveSettings as saveSettingsToStore, loadSettings as loadSettingsFromStore } from '../../../stores/settings-store';
 import type { AppSettings } from '../../../shared/types';
 import { UI_SCALE_DEFAULT } from '../../../shared/constants';
+import { applyTheme as applyThemeToDom } from '../../../lib/apply-theme';
 
 /**
  * Custom hook for managing application settings
@@ -64,19 +65,10 @@ export function useSettings() {
     }
   };
 
+  // Delegate to the single centralized applier so the DOM class, data-theme,
+  // and first-paint localStorage cache stay consistent everywhere.
   const applyTheme = (theme: 'light' | 'dark' | 'system') => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else if (theme === 'light') {
-      document.documentElement.classList.remove('dark');
-    } else {
-      // System preference
-      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-    }
+    applyThemeToDom(theme, settings.colorTheme ?? undefined);
   };
 
   const updateSettings = (partial: Partial<AppSettings>) => {

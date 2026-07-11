@@ -688,6 +688,15 @@ export const webAPI: API & { _isWebMode: boolean } = {
     get(`/projects/${projectId}/memory/search?q=${encodeURIComponent(query)}`),
   getRecentMemories: (projectId: string, limit?: number) =>
     get(`/projects/${projectId}/memory/recent${limit ? `?limit=${limit}` : ''}`),
+  // Graph memory (Graphiti knowledge graph — visible/editable)
+  getMemoryEpisodes: (projectId: string, limit?: number) =>
+    get(`/projects/${projectId}/memory/episodes${limit ? `?limit=${limit}` : ''}`),
+  addMemoryEpisode: (projectId: string, content: string, kind?: string) =>
+    post(`/projects/${projectId}/memory/episodes`, { content, kind: kind || 'fact' }),
+  deleteMemoryEpisode: (projectId: string, uuid: string) =>
+    del(`/projects/${projectId}/memory/episodes/${encodeURIComponent(uuid)}`),
+  searchMemoryGraph: (projectId: string, query: string) =>
+    get(`/projects/${projectId}/memory/episodes/search?q=${encodeURIComponent(query)}`),
 
   // Environment configuration
   getProjectEnv: (projectId: string) => get<ProjectEnvConfig>(`/projects/${projectId}/env`),
@@ -865,6 +874,8 @@ export const webAPI: API & { _isWebMode: boolean } = {
     patch(`/projects/${projectId}/insights/sessions/${sessionId}`, { title: newTitle }),
   updateInsightsModelConfig: (projectId: string, sessionId: string, modelConfig: InsightsModelConfig) =>
     patch(`/projects/${projectId}/insights/sessions/${sessionId}/model`, modelConfig),
+  updateInsightsSessionScope: (projectId: string, sessionId: string, branch?: string, repoPath?: string) =>
+    patch(`/projects/${projectId}/insights/sessions/${sessionId}/scope`, { branch, repoPath }),
   onInsightsStreamChunk: (callback) => {
     return registerCallback('insights:chunk', (payload: { projectId: string; [key: string]: unknown }) => {
       const { projectId, ...chunk } = payload;

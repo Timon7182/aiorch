@@ -12,6 +12,7 @@ import enDialogs from './locales/en/dialogs.json';
 import enTaskReview from './locales/en/taskReview.json';
 import enTerminal from './locales/en/terminal.json';
 import enDocs from './locales/en/docs.json';
+import enContext from './locales/en/context.json';
 
 // Import French translation resources
 import frCommon from './locales/fr/common.json';
@@ -24,6 +25,7 @@ import frDialogs from './locales/fr/dialogs.json';
 import frTaskReview from './locales/fr/taskReview.json';
 import frTerminal from './locales/fr/terminal.json';
 import frDocs from './locales/fr/docs.json';
+import frContext from './locales/fr/context.json';
 
 // Import Portuguese (Brazil) translation resources
 import ptBRCommon from './locales/pt-BR/common.json';
@@ -36,6 +38,7 @@ import ptBRDialogs from './locales/pt-BR/dialogs.json';
 import ptBRTaskReview from './locales/pt-BR/taskReview.json';
 import ptBRTerminal from './locales/pt-BR/terminal.json';
 import ptBRDocs from './locales/pt-BR/docs.json';
+import ptBRContext from './locales/pt-BR/context.json';
 
 export const defaultNS = 'common';
 
@@ -50,7 +53,8 @@ export const resources = {
     dialogs: enDialogs,
     taskReview: enTaskReview,
     terminal: enTerminal,
-    docs: enDocs
+    docs: enDocs,
+    context: enContext
   },
   fr: {
     common: frCommon,
@@ -62,7 +66,8 @@ export const resources = {
     dialogs: frDialogs,
     taskReview: frTaskReview,
     terminal: frTerminal,
-    docs: frDocs
+    docs: frDocs,
+    context: frContext
   },
   'pt-BR': {
     common: ptBRCommon,
@@ -74,7 +79,8 @@ export const resources = {
     dialogs: ptBRDialogs,
     taskReview: ptBRTaskReview,
     terminal: ptBRTerminal,
-    docs: ptBRDocs
+    docs: ptBRDocs,
+    context: ptBRContext
   }
 } as const;
 
@@ -85,7 +91,7 @@ i18n
     lng: 'en', // Default language (will be overridden by settings)
     fallbackLng: 'en',
     defaultNS,
-    ns: ['common', 'navigation', 'settings', 'tasks', 'welcome', 'onboarding', 'dialogs', 'taskReview', 'terminal', 'docs'],
+    ns: ['common', 'navigation', 'settings', 'tasks', 'welcome', 'onboarding', 'dialogs', 'taskReview', 'terminal', 'docs', 'context'],
     interpolation: {
       escapeValue: false // React already escapes values
     },

@@ -851,6 +851,21 @@ class UpdateModelConfigRequest(BaseModel):
     model: str | None = None
     thinkingLevel: str | None = None
     temperature: float | None = None
+    # The full selector config also carries these — they must be declared or
+    # Pydantic silently drops them, so the picker's code-search / DB / logs /
+    # UI-check selections would reset on the next reload.
+    codeSearch: str | None = None
+    dbProfileId: str | None = None
+    logsEnabled: bool | None = None
+    uiCheckEnabled: bool | None = None
+
+
+class UpdateSessionScopeRequest(BaseModel):
+    # Branch the chat grounds in ("" / None = current working tree) and the
+    # multi-repo chat-ground value (a repo path or the "__all__" sentinel;
+    # None = not set → per-project fallback).
+    branch: str | None = None
+    repoPath: str | None = None
 
 
 @insights_router.get("")
@@ -879,6 +894,8 @@ async def get_insights_session(projectId: str = Path(...)):
                 for msg in session.messages
             ],
             "modelConfig": session.model_config,
+            "branch": session.branch,
+            "repoPath": session.repo_path,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
             # Turn state: lets the frontend restore the thinking indicator
@@ -1081,6 +1098,11 @@ async def new_insights_session(projectId: str = Path(...)):
             "projectId": session.project_id,
             "title": session.title,
             "messages": [],
+            # Return the default config so the picker shows the model a new chat
+            # will use (instead of appearing unset until the next reload).
+            "modelConfig": session.model_config,
+            "branch": session.branch,
+            "repoPath": session.repo_path,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
         }
@@ -1116,6 +1138,8 @@ async def switch_insights_session(projectId: str = Path(...), sessionId: str = P
                 for msg in session.messages
             ],
             "modelConfig": session.model_config,
+            "branch": session.branch,
+            "repoPath": session.repo_path,
             "createdAt": session.created_at,
             "updatedAt": session.updated_at,
             # Turn state: lets the frontend restore the thinking indicator
@@ -1153,6 +1177,24 @@ async def update_insights_model_config(
     """Update model config for a session."""
     project_path = _get_project_path(projectId)
     service = get_insights_service()
-    config = {k: v for k, v in request.model_dump().items() if v is not None}
+    # exclude_unset: persist exactly the fields the client sent (the frontend
+    # always sends its complete intended config, omitting off toggles), so a
+    # cleared setting is dropped rather than silently retained.
+    config = request.model_dump(exclude_unset=True)
     success = service.update_model_config(project_path, sessionId, config)
+    return {"success": success}
+
+
+@insights_router.patch("/sessions/{sessionId}/scope")
+async def update_insights_session_scope(
+    projectId: str = Path(...),
+    sessionId: str = Path(...),
+    request: UpdateSessionScopeRequest = ...
+):
+    """Persist the chat's branch + repo scope for a session."""
+    project_path = _get_project_path(projectId)
+    service = get_insights_service()
+    success = service.update_session_scope(
+        project_path, sessionId, branch=request.branch, repo_path=request.repoPath
+    )
     return {"success": success}

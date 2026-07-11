@@ -40,6 +40,25 @@ def _empty_totals() -> dict[str, Any]:
     }
 
 
+def _has_usage(totals: dict[str, Any]) -> bool:
+    """True when a usage record carries any signal — calls OR tokens.
+
+    Some providers/turns record token counts without a `calls` increment (or
+    vice-versa); gating purely on `calls > 0` silently hides real usage.
+    """
+    if int(totals.get("calls", 0) or 0) > 0:
+        return True
+    return any(
+        int(totals.get(k, 0) or 0) > 0
+        for k in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        )
+    )
+
+
 def _read_usage_file(usage_file: Path) -> dict[str, Any] | None:
     """Parse a single usage.json file, normalising its shape. None if absent."""
     if not usage_file.exists():
@@ -95,13 +114,13 @@ def _load_usage(spec_dir: Path) -> dict[str, Any] | None:
     per-task tab still show real numbers. Returns None when neither exists.
     """
     data = _read_usage_file(spec_dir / USAGE_FILENAME)
-    if data is not None and data["totals"].get("calls", 0) > 0:
+    if data is not None and _has_usage(data["totals"]):
         return data
 
     worktree_file = _worktree_usage_file(spec_dir)
     if worktree_file is not None:
         worktree_data = _read_usage_file(worktree_file)
-        if worktree_data is not None and worktree_data["totals"].get("calls", 0) > 0:
+        if worktree_data is not None and _has_usage(worktree_data["totals"]):
             return worktree_data
 
     return data
@@ -129,7 +148,7 @@ def _summarize_task(project_id: str, spec_dir: Path) -> dict[str, Any]:
         "taskId": f"{project_id}:{spec_dir.name}",
         "specId": spec_dir.name,
         "totals": totals,
-        "hasData": usage is not None and totals.get("calls", 0) > 0,
+        "hasData": usage is not None and _has_usage(totals),
         "updatedAt": (usage or {}).get("updated_at"),
     }
 
@@ -164,7 +183,7 @@ async def get_task_usage(task_id: str) -> dict[str, Any]:
         "taskId": task_id,
         "projectId": project_id,
         "specId": spec_id,
-        "hasData": usage["totals"].get("calls", 0) > 0,
+        "hasData": _has_usage(usage["totals"]),
         "createdAt": usage.get("created_at"),
         "updatedAt": usage.get("updated_at"),
         "totals": usage["totals"],
@@ -242,7 +261,7 @@ async def get_project_usage(project_id: str) -> dict[str, Any]:
                 bucket = by_model.setdefault(model, _empty_totals())
                 _accumulate(bucket, model_data)
         tasks_summary.append(_summarize_task(project_id, spec_dir))
-    if spec_feature_totals["calls"] > 0:
+    if _has_usage(spec_feature_totals):
         by_feature["agent"] = spec_feature_totals
 
     # --- Session usage (Hermes, Insights chat) ------------------------------

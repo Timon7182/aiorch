@@ -12,7 +12,6 @@ import { Worktrees } from './components/Worktrees';
 import { Context } from './components/context/Context';
 import { GitHubIssues } from './components/GitHubIssues';
 import { GitHubPRs } from './components/github-prs/GitHubPRs';
-import { Changelog } from './components/changelog/Changelog';
 import { Insights } from './components/Insights';
 import { UsageView } from './components/UsageView';
 import { AgentTools } from './components/AgentTools';
@@ -28,7 +27,6 @@ import { LoadingScreen } from './components/LoadingScreen';
 import { ProjectSwitchLoadingModal } from './components/ProjectSwitchLoadingModal';
 import { LoginPage } from './pages/LoginPage';
 import { EditorPage } from './pages/EditorPage';
-import { HermesPage } from './pages/HermesPage';
 import { PendingApprovalScreen } from './pages/PendingApprovalScreen';
 import { MembersPage } from './pages/MembersPage';
 import { TranscriptsPage } from './pages/TranscriptsPage';
@@ -42,6 +40,7 @@ import { useIpcListeners } from './hooks/useIpc';
 import { useIsMobile } from './hooks/use-media-query';
 import { useWorkspaceRoute, GLOBAL_VIEWS, DEFAULT_PROJECT_VIEW } from './hooks/use-workspace-route';
 import { cn } from './lib/utils';
+import { applyTheme } from './lib/apply-theme';
 import { UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_DEFAULT } from './shared/constants';
 import type { Task, Project } from './shared/types';
 
@@ -252,50 +251,6 @@ function AuthenticatedApp() {
     return () => clearTimeout(timeout);
   }, [isSwitchingProject]);
 
-  // Apply theme (light/dark mode + Ocean color theme)
-  useEffect(() => {
-    const root = document.documentElement;
-
-    // Always use Ocean color theme
-    root.setAttribute('data-theme', 'ocean');
-
-    const applyTheme = () => {
-      if (settings.theme === 'dark') {
-        root.classList.add('dark');
-      } else if (settings.theme === 'light') {
-        root.classList.remove('dark');
-      } else {
-        if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-          root.classList.add('dark');
-        } else {
-          root.classList.remove('dark');
-        }
-      }
-    };
-
-    applyTheme();
-
-    // Persist to localStorage so the inline script in index.html can apply
-    // the theme synchronously on next load, preventing a flash of wrong colors
-    try {
-      localStorage.setItem('magestic-theme', settings.theme ?? 'system');
-    } catch {
-      // localStorage may be unavailable
-    }
-
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleChange = () => {
-      if (settings.theme === 'system') {
-        applyTheme();
-      }
-    };
-    mediaQuery.addEventListener('change', handleChange);
-
-    return () => {
-      mediaQuery.removeEventListener('change', handleChange);
-    };
-  }, [settings.theme]);
-
   // Apply UI scale
   useEffect(() => {
     const root = document.documentElement;
@@ -408,9 +363,7 @@ function AuthenticatedApp() {
                   but is hidden while a task page is open. */}
               {/*<div className={cn('h-full overflow-hidden', selectedTaskId && 'hidden')}>*/}
               <div className={cn('min-h-full', selectedTaskId && 'hidden')}>
-                {activeView === 'hermes' ? (
-                  <HermesPage />
-                ) : activeView === 'members' ? (
+                {activeView === 'members' ? (
                   <MembersPage />
                 ) : activeView === 'admin' ? (
                   <AdminPage />
@@ -468,7 +421,6 @@ function AuthenticatedApp() {
                         isActive={true}
                       />
                     )}
-                    {activeView === 'changelog' && <Changelog />}
                     {activeView === 'usage' && (
                       <UsageView projectId={selectedProject?.id || ''} />
                     )}
@@ -570,6 +522,23 @@ export default function App() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const userStatus = useAuthStore((state) => state.user?.status);
   const checkAuth = useAuthStore((state) => state.checkAuth);
+
+  // Apply theme (light/dark mode + color theme) at the top level so the
+  // login and pending-approval screens are corrected too — not just the
+  // authenticated app. Subscribes to the settings store so any change
+  // (server load, live preview, save, revert) re-applies through the single
+  // applyTheme() writer, which also refreshes the first-paint localStorage cache.
+  const themeMode = useSettingsStore((state) => state.settings.theme);
+  const colorTheme = useSettingsStore((state) => state.settings.colorTheme);
+  useEffect(() => {
+    applyTheme(themeMode, colorTheme ?? undefined);
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = () => {
+      if (themeMode === 'system') applyTheme(themeMode, colorTheme ?? undefined);
+    };
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, [themeMode, colorTheme]);
 
   useEffect(() => {
     checkAuth();

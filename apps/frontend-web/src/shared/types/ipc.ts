@@ -18,6 +18,9 @@ import type {
   GraphitiMemoryStatus,
   ContextSearchResult,
   MemoryEpisode,
+  GraphMemoryEpisodesResponse,
+  GraphMemorySearchResponse,
+  GraphMemoryKind,
   ProjectEnvConfig,
   InfrastructureStatus,
   GraphitiValidationResult,
@@ -418,6 +421,11 @@ export interface API {
   getMemoryStatus: (projectId: string) => Promise<IPCResult<GraphitiMemoryStatus>>;
   searchMemories: (projectId: string, query: string) => Promise<IPCResult<ContextSearchResult[]>>;
   getRecentMemories: (projectId: string, limit?: number) => Promise<IPCResult<MemoryEpisode[]>>;
+  // Graph memory (Graphiti knowledge graph — visible/editable)
+  getMemoryEpisodes: (projectId: string, limit?: number) => Promise<IPCResult<GraphMemoryEpisodesResponse>>;
+  addMemoryEpisode: (projectId: string, content: string, kind?: GraphMemoryKind) => Promise<IPCResult<{ ok: boolean; kind: string }>>;
+  deleteMemoryEpisode: (projectId: string, uuid: string) => Promise<IPCResult<{ deleted: boolean }>>;
+  searchMemoryGraph: (projectId: string, query: string) => Promise<IPCResult<GraphMemorySearchResponse>>;
 
   // Environment configuration operations
   getProjectEnv: (projectId: string) => Promise<IPCResult<ProjectEnvConfig>>;
@@ -620,6 +628,7 @@ export interface API {
   deleteInsightsSession: (projectId: string, sessionId: string) => Promise<IPCResult>;
   renameInsightsSession: (projectId: string, sessionId: string, newTitle: string) => Promise<IPCResult>;
   updateInsightsModelConfig: (projectId: string, sessionId: string, modelConfig: InsightsModelConfig) => Promise<IPCResult>;
+  updateInsightsSessionScope: (projectId: string, sessionId: string, branch?: string, repoPath?: string) => Promise<IPCResult>;
 
   // Insights event listeners
   onInsightsStreamChunk: (

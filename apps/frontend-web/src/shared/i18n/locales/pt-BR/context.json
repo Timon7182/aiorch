@@ -1,0 +1,51 @@
+{
+  "status": {
+    "title": "Status da memória em grafo",
+    "connected": "Conectado",
+    "notAvailable": "Indisponível",
+    "provider": "Embedder",
+    "database": "Banco de dados",
+    "episodes": "Episódios",
+    "groupId": "Grupo",
+    "apiKey": "Chave de API",
+    "apiKeySet": "Configurada",
+    "apiKeyMissing": "Ausente",
+    "lastSession": "Última sessão: #{{number}}",
+    "disabledHint": "Para habilitar a memória em grafo, defina GRAPHITI_ENABLED=true nas configurações do projeto.",
+    "notConfigured": "A memória Graphiti não está configurada"
+  },
+  "graph": {
+    "title": "Memória em grafo",
+    "subtitle": "Fatos armazenados no grafo de conhecimento. Editável.",
+    "reload": "Recarregar",
+    "searchPlaceholder": "Buscar fatos no grafo...",
+    "search": "Buscar",
+    "results_one": "{{count}} resultado encontrado",
+    "results_other": "{{count}} resultados encontrados",
+    "noResults": "Nada foi encontrado",
+    "addTitle": "Adicionar memória",
+    "contentPlaceholder": "Digite um fato, padrão ou armadilha para lembrar...",
+    "kindLabel": "Tipo",
+    "kindFact": "Fato",
+    "kindPattern": "Padrão",
+    "kindGotcha": "Armadilha",
+    "save": "Salvar",
+    "saving": "Salvando...",
+    "empty": "Nenhuma memória em grafo ainda. Adicione uma acima ou deixe as sessões de agente preenchê-la.",
+    "delete": "Excluir",
+    "confirmDelete": "Excluir esta memória? Isso não pode ser desfeito.",
+    "expand": "Expandir",
+    "collapse": "Recolher"
+  },
+  "sessionInsights": {
+    "title": "Insights de sessão",
+    "subtitle": "Registrados automaticamente durante as sessões de build do agente.",
+    "searchTitle": "Buscar insights de sessão",
+    "searchPlaceholder": "Buscar padrões, insights, armadilhas...",
+    "recentTitle": "Insights de sessão recentes",
+    "empty": "Nenhum insight de sessão registrado ainda. Eles são criados durante as sessões de agente de IA.",
+    "noResults": "Nada foi encontrado",
+    "resultsFound_one": "{{count}} resultado encontrado",
+    "resultsFound_other": "{{count}} resultados encontrados"
+  }
+}

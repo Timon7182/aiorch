@@ -11,6 +11,9 @@ import { useProjectStore, ALL_REPOS } from '../stores/project-store';
 interface RepoSwitcherProps {
   projectId: string;
   className?: string;
+  // Fired after the chat-ground selection changes (value is a repo path or the
+  // ALL_REPOS sentinel). Lets callers persist the choice (e.g. per chat session).
+  onChange?: (value: string) => void;
 }
 
 /**
@@ -20,10 +23,15 @@ interface RepoSwitcherProps {
  * Picking a single repo narrows the chat (and enables that repo's CodeGraph).
  * Renders nothing for single-repo projects (the project root is the one repo).
  */
-export function RepoSwitcher({ projectId, className }: RepoSwitcherProps) {
+export function RepoSwitcher({ projectId, className, onChange }: RepoSwitcherProps) {
   const reposByProject = useProjectStore((s) => s.reposByProject);
   const chatGroundByProject = useProjectStore((s) => s.chatGroundByProject);
   const setChatGround = useProjectStore((s) => s.setChatGround);
+
+  const selectGround = (value: string) => {
+    setChatGround(projectId, value);
+    onChange?.(value);
+  };
 
   const repos = reposByProject[projectId] ?? [];
   if (repos.length <= 1) return null;
@@ -61,7 +69,7 @@ export function RepoSwitcher({ projectId, className }: RepoSwitcherProps) {
         <Separator className="my-1" />
         <button
           type="button"
-          onClick={() => setChatGround(projectId, ALL_REPOS)}
+          onClick={() => selectGround(ALL_REPOS)}
           className={cn(
             'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent/50',
             isAll && 'bg-accent'
@@ -84,7 +92,7 @@ export function RepoSwitcher({ projectId, className }: RepoSwitcherProps) {
             <button
               key={repo.path}
               type="button"
-              onClick={() => setChatGround(projectId, repo.path)}
+              onClick={() => selectGround(repo.path)}
               className={cn(
                 'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent/50',
                 isActive && 'bg-accent'

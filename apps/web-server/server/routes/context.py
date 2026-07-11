@@ -62,6 +62,12 @@ class TestGraphitiRequest(BaseModel):
     dbPath: str | None = None
 
 
+class AddMemoryEpisodeRequest(BaseModel):
+    """Body for manually adding a fact to the Graphiti graph memory."""
+    content: str
+    kind: str | None = "fact"  # 'fact' | 'pattern' | 'gotcha'
+
+
 # ============================================
 # Project Context Routes
 # These are mounted under /api/projects/{projectId}
@@ -135,17 +141,53 @@ async def get_project_context(projectId: str = Path(...)):
     graphiti_db = FilePath.home() / ".magestic-ai" / "memories" / "magestic_ai_memory"
     graphiti_available = graphiti_db.exists()
 
+    # Populate the real graph-memory state (Graphiti) so the UI can show
+    # provider / episode info instead of the previous hardcoded None. Fully
+    # defensive: any config/init problem degrades to None (UI shows disabled).
+    memory_state = None
+    graph_available = False
+    try:
+        gmem, _gm_reason = await _get_graph_memory(project_path)
+        if gmem is not None:
+            import os as _os
+
+            summary = gmem.get_status_summary()
+            provider = summary.get("embedder_provider") or ""
+            provider_key = {
+                "openai": "OPENAI_API_KEY",
+                "voyage": "VOYAGE_API_KEY",
+                "google": "GOOGLE_API_KEY",
+                "azure_openai": "AZURE_OPENAI_API_KEY",
+            }.get(provider, "")
+            graph_available = bool(summary.get("enabled"))
+            memory_state = {
+                "initialized": summary.get("initialized", False),
+                "database": summary.get("database"),
+                "indices_built": True,
+                "created_at": gmem.state.created_at if gmem.state else None,
+                "last_session": summary.get("last_session"),
+                "episode_count": summary.get("episode_count", 0),
+                "error_log": [],
+                "enabled": summary.get("enabled", False),
+                "groupId": summary.get("group_id"),
+                "embedderProvider": provider or None,
+                # Never return the key itself, only whether one is configured.
+                "hasApiKey": bool(_os.environ.get(provider_key)) if provider_key else True,
+            }
+    except Exception:
+        memory_state = None
+
     return {
         "success": True,
         "data": {
             "projectIndex": project_index,
             "memoryStatus": {
                 "enabled": True,
-                "available": memory_count > 0 or graphiti_available,
+                "available": memory_count > 0 or graphiti_available or graph_available,
                 "sessionInsightsCount": memory_count,
-                "graphitiAvailable": graphiti_available
+                "graphitiAvailable": graphiti_available or graph_available
             },
-            "memoryState": None,
+            "memoryState": memory_state,
             "recentMemories": recent_memories,
             "isLoading": False
         }
@@ -332,6 +374,217 @@ async def get_recent_memories(projectId: str = Path(...), limit: int = Query(10)
     # Sort by timestamp (most recent first)
     memories.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
     return {"success": True, "data": memories[:limit]}
+
+
+# ============================================
+# Graphiti graph-memory routes (the actual knowledge graph, not the
+# file-based session-insights read by the routes above). These make the
+# graph VISIBLE and EDITABLE from the web UI. All go through the SAME cached
+# GraphitiMemory handle the insights chat uses (chat_memory), because the
+# embedded LadybugDB driver cannot reopen its WAL a second time in-process.
+# Every handler is resilient: a config problem returns available:false + a
+# reason at HTTP 200 rather than a 500.
+# ============================================
+
+def _project_path_or_none(projectId: str):
+    """Resolve a registered project's path, or None if unknown."""
+    from .projects import load_projects
+
+    projects = load_projects()
+    if projectId not in projects:
+        return None
+    return FilePath(projects[projectId]["path"])
+
+
+def _apply_project_env(project_path) -> None:
+    """Surface the project's .magestic-ai/.env into os.environ (best-effort).
+
+    The Graphiti gate (GRAPHITI_ENABLED) and embedder provider keys are read
+    from the process env by chat_memory / GraphitiConfig. We use setdefault so
+    ambient/process values always win and we never clobber another project's
+    configuration.
+    """
+    import os
+
+    env_path = project_path / ".magestic-ai" / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for line in env_path.read_text().split("\n"):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(
+                key.strip(), value.strip().strip('"').strip("'")
+            )
+    except Exception:
+        pass
+
+
+async def _get_graph_memory(project_path):
+    """Return (memory, reason).
+
+    ``memory`` is the shared cached GraphitiMemory, or None when Graphiti is
+    disabled / cannot initialise; ``reason`` is a short human string for the UI
+    in that case. Never raises.
+    """
+    from ..services import chat_memory
+
+    _apply_project_env(project_path)
+    if not chat_memory.is_enabled():
+        return None, (
+            "Graphiti memory is disabled. Enable it by setting "
+            "GRAPHITI_ENABLED=true in project settings."
+        )
+    try:
+        memory = await chat_memory.get_memory(project_path)
+    except Exception as e:
+        return None, f"Graphiti memory unavailable: {e}"
+    if memory is None:
+        return None, (
+            "Graphiti memory could not be initialized. Check the embedder "
+            "provider and its API key in project settings."
+        )
+    return memory, None
+
+
+@project_router.get("/memory/episodes")
+async def list_memory_episodes(projectId: str = Path(...), limit: int = Query(50)):
+    """List recent raw episodes from the project's Graphiti knowledge graph."""
+    project_path = _project_path_or_none(projectId)
+    if project_path is None:
+        return {"success": False, "error": f"Project {projectId} not found"}
+
+    memory, reason = await _get_graph_memory(project_path)
+    if memory is None:
+        return {
+            "success": True,
+            "data": {"available": False, "reason": reason, "episodes": []},
+        }
+
+    from ..services import chat_memory
+
+    try:
+        async with chat_memory.get_lock(project_path):
+            episodes = await memory.list_episodes(limit)
+        return {
+            "success": True,
+            "data": {
+                "available": True,
+                "groupId": memory.group_id,
+                "episodes": episodes,
+            },
+        }
+    except Exception as e:
+        return {
+            "success": True,
+            "data": {
+                "available": False,
+                "reason": f"Failed to list episodes: {e}",
+                "episodes": [],
+            },
+        }
+
+
+@project_router.get("/memory/episodes/search")
+async def search_memory_graph(projectId: str = Path(...), q: str = Query(...)):
+    """Semantic search over the graph (extracted facts), not the JSON files."""
+    project_path = _project_path_or_none(projectId)
+    if project_path is None:
+        return {"success": False, "error": f"Project {projectId} not found"}
+
+    memory, reason = await _get_graph_memory(project_path)
+    if memory is None:
+        return {
+            "success": True,
+            "data": {"available": False, "reason": reason, "results": []},
+        }
+
+    from ..services import chat_memory
+
+    try:
+        async with chat_memory.get_lock(project_path):
+            items = await memory.get_relevant_context(q, num_results=20)
+        results = [
+            {
+                "content": item.get("content", ""),
+                "score": item.get("score", 0.0),
+                "type": item.get("type", "unknown"),
+            }
+            for item in items
+        ]
+        return {"success": True, "data": {"available": True, "results": results}}
+    except Exception as e:
+        return {
+            "success": True,
+            "data": {
+                "available": False,
+                "reason": f"Search failed: {e}",
+                "results": [],
+            },
+        }
+
+
+@project_router.post("/memory/episodes")
+async def add_memory_episode(
+    projectId: str = Path(...), request: AddMemoryEpisodeRequest = ...
+):
+    """Manually add a fact/pattern/gotcha to the graph memory."""
+    project_path = _project_path_or_none(projectId)
+    if project_path is None:
+        return {"success": False, "error": f"Project {projectId} not found"}
+
+    content = (request.content or "").strip()
+    if not content:
+        return {"success": False, "error": "content is required"}
+
+    memory, reason = await _get_graph_memory(project_path)
+    if memory is None:
+        return {"success": False, "error": reason}
+
+    from ..services import chat_memory
+
+    kind = (request.kind or "fact").strip().lower()
+    try:
+        async with chat_memory.get_lock(project_path):
+            if kind == "pattern":
+                ok = await memory.save_pattern(content)
+            elif kind == "gotcha":
+                ok = await memory.save_gotcha(content)
+            else:
+                kind = "fact"
+                ok = await memory.save_chat_episode(content, name_hint="fact")
+        if ok:
+            return {"success": True, "data": {"ok": True, "kind": kind}}
+        return {"success": False, "error": "Failed to save memory"}
+    except Exception as e:
+        return {"success": False, "error": f"Failed to save memory: {e}"}
+
+
+@project_router.delete("/memory/episodes/{episodeUuid}")
+async def delete_memory_episode(
+    projectId: str = Path(...), episodeUuid: str = Path(...)
+):
+    """Delete an episode (cascading its solely-owned facts) from the graph."""
+    project_path = _project_path_or_none(projectId)
+    if project_path is None:
+        return {"success": False, "error": f"Project {projectId} not found"}
+
+    memory, reason = await _get_graph_memory(project_path)
+    if memory is None:
+        return {"success": False, "error": reason}
+
+    from ..services import chat_memory
+
+    try:
+        async with chat_memory.get_lock(project_path):
+            ok = await memory.delete_episode(episodeUuid)
+        if ok:
+            return {"success": True, "data": {"deleted": True}}
+        return {"success": False, "error": "Failed to delete episode"}
+    except Exception as e:
+        return {"success": False, "error": f"Failed to delete episode: {e}"}
 
 
 def _extract_memory_summary(data: dict) -> str:

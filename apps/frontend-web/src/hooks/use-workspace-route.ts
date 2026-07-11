@@ -5,7 +5,7 @@ import type { SidebarView } from '../components/Sidebar';
  * Views that are NOT scoped to a project. These live at the top-level path
  * (e.g. `/hermes`) instead of under `/p/:projectId/...`.
  */
-export const GLOBAL_VIEWS = ['hermes', 'members', 'transcripts', 'admin'] as const;
+export const GLOBAL_VIEWS = ['members', 'transcripts', 'admin'] as const;
 
 /**
  * Views that require a selected project. They live under
@@ -19,7 +19,6 @@ export const PROJECT_VIEWS = [
   'context',
   'github-issues',
   'github-prs',
-  'changelog',
   'insights',
   'worktrees',
   'agent-tools',

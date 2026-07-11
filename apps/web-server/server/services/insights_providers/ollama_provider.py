@@ -22,6 +22,26 @@ logger = logging.getLogger(__name__)
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 MAX_TOOL_ITERATIONS = 10
 
+
+def _configured_ollama_base_url() -> str:
+    """Return the app-configured Ollama base URL, falling back to localhost:11434.
+
+    Reads the same ``llmOllamaBaseUrl`` setting the rest of the app's AI
+    features use (settings.json under PROJECTS_DATA_DIR), so the chat honors a
+    custom Ollama host instead of assuming localhost.
+    """
+    try:
+        from ...config import get_settings
+        settings_file = Path(get_settings().PROJECTS_DATA_DIR) / "settings.json"
+        if settings_file.exists():
+            data = json.loads(settings_file.read_text())
+            url = (data.get("llmOllamaBaseUrl") or "").strip()
+            if url:
+                return url.rstrip("/")
+    except Exception as e:  # settings unreadable — fall back to default
+        logger.debug(f"[OllamaProvider] Could not read configured base URL: {e}")
+    return DEFAULT_OLLAMA_URL
+
 # Keywords that indicate an embedding or non-chat model
 EMBEDDING_NAME_KEYWORDS = {"embed", "minilm", "bge", "gte", "e5", "rerank"}
 EMBEDDING_FAMILIES = {"bert", "nomic-bert"}
@@ -43,8 +63,14 @@ def _is_embedding_model(name: str, details: dict | None = None) -> bool:
 class OllamaProvider(ProviderStrategy):
     """Provider that streams via Ollama HTTP API."""
 
-    def __init__(self, base_url: str = DEFAULT_OLLAMA_URL) -> None:
-        self.base_url = base_url
+    def __init__(self, base_url: str | None = None) -> None:
+        # When no explicit URL is given, resolve the configured host lazily on
+        # each access so a settings change takes effect without a restart.
+        self._base_url_override = base_url
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url_override or _configured_ollama_base_url()
 
     async def detect(self) -> ProviderInfo:
         info = ProviderInfo(

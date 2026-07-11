@@ -1,0 +1,51 @@
+{
+  "status": {
+    "title": "Graph Memory Status",
+    "connected": "Connected",
+    "notAvailable": "Not available",
+    "provider": "Embedder",
+    "database": "Database",
+    "episodes": "Episodes",
+    "groupId": "Group",
+    "apiKey": "API key",
+    "apiKeySet": "Configured",
+    "apiKeyMissing": "Missing",
+    "lastSession": "Last session: #{{number}}",
+    "disabledHint": "To enable graph memory, set GRAPHITI_ENABLED=true in project settings.",
+    "notConfigured": "Graphiti memory is not configured"
+  },
+  "graph": {
+    "title": "Graph Memory",
+    "subtitle": "Facts stored in the knowledge graph. Editable.",
+    "reload": "Reload",
+    "searchPlaceholder": "Search the graph for facts...",
+    "search": "Search",
+    "results_one": "{{count}} result found",
+    "results_other": "{{count}} results found",
+    "noResults": "Nothing was found",
+    "addTitle": "Add memory",
+    "contentPlaceholder": "Enter a fact, pattern, or gotcha to remember...",
+    "kindLabel": "Type",
+    "kindFact": "Fact",
+    "kindPattern": "Pattern",
+    "kindGotcha": "Gotcha",
+    "save": "Save",
+    "saving": "Saving...",
+    "empty": "No graph memories yet. Add one above, or let agent sessions populate it.",
+    "delete": "Delete",
+    "confirmDelete": "Delete this memory? This cannot be undone.",
+    "expand": "Expand",
+    "collapse": "Collapse"
+  },
+  "sessionInsights": {
+    "title": "Session Insights",
+    "subtitle": "Recorded automatically during agent build sessions.",
+    "searchTitle": "Search Session Insights",
+    "searchPlaceholder": "Search for patterns, insights, gotchas...",
+    "recentTitle": "Recent Session Insights",
+    "empty": "No session insights recorded yet. They are created during AI agent sessions.",
+    "noResults": "Nothing was found",
+    "resultsFound_one": "{{count}} result found",
+    "resultsFound_other": "{{count}} results found"
+  }
+}

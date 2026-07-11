@@ -1,0 +1,51 @@
+{
+  "status": {
+    "title": "État de la mémoire graphe",
+    "connected": "Connecté",
+    "notAvailable": "Non disponible",
+    "provider": "Embedder",
+    "database": "Base de données",
+    "episodes": "Épisodes",
+    "groupId": "Groupe",
+    "apiKey": "Clé API",
+    "apiKeySet": "Configurée",
+    "apiKeyMissing": "Manquante",
+    "lastSession": "Dernière session : #{{number}}",
+    "disabledHint": "Pour activer la mémoire graphe, définissez GRAPHITI_ENABLED=true dans les paramètres du projet.",
+    "notConfigured": "La mémoire Graphiti n'est pas configurée"
+  },
+  "graph": {
+    "title": "Mémoire graphe",
+    "subtitle": "Faits stockés dans le graphe de connaissances. Modifiable.",
+    "reload": "Recharger",
+    "searchPlaceholder": "Rechercher des faits dans le graphe...",
+    "search": "Rechercher",
+    "results_one": "{{count}} résultat trouvé",
+    "results_other": "{{count}} résultats trouvés",
+    "noResults": "Aucun résultat trouvé",
+    "addTitle": "Ajouter une mémoire",
+    "contentPlaceholder": "Saisissez un fait, un motif ou un piège à retenir...",
+    "kindLabel": "Type",
+    "kindFact": "Fait",
+    "kindPattern": "Motif",
+    "kindGotcha": "Piège",
+    "save": "Enregistrer",
+    "saving": "Enregistrement...",
+    "empty": "Aucune mémoire graphe pour l'instant. Ajoutez-en une ci-dessus, ou laissez les sessions d'agent la remplir.",
+    "delete": "Supprimer",
+    "confirmDelete": "Supprimer cette mémoire ? Cette action est irréversible.",
+    "expand": "Développer",
+    "collapse": "Réduire"
+  },
+  "sessionInsights": {
+    "title": "Aperçus de session",
+    "subtitle": "Enregistrés automatiquement pendant les sessions de build de l'agent.",
+    "searchTitle": "Rechercher dans les aperçus de session",
+    "searchPlaceholder": "Rechercher des motifs, aperçus, pièges...",
+    "recentTitle": "Aperçus de session récents",
+    "empty": "Aucun aperçu de session enregistré pour l'instant. Ils sont créés pendant les sessions d'agent IA.",
+    "noResults": "Aucun résultat trouvé",
+    "resultsFound_one": "{{count}} résultat trouvé",
+    "resultsFound_other": "{{count}} résultats trouvés"
+  }
+}

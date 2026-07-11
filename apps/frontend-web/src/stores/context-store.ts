@@ -4,7 +4,9 @@ import type {
   GraphitiMemoryStatus,
   GraphitiMemoryState,
   MemoryEpisode,
-  ContextSearchResult
+  ContextSearchResult,
+  GraphMemoryEpisode,
+  GraphMemoryKind
 } from '../shared/types';
 
 interface ContextState {
@@ -28,6 +30,16 @@ interface ContextState {
   searchLoading: boolean;
   searchQuery: string;
 
+  // Graph memory (Graphiti knowledge graph — visible/editable)
+  graphEpisodes: GraphMemoryEpisode[];
+  graphLoading: boolean;
+  graphAvailable: boolean;
+  graphReason: string | null;
+  graphGroupId: string | null;
+  graphSearchResults: ContextSearchResult[];
+  graphSearchLoading: boolean;
+  graphSearchQuery: string;
+
   // Actions
   setProjectIndex: (index: ProjectIndex | null) => void;
   setIndexLoading: (loading: boolean) => void;
@@ -41,6 +53,12 @@ interface ContextState {
   setSearchResults: (results: ContextSearchResult[]) => void;
   setSearchLoading: (loading: boolean) => void;
   setSearchQuery: (query: string) => void;
+  setGraphEpisodes: (episodes: GraphMemoryEpisode[]) => void;
+  setGraphLoading: (loading: boolean) => void;
+  setGraphMeta: (meta: { available: boolean; reason: string | null; groupId: string | null }) => void;
+  setGraphSearchResults: (results: ContextSearchResult[]) => void;
+  setGraphSearchLoading: (loading: boolean) => void;
+  setGraphSearchQuery: (query: string) => void;
   clearAll: () => void;
 }
 
@@ -65,6 +83,16 @@ export const useContextStore = create<ContextState>((set) => ({
   searchLoading: false,
   searchQuery: '',
 
+  // Graph memory
+  graphEpisodes: [],
+  graphLoading: false,
+  graphAvailable: false,
+  graphReason: null,
+  graphGroupId: null,
+  graphSearchResults: [],
+  graphSearchLoading: false,
+  graphSearchQuery: '',
+
   // Actions
   setProjectIndex: (index) => set({ projectIndex: index }),
   setIndexLoading: (loading) => set({ indexLoading: loading }),
@@ -78,6 +106,13 @@ export const useContextStore = create<ContextState>((set) => ({
   setSearchResults: (results) => set({ searchResults: results }),
   setSearchLoading: (loading) => set({ searchLoading: loading }),
   setSearchQuery: (query) => set({ searchQuery: query }),
+  setGraphEpisodes: (episodes) => set({ graphEpisodes: episodes }),
+  setGraphLoading: (loading) => set({ graphLoading: loading }),
+  setGraphMeta: (meta) =>
+    set({ graphAvailable: meta.available, graphReason: meta.reason, graphGroupId: meta.groupId }),
+  setGraphSearchResults: (results) => set({ graphSearchResults: results }),
+  setGraphSearchLoading: (loading) => set({ graphSearchLoading: loading }),
+  setGraphSearchQuery: (query) => set({ graphSearchQuery: query }),
   clearAll: () =>
     set({
       projectIndex: null,
@@ -91,7 +126,15 @@ export const useContextStore = create<ContextState>((set) => ({
       memoriesLoading: false,
       searchResults: [],
       searchLoading: false,
-      searchQuery: ''
+      searchQuery: '',
+      graphEpisodes: [],
+      graphLoading: false,
+      graphAvailable: false,
+      graphReason: null,
+      graphGroupId: null,
+      graphSearchResults: [],
+      graphSearchLoading: false,
+      graphSearchQuery: ''
     })
 }));
 
@@ -195,5 +238,112 @@ export async function loadRecentMemories(
     // Silently fail - memories are optional
   } finally {
     store.setMemoriesLoading(false);
+  }
+}
+
+/**
+ * Load raw graph-memory episodes (Graphiti knowledge graph)
+ */
+export async function loadGraphMemory(
+  projectId: string,
+  limit: number = 50
+): Promise<void> {
+  const store = useContextStore.getState();
+  store.setGraphLoading(true);
+
+  try {
+    const result = await window.API.getMemoryEpisodes(projectId, limit);
+    if (result.success && result.data) {
+      store.setGraphEpisodes(result.data.episodes || []);
+      store.setGraphMeta({
+        available: !!result.data.available,
+        reason: result.data.reason || null,
+        groupId: result.data.groupId || null
+      });
+    } else {
+      store.setGraphEpisodes([]);
+      store.setGraphMeta({ available: false, reason: result.error || null, groupId: null });
+    }
+  } catch (error) {
+    store.setGraphEpisodes([]);
+    store.setGraphMeta({
+      available: false,
+      reason: error instanceof Error ? error.message : 'Unknown error',
+      groupId: null
+    });
+  } finally {
+    store.setGraphLoading(false);
+  }
+}
+
+/**
+ * Semantic search over the graph memory
+ */
+export async function searchGraphMemory(
+  projectId: string,
+  query: string
+): Promise<void> {
+  const store = useContextStore.getState();
+  store.setGraphSearchQuery(query);
+
+  if (!query.trim()) {
+    store.setGraphSearchResults([]);
+    return;
+  }
+
+  store.setGraphSearchLoading(true);
+
+  try {
+    const result = await window.API.searchMemoryGraph(projectId, query);
+    if (result.success && result.data && result.data.available) {
+      store.setGraphSearchResults(result.data.results || []);
+    } else {
+      store.setGraphSearchResults([]);
+    }
+  } catch (_error) {
+    store.setGraphSearchResults([]);
+  } finally {
+    store.setGraphSearchLoading(false);
+  }
+}
+
+/**
+ * Add a fact/pattern/gotcha to the graph memory, then reload the list.
+ * Returns an error string on failure, or null on success.
+ */
+export async function addGraphMemory(
+  projectId: string,
+  content: string,
+  kind: GraphMemoryKind = 'fact'
+): Promise<string | null> {
+  try {
+    const result = await window.API.addMemoryEpisode(projectId, content, kind);
+    if (result.success) {
+      await loadGraphMemory(projectId);
+      return null;
+    }
+    return result.error || 'Failed to save memory';
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Unknown error';
+  }
+}
+
+/**
+ * Delete a graph-memory episode by uuid, then reload the list.
+ * Returns an error string on failure, or null on success.
+ */
+export async function deleteGraphMemory(
+  projectId: string,
+  uuid: string
+): Promise<string | null> {
+  try {
+    const result = await window.API.deleteMemoryEpisode(projectId, uuid);
+    if (result.success) {
+      await loadGraphMemory(projectId);
+      return null;
+    }
+    return result.error || 'Failed to delete memory';
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Unknown error';
   }
 }

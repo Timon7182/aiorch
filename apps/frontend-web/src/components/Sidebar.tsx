@@ -12,12 +12,10 @@ import {
   RefreshCw,
   Github,
   GitPullRequest,
-  FileText,
   Sparkles,
   GitBranch,
   Wrench,
   Lightbulb,
-  MessageCircle,
   Users,
   FileAudio,
   LogOut,
@@ -108,7 +106,6 @@ interface NavItem {
 
 // Base nav items always shown
 const baseNavItems: NavItem[] = [
-  { id: 'hermes', labelKey: 'Hermes', icon: MessageCircle },
   { id: 'kanban', labelKey: 'navigation:items.kanban', icon: Columns3 },
   { id: 'editor', labelKey: 'navigation:items.editor', icon: FolderOpen },
   { id: 'insights', labelKey: 'navigation:items.chat', icon: Sparkles },
@@ -116,7 +113,6 @@ const baseNavItems: NavItem[] = [
   { id: 'agent-tools', labelKey: 'navigation:items.agentTools', icon: Wrench },
   { id: 'skills', labelKey: 'navigation:items.skills', icon: Lightbulb },
   { id: 'docs', labelKey: 'Docs', icon: Library },
-  { id: 'changelog', labelKey: 'navigation:items.changelog', icon: FileText },
   { id: 'usage', labelKey: 'navigation:items.usage', icon: Coins },
   { id: 'worktrees', labelKey: 'navigation:items.worktrees', icon: GitBranch },
   { id: 'context', labelKey: 'navigation:items.context', icon: BookOpen },
@@ -387,7 +383,7 @@ export function Sidebar({
   const renderNavItem = (item: NavItem) => {
     const isActive = activeView === item.id;
     const Icon = item.icon;
-    const alwaysEnabled = item.id === 'hermes' || item.id === 'members' || item.id === 'admin';
+    const alwaysEnabled = item.id === 'members' || item.id === 'admin';
 
     return (
       <button

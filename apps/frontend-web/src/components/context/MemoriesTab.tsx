@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   RefreshCw,
   Database,
@@ -16,9 +17,11 @@ import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/utils';
 import { MemoryCard } from './MemoryCard';
 import { InfoItem } from './InfoItem';
+import { GraphMemorySection } from './GraphMemorySection';
 import type { GraphitiMemoryStatus, GraphitiMemoryState, MemoryEpisode } from '../../shared/types';
 
 interface MemoriesTabProps {
+  projectId: string;
   memoryStatus: GraphitiMemoryStatus | null;
   memoryState: GraphitiMemoryState | null;
   recentMemories: MemoryEpisode[];
@@ -30,6 +33,7 @@ interface MemoriesTabProps {
 }
 
 export function MemoriesTab({
+  projectId,
   memoryStatus,
   memoryState,
   recentMemories,
@@ -39,6 +43,7 @@ export function MemoriesTab({
   searchQuery,
   onSearch
 }: MemoriesTabProps) {
+  const { t } = useTranslation('context');
   const [localSearchQuery, setLocalSearchQuery] = useState('');
 
   const handleSearch = () => {
@@ -53,65 +58,89 @@ export function MemoriesTab({
     }
   };
 
+  // The graph status card is driven by the real graph state when available,
+  // falling back to the file-based availability flag.
+  const graphConnected = memoryState?.enabled ?? memoryStatus?.available ?? false;
+  const providerLabel = memoryState?.embedderProvider
+    ? memoryState.embedderProvider.charAt(0).toUpperCase() + memoryState.embedderProvider.slice(1)
+    : '—';
+
   return (
     <ScrollArea className="h-full">
       <div className="p-6 space-y-6">
-        {/* Memory Status */}
+        {/* Graph Memory Status */}
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base flex items-center gap-2">
                 <Database className="h-4 w-4" />
-                Graph Memory Status
+                {t('status.title')}
               </CardTitle>
-              {memoryStatus?.available ? (
+              {graphConnected ? (
                 <Badge variant="outline" className="bg-success/10 text-success border-success/30">
                   <CheckCircle className="h-3 w-3 mr-1" />
-                  Connected
+                  {t('status.connected')}
                 </Badge>
               ) : (
                 <Badge variant="outline" className="bg-muted text-muted-foreground">
                   <XCircle className="h-3 w-3 mr-1" />
-                  Not Available
+                  {t('status.notAvailable')}
                 </Badge>
               )}
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {memoryStatus?.available ? (
+            {graphConnected ? (
               <>
                 <div className="grid gap-3 sm:grid-cols-3 text-sm">
-                  <InfoItem label="Database" value={memoryStatus.database || 'magestic_ai_memory'} />
-                  <InfoItem label="Path" value={memoryStatus.dbPath || '~/.magestic-ai/graphs'} />
-                  {memoryState && (
-                    <InfoItem label="Episodes" value={memoryState.episode_count.toString()} />
+                  <InfoItem label={t('status.provider')} value={providerLabel} />
+                  <InfoItem label={t('status.database')} value={memoryState?.database || 'magestic_ai_memory'} />
+                  <InfoItem
+                    label={t('status.episodes')}
+                    value={(memoryState?.episode_count ?? 0).toString()}
+                  />
+                  {memoryState?.groupId && (
+                    <InfoItem label={t('status.groupId')} value={memoryState.groupId} />
                   )}
+                  <InfoItem
+                    label={t('status.apiKey')}
+                    value={memoryState?.hasApiKey ? t('status.apiKeySet') : t('status.apiKeyMissing')}
+                  />
                 </div>
-                {memoryState?.last_session && (
+                {memoryState?.last_session != null && (
                   <p className="text-xs text-muted-foreground">
-                    Last session: #{memoryState.last_session}
+                    {t('status.lastSession', { number: memoryState.last_session })}
                   </p>
                 )}
               </>
             ) : (
               <div className="text-sm text-muted-foreground">
-                <p>{memoryStatus?.reason || 'Graphiti memory is not configured'}</p>
-                <p className="mt-2 text-xs">
-                  To enable graph memory, set <code className="bg-muted px-1 py-0.5 rounded">GRAPHITI_ENABLED=true</code> in project settings.
-                </p>
+                <p>{memoryStatus?.reason || t('status.notConfigured')}</p>
+                <p className="mt-2 text-xs">{t('status.disabledHint')}</p>
               </div>
             )}
           </CardContent>
         </Card>
 
+        {/* Graph Memory (editable knowledge graph) */}
+        <GraphMemorySection projectId={projectId} />
+
+        {/* ---- Session Insights (file-based build session records) ---- */}
+        <div className="pt-2 border-t border-border">
+          <div className="mt-4">
+            <h3 className="text-sm font-semibold text-foreground">{t('sessionInsights.title')}</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">{t('sessionInsights.subtitle')}</p>
+          </div>
+        </div>
+
         {/* Search */}
         <div className="space-y-4">
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-            Search Memories
+            {t('sessionInsights.searchTitle')}
           </h3>
           <div className="flex gap-2">
             <Input
-              placeholder="Search for patterns, insights, gotchas..."
+              placeholder={t('sessionInsights.searchPlaceholder')}
               value={localSearchQuery}
               onChange={(e) => setLocalSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
@@ -125,7 +154,7 @@ export function MemoriesTab({
           {searchQuery && searchResults.length === 0 && !searchLoading && (
             <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/50 text-muted-foreground border border-border">
               <AlertCircle className="h-5 w-5 shrink-0" />
-              <p className="text-sm">Nothing was found</p>
+              <p className="text-sm">{t('sessionInsights.noResults')}</p>
             </div>
           )}
 
@@ -133,7 +162,7 @@ export function MemoriesTab({
           {searchResults.length > 0 && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} found
+                {t('sessionInsights.resultsFound', { count: searchResults.length })}
               </p>
               {searchResults.map((result, idx) => {
                 // Transform search result to MemoryEpisode format for MemoryCard
@@ -169,10 +198,10 @@ export function MemoriesTab({
           )}
         </div>
 
-        {/* Recent Memories */}
+        {/* Recent Session Insights */}
         <div className="space-y-4">
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-            Recent Memories
+            {t('sessionInsights.recentTitle')}
           </h3>
 
           {memoriesLoading && (
@@ -185,7 +214,7 @@ export function MemoriesTab({
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <Brain className="h-10 w-10 text-muted-foreground mb-3" />
               <p className="text-sm text-muted-foreground">
-                No memories recorded yet. Memories are created during AI agent sessions.
+                {t('sessionInsights.empty')}
               </p>
             </div>
           )}

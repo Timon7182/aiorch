@@ -19,6 +19,8 @@ import { formatTokens } from '../shared/types/usage';
 // Local extension of ClaudeUsageSnapshot. The backend includes these extras
 // only on the local-stats path; the header card ignores them.
 interface ExtendedSnapshot {
+  available?: boolean;
+  reason?: string;
   sessionPercent: number;
   weeklyPercent: number;
   sessionResetTime?: string;
@@ -76,6 +78,41 @@ export function ClaudeCliUsageCard() {
   }, []);
 
   if (!snap) return null;
+
+  // Server has no Claude CLI stats file (e.g. Docker container without a
+  // mounted ~/.claude). Show a clear empty state instead of all-zero bars.
+  if (snap.available === false) {
+    return (
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-muted-foreground" />
+            {t('tasks:usage.claudeCli.title', 'Claude CLI limits')}
+          </CardTitle>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={fetchSnap}
+            disabled={loading}
+            className="h-7 px-2"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col items-center justify-center gap-2 py-6 text-center">
+            <Activity className="h-5 w-5 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              {t(
+                'tasks:usage.claudeCli.notAvailable',
+                'Claude CLI stats are not available on this server.',
+              )}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const todayMessages = snap.todayMessages ?? 0;
   const weeklyMessages = snap.weeklyMessages ?? 0;

@@ -169,7 +169,7 @@ export const DEFAULT_PHASE_THINKING: import('../types/settings').PhaseThinkingCo
 
 // Default feature model configuration (for insights, github, utility)
 export const DEFAULT_FEATURE_MODELS: FeatureModelConfig = {
-  insights: 'sonnet',     // Fast, responsive chat
+  insights: 'opus',       // Highest-capability model for codebase chat
   githubIssues: 'opus',   // Issue triage and analysis benefits from Opus
   githubPrs: 'opus',      // PR review benefits from thorough Opus analysis
   utility: 'haiku'        // Fast utility operations (commit messages, merge resolution)

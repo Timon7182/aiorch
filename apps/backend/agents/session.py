@@ -361,6 +361,9 @@ async def run_agent_session(
     current_tool = None
     message_count = 0
     tool_count = 0
+    # ResultMessage rarely carries `model`; AssistantMessage does. Track the
+    # last-seen model so usage events get correct cost/model attribution.
+    last_model: str | None = None
 
     try:
         # Send the query
@@ -382,6 +385,11 @@ async def run_agent_session(
 
             # Handle AssistantMessage (text and tool use)
             if msg_type == "AssistantMessage" and hasattr(msg, "content"):
+                # AssistantMessage carries the model that produced it; remember
+                # it for usage attribution (ResultMessage often lacks `model`).
+                assistant_model = getattr(msg, "model", None)
+                if assistant_model:
+                    last_model = assistant_model
                 for block in msg.content:
                     block_type = type(block).__name__
 
@@ -537,7 +545,7 @@ async def run_agent_session(
                 raw_usage = getattr(msg, "usage", None)
                 if isinstance(raw_usage, dict) and raw_usage:
                     sdk_cost = getattr(msg, "total_cost_usd", None)
-                    model_name = getattr(msg, "model", None)
+                    model_name = getattr(msg, "model", None) or last_model
                     try:
                         emit_usage(
                             phase=phase.value if hasattr(phase, "value") else str(phase),

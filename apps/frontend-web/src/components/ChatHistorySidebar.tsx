@@ -124,7 +124,7 @@ export function ChatHistorySidebar({
 
       {/* Session list */}
       <ScrollArea className="flex-1">
-        {isLoading ? (
+        {isLoading && sessions.length === 0 ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
