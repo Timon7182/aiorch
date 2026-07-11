@@ -124,6 +124,38 @@ function AudioTranscribeSection({ slug, onComplete }: { slug: string; onComplete
     }, 2000);
   };
 
+  // Restore an in-progress job after navigating away and back: the backend
+  // tracks jobs server-side, so re-hydrate the status card and resume polling.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api<{ jobs: Array<Record<string, unknown>> }>(
+          `/api/ext/projects/${encodeURIComponent(slug)}/transcribe`,
+        );
+        if (cancelled) return;
+        const active = (data.jobs || []).find((j) =>
+          ['queued', 'processing', 'uploading'].includes(String(j.status)),
+        );
+        const jid = active ? String(active.job_id ?? active.id ?? '') : '';
+        if (jid) {
+          setJob({
+            id: jid,
+            status: String(active!.status),
+            progress: typeof active!.progress === 'number' ? active!.progress : undefined,
+          });
+          pollJob(jid);
+        }
+      } catch {
+        /* ignore — nothing to restore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
   const submitBlob = async (blob: Blob, filename: string) => {
     setErr(null);
     setJob({ id: '', status: 'uploading' });
