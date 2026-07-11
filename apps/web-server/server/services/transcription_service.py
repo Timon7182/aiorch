@@ -12,8 +12,10 @@ Config (env, matches repo convention of reading service keys from os.environ):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,9 @@ import httpx
 
 from . import transcripts_service
 from .project_resolve import resolve_project_dir
+
+# Cap transcript size fed to the CLI (prompt is passed as an argv arg).
+_MAX_TRANSCRIPT_CHARS = 120_000
 
 
 def _base_url() -> str:
@@ -133,6 +138,66 @@ async def status(*, project: str, job_id: str) -> dict[str, Any]:
     _save_job(project, record)
     return {**record, "segments": remote.get("segments") if remote.get("status") == "completed" else None,
             "text": remote.get("text") if remote.get("status") == "completed" else None}
+
+
+async def chat(
+    *, project: str, filename: str, question: str, history: list[dict] | None = None
+) -> dict[str, Any]:
+    """Answer a question about a saved transcript via a one-shot ``claude --print``.
+
+    Supports summarization, speaker identification/labelling, and grounded Q&A.
+    Reuses the repo's Claude-CLI convention (no raw SDK).
+    """
+    transcript = transcripts_service.read(project, filename)  # FileNotFoundError / LookupError
+    if len(transcript) > _MAX_TRANSCRIPT_CHARS:
+        transcript = transcript[:_MAX_TRANSCRIPT_CHARS] + "\n…[truncated]…"
+    project_path = resolve_project_dir(project)
+    if project_path is None:
+        raise LookupError(project)
+
+    history_text = ""
+    for m in (history or [])[-10:]:
+        role = "User" if m.get("role") == "user" else "Assistant"
+        history_text += f"[{role}]: {m.get('content', '')}\n\n"
+
+    prompt = (
+        "You are analysing a meeting/audio transcript. Summarise, identify and label "
+        "speakers, and answer questions grounded ONLY in the transcript below. If the user "
+        "assigns names to speakers (e.g. 'speaker 1 is Alice'), use those names. Be concise.\n\n"
+        f"=== TRANSCRIPT ===\n{transcript}\n=== END TRANSCRIPT ===\n\n"
+        + (f"Conversation so far:\n{history_text}\n" if history_text else "")
+        + f"User: {question}\n\nAnswer:"
+    )
+
+    claude_bin = shutil.which("claude") or "claude"
+    model_value = os.environ.get("TRANSCRIBER_CHAT_MODEL", "sonnet")
+    cmd = [claude_bin, "--print", "--model", model_value, prompt]
+
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env.pop("CLAUDECODE", None)
+    try:
+        from .insights_providers import get_provider
+
+        token, _pid, _profile = get_provider("claude")._resolve_claude_token()
+        if token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    except Exception:
+        pass
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(project_path),
+        env=env,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    answer = stdout.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0 and not answer:
+        err = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(err[:300] or f"claude CLI exited {proc.returncode}")
+    return {"answer": answer}
 
 
 def list_jobs(project: str) -> list[dict[str, Any]]:

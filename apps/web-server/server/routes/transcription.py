@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel
 
 from ..services import transcription_service
 
@@ -76,3 +77,29 @@ async def transcribe_status(project: str, job_id: str) -> dict[str, Any]:
 @router.get("/projects/{project}/transcribe")
 async def transcribe_list(project: str) -> dict[str, Any]:
     return {"jobs": transcription_service.list_jobs(project)}
+
+
+class TranscriptChatBody(BaseModel):
+    filename: str
+    question: str
+    history: list[dict[str, Any]] | None = None
+
+
+@router.post("/projects/{project}/transcript-chat")
+async def transcript_chat(project: str, body: TranscriptChatBody) -> dict[str, Any]:
+    """Summarize / identify speakers / answer questions about a saved transcript."""
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="question is required")
+    try:
+        return await transcription_service.chat(
+            project=project, filename=body.filename, question=body.question, history=body.history
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="transcript not found")
+    except LookupError:
+        raise HTTPException(status_code=404, detail=f"project {project!r} not registered")
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="transcript chat timed out")
+    except RuntimeError as e:
+        logger.error("transcript chat failed: %s", e)
+        raise HTTPException(status_code=502, detail=str(e))

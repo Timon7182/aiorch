@@ -277,6 +277,113 @@ function AudioTranscribeSection({ slug, onComplete }: { slug: string; onComplete
   );
 }
 
+type ChatMsg = { role: 'user' | 'assistant'; content: string };
+
+/**
+ * Chat over a saved transcript: summarize, identify/label speakers, ask
+ * questions. Backed by /api/ext/projects/{slug}/transcript-chat (claude --print).
+ */
+function TranscriptChat({ slug, filename }: { slug: string; filename: string }) {
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const ask = async (question: string) => {
+    const q = question.trim();
+    if (!q || loading) return;
+    setErr(null);
+    const history = messages;
+    setMessages((m) => [...m, { role: 'user', content: q }]);
+    setInput('');
+    setLoading(true);
+    try {
+      const res = await api<{ answer: string }>(
+        `/api/ext/projects/${encodeURIComponent(slug)}/transcript-chat`,
+        { method: 'POST', body: JSON.stringify({ filename, question: q, history }) },
+      );
+      setMessages((m) => [...m, { role: 'assistant', content: res.answer || '(no answer)' }]);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-border flex flex-col min-h-0">
+      <div className="px-5 py-2 flex flex-wrap items-center gap-2 border-b border-border">
+        <span className="text-xs font-medium text-muted-foreground mr-1">Ask about this transcript:</span>
+        <button
+          onClick={() => void ask('Summarize this transcript in a few bullet points.')}
+          disabled={loading}
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-50"
+        >
+          Summarize
+        </button>
+        <button
+          onClick={() => void ask('Identify the distinct speakers and what role each seems to play.')}
+          disabled={loading}
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-50"
+        >
+          Identify speakers
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 min-h-0 max-h-64">
+        {messages.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            Ask a question, or tell me who the speakers are (e.g. “speaker 1 is Alice”).
+          </p>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={m.role === 'user' ? 'text-right' : ''}>
+            <div
+              className={
+                'inline-block max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap text-left ' +
+                (m.role === 'user'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-foreground')
+              }
+            >
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Thinking…
+          </div>
+        )}
+        {err && <div className="text-sm text-destructive">Error: {err}</div>}
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void ask(input);
+        }}
+        className="px-5 py-3 border-t border-border flex items-center gap-2"
+      >
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ask about this transcript…"
+          disabled={loading}
+          className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+        />
+        <button
+          type="submit"
+          disabled={loading || !input.trim()}
+          className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+        >
+          Ask
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export function TranscriptsPage() {
   const projects = useProjectStore((s) => s.projects);
   const selectedProjectId = useProjectStore((s) => s.selectedProjectId);
@@ -607,9 +714,10 @@ export function TranscriptsPage() {
                   Close
                 </button>
               </div>
-              <pre className="flex-1 overflow-auto px-5 py-4 text-xs font-mono whitespace-pre-wrap">
+              <pre className="overflow-auto px-5 py-4 text-xs font-mono whitespace-pre-wrap max-h-[40vh] shrink-0">
                 {viewing.content}
               </pre>
+              <TranscriptChat slug={slug} filename={viewing.filename} />
             </div>
           </div>
         )}
